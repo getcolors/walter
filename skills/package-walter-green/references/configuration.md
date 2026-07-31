@@ -93,6 +93,26 @@ no-infra-compute-ip  no-infra-compute-user  no-infra-compute-sudoer
 no-infra-compute-uid
 ```
 
+## Editor
+
+| Key | Meaning |
+|---|---|
+| `emacs-config-repo` | Optional. A git URL. Set it and the machine gets Emacs plus this configuration; leave it out and neither is mentioned. |
+| `emacs-config-dest` | Where the clone lands. Defaults to `~/.config/emacs`. |
+
+The default destination is the XDG path Emacs 29+ reads on its own. A
+configuration that lives anywhere else needs `--init-directory` to reach it, so
+set this key to say where — `~/.config/neoemacs`, say — and launch with
+`emacs --init-directory ~/.config/neoemacs`.
+
+Prefer an `ssh://`-style URL (`git@github.com:you/emacs.d.git`). The clone runs
+over the agent walter already forwards, so no private key is written to the
+machine and the working copy can push back. An HTTPS URL clones fine and is
+read-only.
+
+It is cloned **once**. A later `create` leaves an existing checkout alone, so
+edits made on the machine are never discarded — pulling is the user's call.
+
 ## State backends
 
 | Backend | Keys | Credentials |
@@ -121,9 +141,44 @@ Never edit any of it. It is regenerated on every run.
 
 ## What the machine gets
 
-v1's remote playbook is a connectivity check — an `ansible.builtin.ping` and
-nothing else. It confirms walter's own plumbing works; it installs no tooling.
-Anything the user wants on the machine, they install themselves for now.
+The remote playbook pings, then installs two things on **every** machine:
+
+- **nix** — the Determinate Systems installer, non-interactive, skipped when
+  `/nix/receipt.json` says it already ran. With nix present anything else the
+  user wants is one `nix profile install` away and needs no change to walter.
+- **a terminfo entry for Ghostty**, symlinked into `~/.terminfo`.
+
+The terminfo is not a nicety. `TERM` travels over SSH and the terminfo database
+does not, so a machine whose distro predates the operator's terminal answers
+every full-screen program with:
+
+```
+Terminal type xterm-ghostty is not defined.
+```
+
+`vim`, `top`, `less` and Emacs all fail identically, over an SSH session that is
+otherwise perfect. It is taken from a pinned nixpkgs rather than copied from the
+controller with `infocmp`, because walter cannot assume the machine running it
+has an interactive `TERM` at all — a create from CI would install nothing.
+
+It is symlinked into `~/.terminfo` rather than exported via `TERMINFO_DIRS`
+because the system ncurses reads that directory already, and `TERMINFO_DIRS`
+would only reach a login shell — `ssh host vim …` is not one.
+
+When `emacs-config-repo` names a repository, two more tasks follow: Emacs from a
+pinned nixpkgs (`nixos-25.05#emacs-nox`, a terminal build with native
+compilation and tree-sitter), then the configuration cloned over the forwarded
+agent. Both are skipped when the binary or the checkout is already there, so a
+re-run of `create` costs one SSH round trip.
+
+Packages are **not** pre-fetched. The first interactive launch pulls from
+ELPA/MELPA, native-compiles and clones tree-sitter grammars on its own; doing it
+during provisioning would add minutes to every `create` and turn a transient
+MELPA failure into a failed provision.
+
+nix lands on `PATH` through `/etc/profile.d/nix.sh`, which the installer writes.
+That is a *login* shell mechanism: `ssh walter-oci` picks it up, `ssh walter-oci
+emacs …` as a one-shot command does not.
 
 The local playbook writes a managed block into `~/.ssh/config`:
 

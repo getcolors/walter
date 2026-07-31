@@ -74,7 +74,43 @@ directory.
    name. It names the work directory, the OpenTofu state keys and the ssh alias.
    Two projects sharing a profile and a state bucket address the same state,
    which is how a development machine ends up managing a production server.
-4. Run `./walter build` and show the user what was rendered.
+4. Ask whether the user wants their Emacs configuration on the machine. If so,
+   set `emacs-config-repo` to its git URL and `emacs-config-dest` to where it
+   must live — the default is `~/.config/emacs`, and a configuration expecting
+   another path needs `--init-directory` to reach it. Leave both out otherwise;
+   the rendered playbook then does not mention Emacs.
+5. Run `./walter build` and show the user what was rendered.
+
+## What create puts on the machine
+
+Every machine gets **nix** and a **Ghostty terminfo entry**, unconditionally.
+Tell the user about nix rather than proposing walter changes for other tooling:
+once it is there, anything else is `nix profile install` and needs nothing from
+walter.
+
+The terminfo is why `Terminal type xterm-ghostty is not defined` does not
+happen. If a user reports that error — from `vim`, `top`, `less` or Emacs — on a
+machine created before this existed, the fix is to re-run `create`, not to
+change `TERM`. For a terminal walter does not cover, the one-liner is:
+
+```sh
+infocmp -x "$TERM" | ssh <alias> -- tic -x -
+```
+
+With `emacs-config-repo` set, `create` also installs Emacs (a terminal build
+from a pinned nixpkgs) and clones the configuration over the SSH agent walter
+forwards — no private key is written to the machine, and the checkout can push
+back. The clone happens **once**; a later `create` leaves an existing one alone,
+so work done on the machine is never discarded. Offer `git pull` on the machine
+rather than a re-run when the user wants the config refreshed.
+
+Emacs packages are not pre-fetched. The first `emacs` launch fetches from
+ELPA/MELPA, native-compiles and clones tree-sitter grammars, which takes minutes
+and is expected. Do not report it as a provisioning failure.
+
+`nix` and `emacs` reach `PATH` via `/etc/profile.d/nix.sh`, a **login** shell
+mechanism: `ssh walter-oci` sees them, `ssh walter-oci emacs …` as a one-shot
+command does not.
 
 ## Stopping and starting
 

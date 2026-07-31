@@ -1,17 +1,130 @@
 ---
-# v1 of the remote stage is a connectivity check and nothing more.
+# The remote stage does two things: it proves walter's own plumbing works, and
+# it puts a toolchain on the machine.
 #
-# What it proves is walter's own plumbing — inventory rendering, ansible.cfg,
-# user and key resolution — which is what is most likely to be wrong in a new
-# package. It does not prove the machine is up: ONCE's compute template carries
-# a remote-exec provisioner behind an SSH connection block, so `tofu apply` has
-# already blocked on SSH before Ansible starts.
+# Facts are gathered here even though ansible.cfg says `gathering = explicit`,
+# because every task below needs `ansible_env.HOME` — nix installs into a
+# per-user profile and there is no other honest way to name it. The ping stage
+# this grew out of needed one round trip and no facts; provisioning is not that
+# stage any more.
 #
-# `gathering = explicit` in ansible.cfg keeps the setup module out of the way,
-# so this is one round trip. Real dev tooling — toolchains, dotfiles — is a
-# later playbook, and this is the stage where it lands.
-- name: Verify connectivity
+# What is here is only what a machine cannot be useful without. Everything the
+# user's own work needs, they install themselves — with nix already present,
+# that is one `nix profile install` away and needs no change to walter.
+- name: Provision the development machine
   hosts: all
+  gather_facts: true
   tasks:
+    # Kept from v1. It costs nothing and it is still the task that fails first
+    # and most legibly when the inventory, the login or the key is wrong — the
+    # things most likely to be wrong in a new project. It does not prove the
+    # machine is up: the compute template's remote-exec provisioner sits behind
+    # an SSH connection block, so `tofu apply` has already blocked on that.
     - name: Ping
       ansible.builtin.ping:
+
+    # The Determinate Systems installer rather than the upstream shell script:
+    # it is non-interactive with --no-confirm, it detects systemd by itself, and
+    # it leaves /nix/receipt.json behind — which makes `creates` an accurate
+    # idempotency check instead of a guess.
+    #
+    # This runs on every machine, gated on nothing. It is the one piece of
+    # tooling walter treats as part of what a development machine *is*: with nix
+    # present, anything else is one `nix profile install` away and needs no
+    # change here.
+    #
+    # `become` so the installer is already root. Left to escalate on its own it
+    # shells out to sudo, which wants a TTY that Ansible has not given it.
+    #
+    # pipefail, under bash rather than dash, is not decoration: without it a
+    # failed curl still feeds `sh` an empty script, which exits 0 — so the task
+    # reports success, nix is absent, and the failure surfaces two tasks later
+    # as an unexplained missing binary.
+    - name: Install nix
+      become: true
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          curl -fsSL https://install.determinate.systems/nix
+          | sh -s -- install --no-confirm
+        creates: /nix/receipt.json
+        executable: /bin/bash
+
+    # A machine you cannot run a full-screen program on is not finished being
+    # provisioned, which is why this is not gated on anything. Terminals now
+    # ship their own terminfo — Ghostty, WezTerm, kitty — and a distro from
+    # before that terminal existed has never heard of it, so `vim`, `top` and
+    # `less` all die with "Terminal type ... is not defined" over an SSH session
+    # that is otherwise perfect. TERM travels; the database does not.
+    #
+    # Taken from a pinned nixpkgs rather than copied from the controller with
+    # infocmp, because walter cannot assume the machine running it has an
+    # interactive TERM at all — a create from CI or from an agent would then
+    # install nothing, or garbage.
+    - name: Install the Ghostty terminfo
+      ansible.builtin.command:
+        cmd: nix profile install github:NixOS/nixpkgs/nixos-25.05#ghostty.terminfo
+        creates: "{{ ansible_env.HOME }}/.nix-profile/share/terminfo/x/xterm-ghostty"
+      environment:
+        PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+
+    - name: Ensure the user terminfo database exists
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/.terminfo/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - x
+        - g
+
+    # The system ncurses searches ~/.terminfo and /usr/share/terminfo, and knows
+    # nothing about a nix profile. TERMINFO_DIRS would tell it, but only in a
+    # login shell — and `ssh host vim …` is not one. Two symlinks into the
+    # directory it already reads need no environment at all.
+    #
+    # Both names ship: TERM is `xterm-ghostty`, and `ghostty` is its alias.
+    - name: Link the terminfo where ncurses already looks
+      ansible.builtin.file:
+        src: "{{ ansible_env.HOME }}/.nix-profile/share/terminfo/{{ item.dir }}/{{ item.name }}"
+        dest: "{{ ansible_env.HOME }}/.terminfo/{{ item.dir }}/{{ item.name }}"
+        state: link
+        force: true
+      loop:
+        - {dir: x, name: xterm-ghostty}
+        - {dir: g, name: ghostty}
+
+    # Ordering below is deliberate: Emacs from nix, then the configuration.
+    # Cloning a config for an Emacs that is not installed leaves a machine that
+    # looks provisioned and is not.
+    #
+    # nix is on disk but not on PATH: the installer wires ~/.nix-profile and
+    # /etc/profile.d/nix.sh for *login* shells, and Ansible's is not one. The
+    # daemon profile path is stable, so name it rather than sourcing anything.
+    #
+    # Not `become` — the profile has to be the login user's, or Emacs lands in
+    # root's and `ssh walter-oci` cannot see it.
+    - name: Install Emacs
+      ansible.builtin.command:
+        cmd: nix profile install github:NixOS/nixpkgs/nixos-25.05#emacs-nox
+        creates: "{{ ansible_env.HOME }}/.nix-profile/bin/emacs"
+      environment:
+        PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+
+    # Over SSH, using the agent forwarded by ansible.cfg's ForwardAgent=yes —
+    # so no private key is ever written to the machine, and the clone can push
+    # back. accept_hostkey covers github.com being unknown on a fresh host.
+    #
+    # `update: false` clones once and then leaves it alone. This is a working
+    # copy on a development machine, not a deployment: a later create must not
+    # discard edits made on the machine, and pulling is the user's call.
+    - name: Clone the Emacs configuration
+      ansible.builtin.git:
+        repo: "git@github.com:fixture/emacs.d.git"
+        dest: "~/.config/fixture-emacs"
+        accept_hostkey: true
+        update: false
+
+    # Packages are deliberately not pre-fetched. The first interactive launch
+    # pulls from ELPA/MELPA, native-compiles and clones tree-sitter grammars on
+    # its own; doing that here would add minutes to every create and turn a
+    # transient MELPA failure into a failed provision.

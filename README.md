@@ -32,10 +32,21 @@ project keeps running the old pin while `skills-lock.json` claims the new one.
 
 ## What v1 does and does not do
 
-It creates a machine and gets you onto it. The remote playbook is an
-`ansible.builtin.ping` — it proves walter's own plumbing works and installs
-nothing. Toolchains and dotfiles are a later playbook, and that stage is where
-they land.
+It creates a machine, gets you onto it, and installs **nix** plus a **terminfo
+entry for Ghostty** — both on every machine, gated on nothing. nix, because with
+it present anything else is one `nix profile install` away and needs no change
+to walter; terminfo, because `TERM` travels over SSH and the terminfo database
+does not, so without it `vim`, `top` and `less` all die with `Terminal type
+xterm-ghostty is not defined`.
+
+Set `emacs-config-repo` and the remote playbook also installs Emacs from a
+pinned nixpkgs and clones that configuration over the forwarded agent, so no
+private key is written to the machine. Leave the key out and the rendered
+playbook does not mention Emacs at all. Packages are not pre-fetched: the first
+interactive launch does that.
+
+Nothing else is installed. Other toolchains are the user's `nix profile
+install`, not a walter feature.
 
 `stop` and `start` work on OCI. Everywhere else they report that the provider
 has no power API walter can drive and exit 0. That is deliberate: no provider

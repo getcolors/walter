@@ -178,12 +178,20 @@
 
 (defn data-fn
   "Template data for the Ansible stages: opts, with the address, login and alias
-  guaranteed present so a build renders without ever reaching for state."
+  guaranteed present so a build renders without ever reaching for state.
+
+  `emacs-config-dest` is defaulted rather than required, because a repo with no
+  destination is an unambiguous intent and the alternative is a rendered
+  playbook carrying `dest: \"\"` that only fails on the machine. The default is
+  the XDG path Emacs 29+ reads on its own; a configuration that expects another
+  one — and so an `--init-directory` to reach it — says so in colors.yml."
   [opts]
   (assoc opts
          :ip (or (not-empty (str (:ip opts))) "192.168.0.1")
          :user (or (not-empty (str (:user opts))) "root")
-         :host-alias (utils/host-alias opts)))
+         :host-alias (utils/host-alias opts)
+         :emacs-config-dest (or (not-empty (str (:emacs-config-dest opts)))
+                                "~/.config/emacs")))
 
 (defn ansible-local-step
   "Manage the `Host <alias>` block in `~/.ssh/config`.
@@ -212,14 +220,17 @@
     (ansible/ansible-with-spec opts config specs)))
 
 (defn ansible-remote-step
-  "Confirm Ansible can reach the machine.
+  "Reach the machine, then provision it: nix always, and Emacs plus a cloned
+  configuration when `emacs-config-repo` names one.
 
-  What this proves is walter's own plumbing — inventory rendering, the config,
-  user and key resolution — which is what is most likely to be wrong in a new
-  package. It does not prove the machine is up: ONCE's compute template carries a
-  `remote-exec` provisioner behind an SSH connection, so `tofu apply` has already
-  blocked on that. Real provisioning is a later playbook, and this is where it
-  lands."
+  The ping is kept because it is what fails first and most legibly when the
+  inventory, the login or the key is wrong. It does not prove the machine is up:
+  ONCE's compute template carries a `remote-exec` provisioner behind an SSH
+  connection, so `tofu apply` has already blocked on that.
+
+  The Emacs half is gated in the *template*, not at runtime, so a project that
+  names no repository renders a playbook that does not mention Emacs at all —
+  which is what `scripts/golden.sh` then holds still."
   [opts]
   (let [dir (tool-dir opts ansible-remote-tool)
         data (data-fn opts)

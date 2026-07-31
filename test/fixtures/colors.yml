@@ -60,3 +60,10 @@ s3-bucket: walter-fixture-state
 s3-region: eu-central-1
 r2-bucket: walter-fixture-state
 r2-endpoint: https://fixture.eu.r2.cloudflarestorage.com
+
+# Set so every golden renders the Emacs half of the remote playbook. The other
+# branch — no repository, no mention of Emacs — is not a golden: it is
+# `the-remote-playbook-omits-emacs-when-no-repo-is-named` in tools_test, because
+# eight identical copies of an absence prove nothing eight times.
+emacs-config-repo: git@github.com:fixture/emacs.d.git
+emacs-config-dest: ~/.config/fixture-emacs

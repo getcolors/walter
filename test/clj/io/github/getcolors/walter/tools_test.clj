@@ -1,5 +1,6 @@
 (ns io.github.getcolors.walter.tools-test
   (:require
+   [babashka.fs :as fs]
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
@@ -130,3 +131,78 @@
     (let [data (tools/data-fn {:profile "p" :ip "203.0.113.7" :user "ubuntu"})]
       (is (= "203.0.113.7" (:ip data)))
       (is (= "ubuntu" (:user data))))))
+
+(deftest the-emacs-destination-defaults-to-the-xdg-path
+  (testing "a repo with no destination is unambiguous intent, and the
+           alternative is a playbook carrying dest: \"\" that only fails on the
+           machine"
+    (is (= "~/.config/emacs"
+           (:emacs-config-dest (tools/data-fn {:profile "p"}))))
+    (is (= "~/.config/neoemacs"
+           (:emacs-config-dest (tools/data-fn {:profile "p"
+                                               :emacs-config-dest "~/.config/neoemacs"}))))))
+
+;; ---------------------------------------------------------------------------
+;; the remote playbook
+
+(defn- render-remote-playbook
+  "Run the remote step as a build — which renders and returns without reaching
+  for Ansible — and hand back the playbook it wrote."
+  [opts]
+  (let [dir (str (fs/create-temp-dir))
+        merged (merge {:profile "p"
+                       :workdir dir
+                       :provider-compute "oci"
+                       :green/event :build}
+                      opts)]
+    (tools/ansible-remote-step merged)
+    (slurp (str (tools/tool-dir merged tools/ansible-remote-tool) "/main.yml"))))
+
+(deftest the-remote-playbook-installs-nix-unconditionally
+  (testing "nix is the one thing walter treats as part of what a development
+           machine is — with it present, anything else is one nix profile
+           install away and needs no change to walter"
+    (let [rendered (render-remote-playbook {})]
+      (is (str/includes? rendered "install.determinate.systems/nix"))
+      (is (str/includes? rendered "--no-confirm")
+          "the installer prompts otherwise, and Ansible has given it no TTY")
+      (is (str/includes? rendered "creates: /nix/receipt.json")
+          "the receipt is what makes a re-run a no-op instead of a reinstall"))))
+
+(deftest the-remote-playbook-installs-a-terminfo-database
+  (testing "TERM travels over SSH and the terminfo database does not, so a
+           machine whose distro predates the operator's terminal cannot run
+           emacs, top or less — ungated, because that is broken for everyone"
+    (let [rendered (render-remote-playbook {})]
+      (is (str/includes? rendered "#ghostty.terminfo"))
+      (is (str/includes? rendered ".terminfo/{{ item.dir }}/{{ item.name }}")
+          "linked into ~/.terminfo, which the system ncurses already reads —
+           TERMINFO_DIRS would only reach a login shell"))))
+
+(deftest the-remote-playbook-omits-emacs-when-no-repo-is-named
+  (testing "gated in the template rather than at runtime, so a project that
+           names no repository renders a playbook that does not mention Emacs"
+    (let [rendered (render-remote-playbook {})]
+      (is (not (str/includes? rendered "emacs")))
+      (is (not (str/includes? rendered "Emacs"))))))
+
+(deftest a-named-repo-adds-emacs-and-the-clone-after-nix
+  (testing "order matters: a config cloned for an Emacs that is not installed
+           leaves a machine that looks provisioned and is not"
+    (let [rendered (render-remote-playbook {:emacs-config-repo "git@github.com:me/emacs.d.git"
+                                            :emacs-config-dest "~/.config/neoemacs"})
+          at #(str/index-of rendered %)]
+      (is (str/includes? rendered "nixos-25.05#emacs-nox")
+          "pinned, so a rebuilt machine gets the Emacs this one has")
+      (is (str/includes? rendered "repo: \"git@github.com:me/emacs.d.git\""))
+      (is (str/includes? rendered "dest: \"~/.config/neoemacs\""))
+      (is (str/includes? rendered "update: false")
+          "a development machine's working copy is not a deployment")
+      (is (< (at "install.determinate.systems") (at "#emacs-nox") (at "repo:"))))))
+
+(deftest the-clone-never-writes-a-key-to-the-machine
+  (testing "ansible.cfg forwards the agent, so the clone speaks SSH and can push
+           back — accept_hostkey covers github.com being unknown on a fresh host"
+    (let [rendered (render-remote-playbook {:emacs-config-repo "git@github.com:me/emacs.d.git"})]
+      (is (str/includes? rendered "accept_hostkey: true"))
+      (is (str/includes? rendered "dest: \"~/.config/emacs\"")))))

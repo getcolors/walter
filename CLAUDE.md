@@ -132,7 +132,13 @@ transition completes.
 |---|---|---|
 | `:walter/compute` | `walter-compute` | ONCE's provider template + walter's `outputs.tf`; outputs ip/user/sudoer/name |
 | `:walter/ansible-local` | `walter-ansible-local` | the managed `Host <profile>` block in `~/.ssh/config` |
-| `:walter/ansible-remote` | `walter-ansible-remote` | a connectivity ping, and nothing more in v1 |
+| `:walter/ansible-remote` | `walter-ansible-remote` | ping, nix, terminfo, and — when `emacs-config-repo` is set — Emacs and its clone |
+
+The Emacs half is gated in the **template**, with Selmer's `<% if %>`, not with
+an Ansible `when:`. A project that names no repository therefore renders a
+playbook that does not mention Emacs at all, which is what `scripts/golden.sh`
+holds still; the fixture sets both keys so the eight goldens cover the other
+branch, and `tools_test` covers the absence once rather than eight times.
 
 The stage names are load-bearing. Remote state is keyed `<profile>/<tool>`, and
 naming the stage `walter-compute` rather than `tofu-compute` means a colliding
