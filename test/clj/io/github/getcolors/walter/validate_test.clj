@@ -150,3 +150,22 @@
                  (assoc with-asdf
                         :asdf-tools [{:name "nodejs" :version "24.18.1"}]
                         :corepack-packages ["pnpm"])))))))
+
+(deftest dotfiles-need-babashka-installed
+  (testing "the installer is a bb script, and nothing but nix-packages puts bb on
+           the machine — so the combination fails here rather than as a
+           command-not-found half way through a create"
+    (is (seq (errors-matching (assoc base :dotfiles-repo "git@github.com:me/dotfiles.git")
+                              #":dotfiles-repo")))
+    (is (seq (errors-matching (assoc base
+                                     :nix-packages ["ripgrep"]
+                                     :dotfiles-repo "git@github.com:me/dotfiles.git")
+                              #":dotfiles-repo"))))
+  (testing "naming babashka satisfies it"
+    (is (= [] (validate/state-errors
+               (assoc base
+                      :nix-packages ["babashka"]
+                      :dotfiles-repo "git@github.com:me/dotfiles.git"
+                      :dotfiles-profile "ubuntu")))))
+  (testing "no repository named is the common case and never an error"
+    (is (= [] (validate/state-errors (assoc base :nix-packages ["ripgrep"]))))))

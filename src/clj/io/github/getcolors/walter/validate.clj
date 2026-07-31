@@ -147,7 +147,15 @@
        (when (and (seq (:corepack-packages opts))
                   (not (some #(= "nodejs" (str (:name %))) (:asdf-tools opts))))
          [(str ":corepack-packages needs a \"nodejs\" entry in :asdf-tools — "
-               "corepack ships inside Node and cannot be installed separately")]))))))
+               "corepack ships inside Node and cannot be installed separately")])
+       ;; Same shape as the asdf-vm rule above, and for the same reason: the
+       ;; dotfiles installer is a Babashka script, and nothing but :nix-packages
+       ;; puts bb on the machine. Caught here rather than as a
+       ;; command-not-found half way through a create.
+       (when (and (not (placeholder? (:dotfiles-repo opts)))
+                  (not (contains? packages "babashka")))
+         [(str ":dotfiles-repo needs \"babashka\" in :nix-packages — "
+               "the installer is a bb script and nothing else puts bb on the machine")]))))))
 
 (defn secret-errors
   "Credentials the selected providers need that no `COLORS_PAR_*` variable

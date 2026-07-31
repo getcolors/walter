@@ -289,6 +289,71 @@
       (is (str/includes? rendered "accept_hostkey: true"))
       (is (str/includes? rendered "dest: \"~/.config/emacs\"")))))
 
+;; ---------------------------------------------------------------------------
+;; the dotfiles
+
+(deftest the-remote-playbook-omits-dotfiles-when-no-repo-is-named
+  (testing "gated in the template rather than at runtime, so a project that
+           names no repository renders a playbook that does not mention them"
+    (let [rendered (render-remote-playbook {})]
+      (is (not (str/includes? rendered "dotfiles")))
+      (is (not (str/includes? rendered ".local/state/walter"))))))
+
+(deftest the-dotfiles-are-installed-after-the-shell-and-the-editor
+  (testing "the profile can carry ~/.config/fish/config.fish and ~/.doom.d, which
+           only make sense once the shell and the editor they configure are
+           already on the machine"
+    (let [rendered (render-remote-playbook
+                    {:nix-packages ["asdf-vm" "fish" "babashka"]
+                     :login-shell "fish"
+                     :emacs-config-repo "git@github.com:me/emacs.d.git"
+                     :dotfiles-repo "git@github.com:me/dotfiles.git"
+                     :dotfiles-dest "~/code/me/dotfiles"
+                     :dotfiles-profile "ubuntu"})
+          at #(str/index-of rendered %)]
+      (is (str/includes? rendered "repo: \"git@github.com:me/dotfiles.git\""))
+      (is (str/includes? rendered "dest: \"~/code/me/dotfiles\""))
+      (is (str/includes? rendered "cmd: bb install -p ubuntu"))
+      (is (str/includes? rendered "chdir: \"~/code/me/dotfiles\"")
+          "chdir is type: path, so Ansible expanduser's it and no shell is needed")
+      (is (< (at "Set the login shell") (at "#emacs-nox") (at "Clone the dotfiles"))))))
+
+(deftest the-dotfiles-clone-does-not-discard-work-done-on-the-machine
+  (testing "same update: false as the Emacs clone — a development machine's
+           working copy is not a deployment"
+    (let [rendered (render-remote-playbook {:nix-packages ["babashka"]
+                                            :dotfiles-repo "git@github.com:me/dotfiles.git"})]
+      (is (str/includes? rendered "update: false"))
+      (is (str/includes? rendered "accept_hostkey: true")))))
+
+(deftest the-install-is-stamped-so-a-converge-does-not-overwrite-home
+  (testing "the installer copies rendered files over $HOME with replace-existing,
+           so re-running it on every create would silently undo edits made on the
+           machine — which is the one thing the clone goes out of its way to avoid"
+    (let [rendered (render-remote-playbook {:nix-packages ["babashka"]
+                                            :dotfiles-repo "git@github.com:me/dotfiles.git"
+                                            :dotfiles-profile "ubuntu"})
+          at #(str/index-of rendered %)]
+      (is (str/includes? rendered
+                         "creates: \"{{ ansible_env.HOME }}/.local/state/walter/dotfiles-ubuntu\"")
+          "the stamp carries the profile, so switching profile is what re-runs it")
+      (is (< (at "Ensure walter's state directory")
+             (at "cmd: bb install")
+             (at "Record that the dotfiles profile is installed"))
+          "the stamp is written after the install, so a failure retries next create"))))
+
+(deftest the-dotfiles-destination-and-profile-both-default
+  (testing "a repo with no destination is unambiguous intent, and \"default\" is
+           the installer's own answer when neither -p nor DOTFILES_PROFILE is given"
+    (let [data (tools/data-fn {:profile "p"})]
+      (is (= "~/.dotfiles" (:dotfiles-dest data)))
+      (is (= "default" (:dotfiles-profile data))))
+    (let [data (tools/data-fn {:profile "p"
+                               :dotfiles-dest "~/code/me/dotfiles"
+                               :dotfiles-profile "ubuntu"})]
+      (is (= "~/code/me/dotfiles" (:dotfiles-dest data)))
+      (is (= "ubuntu" (:dotfiles-profile data))))))
+
 (deftest asdf-tools-render-as-one-looped-task-each
   (testing "a JSON array is a valid YAML flow sequence, so the playbook keeps one
            task with an Ansible loop rather than N generated ones"

@@ -69,6 +69,9 @@ nix-packages:
   - asdf-vm
   - ripgrep
   - fish
+  # Required by dotfiles-repo below — the installer is a bb script, and
+  # validate.clj refuses the combination without it.
+  - babashka
 
 # Set so every golden renders the login-shell block and the fish integration that
 # has to precede it. The other shells' branch — a login shell that reaches nix
@@ -92,3 +95,10 @@ corepack-packages:
 # eight identical copies of an absence prove nothing eight times.
 emacs-config-repo: git@github.com:fixture/emacs.d.git
 emacs-config-dest: ~/.config/fixture-emacs
+
+# Set so every golden renders the dotfiles half. Its absent branch is
+# `the-remote-playbook-omits-dotfiles-when-no-repo-is-named` in tools_test, for
+# the same reason the Emacs one is.
+dotfiles-repo: git@github.com:fixture/dotfiles.git
+dotfiles-dest: ~/code/fixture/dotfiles
+dotfiles-profile: ubuntu

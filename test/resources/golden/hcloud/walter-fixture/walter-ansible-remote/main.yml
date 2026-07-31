@@ -121,13 +121,13 @@
     # not make.
     - name: Install the project's nix packages
       ansible.builtin.command:
-        cmd: nix profile add github:NixOS/nixpkgs/nixpkgs-unstable#asdf-vm github:NixOS/nixpkgs/nixpkgs-unstable#ripgrep github:NixOS/nixpkgs/nixpkgs-unstable#fish
+        cmd: nix profile add github:NixOS/nixpkgs/nixpkgs-unstable#asdf-vm github:NixOS/nixpkgs/nixpkgs-unstable#ripgrep github:NixOS/nixpkgs/nixpkgs-unstable#fish github:NixOS/nixpkgs/nixpkgs-unstable#babashka
       environment:
         PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
       register: walter_nix_packages
       changed_when: >-
         walter_nix_packages.stderr_lines
-        | select('search', 'is already added') | list | length < 3
+        | select('search', 'is already added') | list | length < 4
 
 
     # Changing the login shell is the one task here that can lock a machine out
@@ -344,3 +344,69 @@
     # pulls from ELPA/MELPA, native-compiles and clones tree-sitter grammars on
     # its own; doing that here would add minutes to every create and turn a
     # transient MELPA failure into a failed provision.
+
+
+    # The operator's dotfiles, cloned and then applied to $HOME.
+    #
+    # Last in the play on purpose. The profile it installs can carry shell and
+    # editor configuration — ~/.config/fish/config.fish, ~/.doom.d — that only
+    # makes sense once the shell and the editor those files configure are
+    # already on the machine.
+    #
+    # Same `update: false` as the Emacs clone, for the same reason: this is a
+    # working copy on a development machine, and a later create must not discard
+    # edits made there. accept_hostkey covers the host being unknown on a fresh
+    # machine, and an ssh:// URL rides the agent ansible.cfg forwards — an
+    # https:// one clones fine and cannot push back.
+    - name: Clone the dotfiles
+      ansible.builtin.git:
+        repo: "git@github.com:fixture/dotfiles.git"
+        dest: "~/code/fixture/dotfiles"
+        accept_hostkey: true
+        update: false
+
+    # The installer copies rendered files over $HOME with replace-existing, so
+    # it is emphatically not something to re-run on every converge: it would
+    # silently overwrite work done on the machine, which is the one thing the
+    # clone above goes out of its way not to do.
+    #
+    # Hence a stamp rather than an Ansible `when:`. The name carries the profile,
+    # so changing `dotfiles-profile` in colors.yml is what re-runs it — switching
+    # profile is a different desired state and should converge, where a second
+    # create against an unchanged file should not.
+    #
+    # It lives under ~/.local/state, which is the XDG home for exactly this: data
+    # that survives reboots, means nothing to the user, and belongs to the tool
+    # that wrote it.
+    - name: Ensure walter's state directory exists
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/.local/state/walter"
+        state: directory
+        mode: "0755"
+
+    # `bb` comes from nix-packages like everything else here, so validate.clj
+    # refuses a `dotfiles-repo` without "babashka" beside it rather than letting
+    # this fail on the machine as command-not-found.
+    #
+    # chdir and creates are both `type: path` in the command module, which
+    # expanduser's them — so a `~`-relative dest needs no shell to resolve it,
+    # and adding one would only reintroduce quoting bugs.
+    - name: Install the dotfiles profile
+      ansible.builtin.command:
+        cmd: bb install -p ubuntu
+        chdir: "~/code/fixture/dotfiles"
+        creates: "{{ ansible_env.HOME }}/.local/state/walter/dotfiles-ubuntu"
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+
+    # Only reached when the install above exited 0 — a failure aborts the play,
+    # so the stamp is never written for an install that did not finish and the
+    # next create retries it.
+    - name: Record that the dotfiles profile is installed
+      ansible.builtin.copy:
+        dest: "{{ ansible_env.HOME }}/.local/state/walter/dotfiles-ubuntu"
+        mode: "0644"
+        content: |
+          Written by walter. Its presence is what stops `bb install -p ubuntu`
+          running again and copying rendered files over edits made on this machine.
+          Delete it to reinstall the profile on the next create.

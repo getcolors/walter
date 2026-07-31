@@ -273,7 +273,19 @@
          :corepack-packages-json (let [pkgs (corepack-packages opts)]
                                    (when (seq pkgs) (json/generate-string pkgs)))
          :emacs-config-dest (or (not-empty (str (:emacs-config-dest opts)))
-                                "~/.config/emacs")))
+                                "~/.config/emacs")
+         ;; Defaulted for the same reason as the Emacs destination: a repo with
+         ;; no destination is unambiguous intent, and the alternative is a
+         ;; playbook carrying `dest: ""` that only fails on the machine. There
+         ;; is no equivalent of Emacs' XDG path to defer to here, so this is a
+         ;; convention rather than a lookup — say so in colors.yml to override it.
+         :dotfiles-dest (or (not-empty (str (:dotfiles-dest opts)))
+                            "~/.dotfiles")
+         ;; "default" is the installer's own default when neither -p nor
+         ;; DOTFILES_PROFILE is given, so this defers to the tool rather than
+         ;; inventing a second answer.
+         :dotfiles-profile (or (not-empty (str/trim (str (:dotfiles-profile opts))))
+                               "default")))
 
 (defn ansible-local-step
   "Manage the `Host <alias>` block in `~/.ssh/config`.
