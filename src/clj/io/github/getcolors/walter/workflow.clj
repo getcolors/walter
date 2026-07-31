@@ -127,14 +127,20 @@
   OpenTofu's stored `ip` output is not refreshed by an out-of-band power cycle,
   so it may be stale here — and rendering a stale address into `~/.ssh/config` is
   exactly the silent breakage this exists to prevent. Outputs' `ip` is
-  authoritative only immediately after an apply; this reads live."
+  authoritative only immediately after an apply; this reads live.
+
+  `user` is the other half of that block and the start graph has no compute step
+  to adopt it from, so it comes from the provider's own default login — the same
+  value create renders. Without it `data-fn` falls back to root, and the next
+  start rewrites a working alias into one the machine refuses."
   [opts]
   (let [started ((power-step :start) opts)]
     (cond
       (wf/failed? started) started
       (:walter/no-op started) started
       :else (if-let [ip (oci/public-ip started (:walter/instance-id started))]
-              (assoc started :green/exit 0 :ip ip)
+              (assoc started :green/exit 0 :ip ip
+                     :user (:user (tools/fallback-compute-params started)))
               (assoc started
                      :green/exit 1
                      :green/err "the instance reported no public address after starting")))))

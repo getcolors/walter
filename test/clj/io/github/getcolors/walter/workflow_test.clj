@@ -145,6 +145,16 @@
         (is (= 0 (:green/exit result)))
         (is (= "203.0.113.99" (:ip result)))))))
 
+(deftest start-carries-the-provider-login-into-the-ssh-block
+  (testing "the start graph has no compute step to adopt `user` from, and the
+           root default data-fn would otherwise apply writes an alias OCI
+           refuses to log in as"
+    (with-redefs [oci/power! (fn [& _] {:exit 0})
+                  oci/public-ip (fn [& _] "203.0.113.99")]
+      (let [result (workflow/power-on-step {:walter/instance-id "x"
+                                            :provider-compute "oci"})]
+        (is (= "ubuntu" (:user result)))))))
+
 (deftest a-started-machine-with-no-address-is-a-failure
   (with-redefs [oci/power! (fn [& _] {:exit 0})
                 oci/public-ip (fn [& _] nil)]
