@@ -1,0 +1,21 @@
+{:paths ["src/clj" "src/resources"]
+ ;; Pinned by sha so this project resolves as a git dependency elsewhere — the
+ ;; launcher fetches it that way. Temporarily use a local-root coordinate when
+ ;; developing several checkouts together, or set GREEN_LIB_ROOT / ONCE_LIB_ROOT.
+ ;;
+ ;; `once` is a dependency on a *package*, not on the SDK, and it is deliberately
+ ;; narrow: walter uses the provider registry as data and the compute templates
+ ;; as classpath resources. Nothing protects that surface — see plans/0001 and
+ ;; scripts/golden.sh, which is what actually catches a breaking change here.
+ :deps    {org.clojure/clojure       {:mvn/version "1.12.5"}
+           io.github.getcolors/green {:git/url "https://github.com/getcolors/green.git"
+                                      :git/sha "1c1fb81563287c98aa1bcd0e12cd755296e6d98e"}
+           io.github.getcolors/once  {:git/url "https://github.com/getcolors/once.git"
+                                      :git/sha "d5981aa7a5e0124ef1384795fc3261eef67195fc"
+                                      :deps/root "green"}}
+ :aliases {:dev  {:extra-paths ["test/clj" "test/resources"]}
+           :test {:extra-paths ["test/clj" "test/resources"]
+                  :extra-deps {io.github.cognitect-labs/test-runner
+                               {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                  :main-opts ["-m" "cognitect.test-runner"]
+                  :exec-fn cognitect.test-runner.api/test}}}

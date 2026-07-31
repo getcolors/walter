@@ -1,0 +1,10 @@
+{
+  "all" : {
+    "hosts" : {
+      "walter-fixture" : {
+        "ansible_host" : "198.51.100.10",
+        "ansible_user" : "root"
+      }
+    }
+  }
+}

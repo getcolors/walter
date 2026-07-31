@@ -1,0 +1,115 @@
+# Desired state for a walter development machine. Non-secret values only.
+#
+# Found by walking up from the working directory, and the work directory walter
+# renders into is resolved next to this file rather than next to the caller.
+#
+# Secrets and tokens are never written here: export them as COLORS_PAR_* and
+# they are overlaid onto the matching flat key at run time. The variable name is
+# the key uppercased with hyphens as underscores, so do-token comes from
+# COLORS_PAR_DO_TOKEN.
+#
+# COLORS_PAR_PROFILE is the one exception: walter refuses to run when it is set.
+# The profile names this project, and this project is the directory you are
+# standing in — overriding it from the environment can only point walter at
+# another project's OpenTofu state.
+#
+# Required per provider:
+#   digitalocean   COLORS_PAR_DO_TOKEN
+#   hcloud         COLORS_PAR_HCLOUD_TOKEN
+#   yandex         COLORS_PAR_YANDEX_TOKEN
+#   oci            (none — uses oci-config-file-profile from ~/.oci/config)
+#   r2 backend     COLORS_PAR_R2_ACCESS_KEY_ID COLORS_PAR_R2_SECRET_ACCESS_KEY
+#   s3 backend     (none — OpenTofu uses the ambient AWS credential chain)
+
+# Names the work directory, the OpenTofu state keys, and the ~/.ssh/config Host
+# alias. Keep it unique across every project on this machine: it is the only
+# thing separating this machine's state from another project's.
+profile: walter
+workdir: .colors
+
+provider-compute: oci # digitalocean | hcloud | oci | yandex | no-infra
+provider-backend: local # local | s3 | r2
+
+# Renders lifecycle { prevent_destroy = true }. A real delete refuses to start
+# until COLORS_PAR_COMPUTE_PREVENT_DESTROY=false. What lives on a development
+# machine is uncommitted work, so this matters more here than it does on a
+# server whose state is in git.
+compute-prevent-destroy: true
+
+# --- power ------------------------------------------------------------------
+#
+# `stop` and `start` never reach OpenTofu. Power state is not declared in any
+# template, so nothing drifts when the instance is stopped out of band — there
+# is nothing for OpenTofu to reconcile. Only providers walter knows how to power
+# cycle do anything; the rest report that stop is not supported and exit 0.
+#
+# Optional. Left unset, walter reads the instance id from the compute stage's
+# `instance_id` OpenTofu output, which needs the state backend to be reachable.
+# Set it — `tofu output instance_id` in the stage directory, or the console —
+# and stop/start work with no state access at all.
+# oci-instance-id: ocid1.instance.oc1...
+#
+# How long to wait for a power transition to complete. The OCI CLI returns
+# before the instance has finished stopping or starting, so walter always waits.
+power-wait-seconds: 300
+
+# --- oci --------------------------------------------------------------------
+oci-config-file-profile: REPLACE_ME
+oci-subnet-id: REPLACE_ME
+oci-compartment-id: REPLACE_ME
+oci-availability-domain: REPLACE_ME
+oci-display-name: walter
+oci-shape: VM.Standard.A1.Flex
+# Optional. Pins the boot image. Left unset, the newest Canonical Ubuntu 24.04
+# image compatible with oci-shape is used — convenient for a first create, and a
+# moving target afterwards: the image id forces replacement, so an apply months
+# later proposes destroying the instance because Canonical published a new one.
+# With compute-prevent-destroy true that apply fails rather than destroying
+# anything, which is safe and confusing. Pin it once the machine is real.
+# oci-image-id: ocid1.image.oc1...
+oci-ocpus: 2
+oci-memory-in-gbs: 12
+oci-boot-volume-size-in-gbs: 100
+oci-boot-volume-vpus-per-gb: 30
+oci-ssh-authorized-keys: REPLACE_ME
+
+# --- other compute providers ------------------------------------------------
+# Only the keys for the selected provider-compute are required.
+
+compute-pubkey: REPLACE_ME # required by Yandex Cloud
+
+hcloud-name: walter
+hcloud-image: ubuntu-24.04
+hcloud-server-type: cx23
+hcloud-location: hel1
+hcloud-ssh-keys: REPLACE_ME
+
+digitalocean-name: walter
+digitalocean-region: ams3
+digitalocean-size: s-1vcpu-1gb-35gb-intel
+digitalocean-image: ubuntu-25-10-x64
+digitalocean-vpc-uuid: REPLACE_ME
+digitalocean-ssh-keys: REPLACE_ME
+
+yandex-cloud-id: REPLACE_ME
+yandex-folder-id: REPLACE_ME
+yandex-zone: ru-central1-a
+yandex-image-family: ubuntu-2404-lts
+yandex-name: walter
+yandex-subnet-cidr: 10.0.0.0/24
+yandex-platform-id: standard-v3
+yandex-cores: 2
+yandex-memory-gb: 8
+yandex-core-fraction: 100
+yandex-disk-size-gb: 50
+
+no-infra-compute-ip: REPLACE_ME
+no-infra-compute-user: REPLACE_ME
+no-infra-compute-sudoer: REPLACE_ME
+no-infra-compute-uid: REPLACE_ME
+
+# --- state backend ----------------------------------------------------------
+s3-bucket: REPLACE_ME
+s3-region: REPLACE_ME
+r2-bucket: REPLACE_ME
+r2-endpoint: REPLACE_ME

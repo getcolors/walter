@@ -1,0 +1,238 @@
+(ns io.github.getcolors.walter.tools
+  "The three step functions, their template specs, and the generated inventory.
+
+  Walter reuses exactly one thing from ONCE here: the compute provider templates,
+  by classpath keyword. That is the valuable part — the provider HCL, the
+  pinned-image branch, the ForceNew commentary — and it is a *resource*, which
+  `scripts/golden.sh` can watch, rather than a function signature ONCE is free
+  to reshape. Everything else in this namespace is walter's own, including both
+  Ansible stages: reusing ONCE's `ansible-local` would mean an unrelated change
+  there rewriting ~/.ssh/config on the operator's workstation at pin-bump time."
+  (:require
+   [cheshire.core :as json]
+   [clojure.java.io :as io]
+   [clojure.walk :as walk]
+   [green.ansible :as ansible]
+   [green.scaffold :as sc]
+   [green.tofu :as tofu]
+   [green.workflow :as wf]
+   [io.github.getcolors.walter.utils :as utils]
+   [io.github.getcolors.walter.validate :as validate]))
+
+(def compute-tool
+  "The compute stage directory, and half of its OpenTofu state key.
+
+  Deliberately not `tofu-compute`. Remote state is keyed `<profile>/<tool>` and
+  nothing but convention keeps this project's profile distinct from another's,
+  so a walter-specific stage name means a colliding profile still cannot produce
+  ONCE's state key."
+  "walter-compute")
+
+(def ansible-local-tool "walter-ansible-local")
+(def ansible-remote-tool "walter-ansible-remote")
+
+(def ^:private walter-root "io.github.getcolors.walter.tools")
+(def ^:private once-root "io.github.getcolors.once.tools")
+(def ^:private raw-template :io.github.getcolors.walter/raw)
+
+(def ^:private template-opts
+  "Selmer reads `<{ var }>` and `<% if %>`, leaving `{{ }}` and `{% %}` to Jinja2
+  in the Ansible files."
+  {:tag-open \<
+   :tag-close \>
+   :filter-open \{
+   :filter-close \}})
+
+(defn tool-dir
+  "The isolated working directory for `tool` in the active profile.
+
+  A relative workdir resolves against the directory holding colors.yml rather
+  than the current one, so walter renders to the same place however deep in the
+  project it was invoked from."
+  [opts tool]
+  (let [workdir (io/file (or (:workdir opts) ".colors"))
+        state-dir (when-not (.isAbsolute workdir)
+                    (some-> (:green/state-file opts) io/file .getAbsoluteFile .getParent))
+        root (if state-dir (io/file state-dir workdir) workdir)]
+    (str (io/file root (or (:profile opts) "walter") tool))))
+
+(defn- once-template
+  [tool provider file]
+  (keyword (str once-root "." tool "." provider) file))
+
+(defn- walter-template
+  [tool file]
+  (keyword (str walter-root "." tool) file))
+
+(defn- template-spec
+  [template target data]
+  {:template template :target target :data data :opts template-opts})
+
+(defn- raw-spec
+  [target content]
+  (template-spec raw-template target {:content content}))
+
+(defn- credential-env
+  "Environment additions for the providers in `slots`, plus the state backend —
+  every stage reads and writes state, so the backend credentials belong to all of
+  them. Unset credentials are omitted, so build and dry-run stay credential-free."
+  [opts & slots]
+  (not-empty
+   (into {}
+         (keep (fn [[k env-var]]
+                 (when-let [v (not-empty (str (get opts k)))]
+                   [env-var v])))
+         (apply merge (map #(validate/tofu-env opts %)
+                           (conj (vec slots) :provider-backend))))))
+
+(defn backend-credential-env
+  "Environment additions for a process that only reads OpenTofu state. Provider
+  credentials are left out: reading state never calls a provider API."
+  [opts]
+  (credential-env opts))
+
+(defn fallback-compute-params
+  "What a build or a dry-run stands in for the values only a real apply knows.
+  Rendering must never need state, or `build` would stop being credential-free."
+  [{:keys [profile provider-compute] :as opts}]
+  (let [name (or profile "walter")]
+    (case provider-compute
+      "oci" {:ip "192.168.0.1" :sudoer "ubuntu" :uid "1001" :name name :user "ubuntu"}
+      "yandex" {:ip "192.168.0.1" :sudoer "ubuntu" :uid "1000" :name name :user "ubuntu"}
+      "no-infra" (cond-> {:ip (or (:no-infra-compute-ip opts) "192.168.0.1")
+                          :sudoer (or (:no-infra-compute-sudoer opts) "root")
+                          :name name
+                          :user (or (:no-infra-compute-user opts) "root")}
+                   (:no-infra-compute-uid opts) (assoc :uid (:no-infra-compute-uid opts)))
+      {:ip "192.168.0.1" :sudoer "root" :name name :user "root"})))
+
+(defn compute-specs
+  "ONCE's provider template, plus — on a provider walter can power cycle — one
+  extra file publishing the instance id.
+
+  OpenTofu merges every .tf in a directory, so that output needs no change to
+  ONCE's template and no fork of it. The address it names,
+  `oci_core_instance.ampere_vm`, is one ONCE's own comments call out as a state
+  address that must not be renamed, which makes it the most durable handle
+  available. `scripts/golden.sh` asserts it is still there."
+  [opts dir]
+  (let [provider (or (:provider-compute opts) "oci")]
+    (cond-> [(template-spec (once-template "tofu" provider "main.tf")
+                            (str dir "/main.tf")
+                            opts)]
+      (validate/stoppable? opts)
+      (conj (template-spec (walter-template (str "tofu." provider) "outputs.tf")
+                           (str dir "/outputs.tf")
+                           opts)))))
+
+(defn- output-params
+  [opts]
+  (some-> (get-in opts [:tofu/outputs :params]) walk/keywordize-keys))
+
+(defn compute-step
+  "Render the compute stage and apply it, adopting the machine's address.
+
+  The adopted params are merged flat into opts as well as kept under
+  `:walter/compute-params`, because both Ansible stages read `ip` and `user`
+  directly."
+  [opts]
+  (let [dir (tool-dir opts compute-tool)
+        specs (compute-specs opts dir)
+        fallback (fallback-compute-params opts)
+        result (tofu/tofu-with-spec opts specs
+                                    {:dir dir
+                                     :env (credential-env opts :provider-compute)})]
+    (cond
+      (wf/failed? result) result
+      (= :build (:green/event opts)) (merge result fallback {:walter/compute-params fallback})
+      ;; A destroy has run; there are no outputs left to adopt.
+      (= :delete (:green/event opts)) result
+      :else (let [params (merge fallback (output-params result))]
+              (merge result params {:walter/compute-params params})))))
+
+(defn instance-id
+  "The OCID the power verbs act on.
+
+  Desired state wins when it carries one, so `stop` and `start` keep working
+  with no access to OpenTofu state at all — a broken backend should not strand
+  you with a running machine you cannot stop. Otherwise it comes from the
+  compute stage's `instance_id` output, which is why walter renders that extra
+  .tf file at all."
+  [opts]
+  (or (not-empty (str (:oci-instance-id opts)))
+      (try
+        (not-empty (str (:instance_id (tofu/outputs (tool-dir opts compute-tool)
+                                                    (backend-credential-env opts)))))
+        (catch Exception _ nil))))
+
+(defn inventory
+  "The Ansible inventory for the one machine walter manages.
+
+  ONCE's builder carries an admin/users split and a `root@host` key convention
+  that a single-machine package has no use for, so this is walter's own: one
+  host, one group, keyed by the alias you would `ssh` with."
+  [{:keys [ip user host-alias]}]
+  (json/generate-string
+   {:all {:hosts {(or host-alias "walter") {:ansible_host ip :ansible_user user}}}}
+   {:pretty true}))
+
+(defn data-fn
+  "Template data for the Ansible stages: opts, with the address, login and alias
+  guaranteed present so a build renders without ever reaching for state."
+  [opts]
+  (assoc opts
+         :ip (or (not-empty (str (:ip opts))) "192.168.0.1")
+         :user (or (not-empty (str (:user opts))) "root")
+         :host-alias (utils/host-alias opts)))
+
+(defn ansible-local-step
+  "Manage the `Host <alias>` block in `~/.ssh/config`.
+
+  The playbook's variables are Ansible's, not Selmer's, so they arrive as
+  extra-vars: the local inventory targets localhost only and carries no host
+  vars. `name` is reserved in Ansible, hence host_alias. block_state drives
+  blockinfile in both directions, so a delete removes what a create wrote."
+  [opts]
+  (let [dir (tool-dir opts ansible-local-tool)
+        data (data-fn opts)
+        specs [(template-spec (walter-template "ansible-local" "ansible.cfg")
+                              (str dir "/ansible.cfg") data)
+               (template-spec (walter-template "ansible-local" "inventory.ini")
+                              (str dir "/inventory.ini") data)
+               (template-spec (walter-template "ansible-local" "main.yml")
+                              (str dir "/main.yml") data)]
+        delete? (= :delete (:green/event opts))
+        config {:dir dir
+                :inventory "inventory.ini"
+                :playbooks {:create "main.yml" :delete "main.yml"}
+                :extra-vars {:host_alias (:host-alias data)
+                             :ip (:ip data)
+                             :user (:user data)
+                             :block_state (if delete? "absent" "present")}}]
+    (ansible/ansible-with-spec opts config specs)))
+
+(defn ansible-remote-step
+  "Confirm Ansible can reach the machine.
+
+  What this proves is walter's own plumbing — inventory rendering, the config,
+  user and key resolution — which is what is most likely to be wrong in a new
+  package. It does not prove the machine is up: ONCE's compute template carries a
+  `remote-exec` provisioner behind an SSH connection, so `tofu apply` has already
+  blocked on that. Real provisioning is a later playbook, and this is where it
+  lands."
+  [opts]
+  (let [dir (tool-dir opts ansible-remote-tool)
+        data (data-fn opts)
+        specs [(template-spec (walter-template "ansible-remote" "ansible.cfg")
+                              (str dir "/ansible.cfg") data)
+               (template-spec (walter-template "ansible-remote" "main.yml")
+                              (str dir "/main.yml") data)
+               (raw-spec (str dir "/inventory.json") (inventory data))]
+        rendered (sc/scaffold opts specs)]
+    (if (or (= :build (:green/event opts))
+            (= :delete (:green/event opts)))
+      rendered
+      (ansible/ansible-step rendered {:dir dir
+                                      :inventory "inventory.json"
+                                      :playbooks {:create "main.yml"}
+                                      :host-key-checking false}))))

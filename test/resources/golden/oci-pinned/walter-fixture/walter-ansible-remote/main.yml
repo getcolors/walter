@@ -1,0 +1,17 @@
+---
+# v1 of the remote stage is a connectivity check and nothing more.
+#
+# What it proves is walter's own plumbing — inventory rendering, ansible.cfg,
+# user and key resolution — which is what is most likely to be wrong in a new
+# package. It does not prove the machine is up: ONCE's compute template carries
+# a remote-exec provisioner behind an SSH connection block, so `tofu apply` has
+# already blocked on SSH before Ansible starts.
+#
+# `gathering = explicit` in ansible.cfg keeps the setup module out of the way,
+# so this is one round trip. Real dev tooling — toolchains, dotfiles — is a
+# later playbook, and this is the stage where it lands.
+- name: Verify connectivity
+  hosts: all
+  tasks:
+    - name: Ping
+      ansible.builtin.ping:

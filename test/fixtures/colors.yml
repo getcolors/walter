@@ -1,0 +1,62 @@
+# One fixture, every provider variant. scripts/golden.sh renders this file with
+# COLORS_PAR_* overrides for the keys that select a provider, so the goldens all
+# describe the same desired state and cannot quietly drift apart from each other.
+#
+# Values are plausible but fictional. Nothing here is a credential.
+profile: walter-fixture
+workdir: .colors
+
+provider-compute: oci
+provider-backend: local
+
+compute-prevent-destroy: true
+power-wait-seconds: 300
+
+compute-pubkey: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureKeyForGoldenBuildsOnly
+
+oci-config-file-profile: DEFAULT
+oci-subnet-id: ocid1.subnet.oc1.eu-frankfurt-1.aaaaaaaafixturesubnet
+oci-compartment-id: ocid1.tenancy.oc1..aaaaaaaafixturecompartment
+oci-availability-domain: XquT:EU-FRANKFURT-1-AD-1
+oci-display-name: walter-fixture
+oci-shape: VM.Standard.A2.Flex
+oci-ocpus: 2
+oci-memory-in-gbs: 12
+oci-boot-volume-size-in-gbs: 100
+oci-boot-volume-vpus-per-gb: 30
+oci-ssh-authorized-keys: /home/fixture/.ssh/id_ed25519.pub
+
+hcloud-name: walter-fixture
+hcloud-image: ubuntu-24.04
+hcloud-server-type: cx23
+hcloud-location: hel1
+hcloud-ssh-keys: fixture-key
+
+digitalocean-name: walter-fixture
+digitalocean-region: ams3
+digitalocean-size: s-1vcpu-1gb-35gb-intel
+digitalocean-image: ubuntu-25-10-x64
+digitalocean-vpc-uuid: 00000000-0000-0000-0000-000000000000
+digitalocean-ssh-keys: fixture-key
+
+yandex-cloud-id: b1gfixturecloud
+yandex-folder-id: b1gfixturefolder
+yandex-zone: ru-central1-a
+yandex-image-family: ubuntu-2404-lts
+yandex-name: walter-fixture
+yandex-subnet-cidr: 10.0.0.0/24
+yandex-platform-id: standard-v3
+yandex-cores: 2
+yandex-memory-gb: 8
+yandex-core-fraction: 100
+yandex-disk-size-gb: 50
+
+no-infra-compute-ip: 198.51.100.10
+no-infra-compute-user: root
+no-infra-compute-sudoer: root
+no-infra-compute-uid: 1000
+
+s3-bucket: walter-fixture-state
+s3-region: eu-central-1
+r2-bucket: walter-fixture-state
+r2-endpoint: https://fixture.eu.r2.cloudflarestorage.com

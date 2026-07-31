@@ -1,0 +1,36 @@
+;; Development inside this checkout. Walter itself resolves to the working tree;
+;; `once` and `green` stay on the same SHAs deps.edn pins, so a fresh clone
+;; renders exactly what CI renders and the goldens mean something. Point
+;; ONCE_LIB_ROOT or GREEN_LIB_ROOT at a sibling checkout to work across repos —
+;; that is a deliberate act, not the default.
+;;
+;; The launcher a user copies has no bb.edn beside it and resolves the pins
+;; itself, which is the path scripts/launcher.sh covers.
+{:paths ["test/clj" "test/resources"]
+ :deps  {io.github.getcolors/walter {:local/root "."}}
+ :tasks
+ {test
+  {:doc "Run the test suite under babashka"
+   :requires ([clojure.test :as t]
+              [io.github.getcolors.walter.validate-test]
+              [io.github.getcolors.walter.oci-test]
+              [io.github.getcolors.walter.tools-test]
+              [io.github.getcolors.walter.workflow-test])
+   :task (let [{:keys [fail error]}
+               (t/run-tests 'io.github.getcolors.walter.validate-test
+                            'io.github.getcolors.walter.oci-test
+                            'io.github.getcolors.walter.tools-test
+                            'io.github.getcolors.walter.workflow-test)]
+           (System/exit (if (pos? (+ fail error)) 1 0)))}
+
+  golden
+  {:doc "Render every provider variant and diff against the committed goldens"
+   :task (shell "./scripts/golden.sh")}
+
+  golden:accept
+  {:doc "Regenerate the committed goldens from the current code"
+   :task (shell "./scripts/golden.sh" "--accept")}
+
+  pin
+  {:doc "Stamp the bundled launcher with this repository's HEAD (maintainers)"
+   :task (load-file "tasks/pin.clj")}}}

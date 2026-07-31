@@ -1,0 +1,11 @@
+{
+  "terraform" : {
+    "backend" : {
+      "s3" : {
+        "bucket" : "walter-fixture-state",
+        "key" : "walter-fixture/walter-compute.tfstate",
+        "region" : "eu-central-1"
+      }
+    }
+  }
+}

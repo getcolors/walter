@@ -1,0 +1,8 @@
+.colors/
+.cpcache/
+.clj-kondo/.cache/
+.lsp/.cache/
+target/
+.direnv/
+.devenv/
+.envrc.private

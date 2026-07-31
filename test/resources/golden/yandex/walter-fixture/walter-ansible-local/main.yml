@@ -1,0 +1,29 @@
+---
+# Walter's own copy of the local stage, not ONCE's.
+#
+# ONCE's playbook is reusable and walter copies it anyway: it writes to
+# ~/.ssh/config on the operator's workstation, so reusing it would mean an
+# unrelated change in ONCE — an added IdentityFile, a ProxyJump — rewriting that
+# file at pin-bump time. Three files against that exposure is the wrong trade.
+#
+# The marker carries `walter`, so a collision with ONCE's block is impossible
+# rather than merely unlikely: both packages derive their alias from `profile`,
+# and nothing enforces that two projects chose different ones.
+#
+# Variables here are Ansible's, not Selmer's — they arrive as extra-vars.
+- name: Managed local configuration
+  hosts: local
+  tasks:
+    - name: Manage SSH access for {{ host_alias }}
+      ansible.builtin.blockinfile:
+        path: ~/.ssh/config
+        marker: "# {mark} walter {{ host_alias }} ANSIBLE MANAGED BLOCK"
+        state: "{{ block_state | default('present') }}"
+        create: yes
+        mode: "0600"
+        block: |
+          Host {{ host_alias }}
+              HostName {{ ip }}
+              User {{ user }}
+              Port 22
+              ForwardAgent yes
