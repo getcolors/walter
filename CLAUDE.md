@@ -178,5 +178,18 @@ outputs.
 ## Git
 
 Work on the current branch. Do not commit or push unless explicitly asked.
-`walter-sha` in the launcher is `nil` until this repository has been pushed and
-`bb pin` has stamped it — never hand-edit it, and never invent a SHA.
+
+`walter-sha` in the launcher is managed by `bb pin` — **never hand-edit it, and
+never invent a SHA.** `pin` reads the HEAD of the checkout surrounding it and
+refuses a dirty or unpushed tree, so the sequence for a change that consumers
+need is: commit, push, `bb pin`, commit the stamp, push again. The stamp names
+the commit *before* it, which is correct — it points at the library code, and
+the stamp commit only rewrites the payload that fetches it.
+
+Consumers hold a **copy** of the payload, not a symlink, so re-copy it into
+every project after a repin or they keep running the old pin:
+
+```sh
+cp skills/package-walter-green/walter ../walter-oci/walter
+cp skills/package-walter-green/walter ../walter-oci/.agents/skills/package-walter-green/walter
+```
