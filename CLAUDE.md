@@ -71,13 +71,22 @@ promise here to rely on. `scripts/golden.sh` is the mitigation: it renders every
 provider variant against the pinned ONCE and diffs it, so a pin bump that
 changes rendered output fails loudly instead of silently.
 
-Two things in `golden.sh` are not golden diffs and matter just as much:
+Four things in `golden.sh` are not golden diffs and matter just as much. The
+first two are the two halves of the one coupling that can fail during a real
+apply:
 
-- It asserts ONCE's template still declares `resource "oci_core_instance"
-  "ampere_vm"`, because walter's `outputs.tf` references that address. A rename
-  upstream would otherwise surface as an opaque `tofu validate` failure during a
-  real apply, against live infrastructure, half way through a create.
-- It asserts the compute stage is still named `walter-compute`.
+- ONCE's template still declares `resource "oci_core_instance" "ampere_vm"`,
+  because walter's `outputs.tf` references that address. A rename upstream would
+  otherwise surface as an opaque `tofu validate` failure during a real apply,
+  against live infrastructure, half way through a create.
+- Walter's `outputs.tf` still publishes `oci_core_instance.ampere_vm.id` from
+  it. Losing this end breaks `stop` and `start`, which read the OCID rather than
+  matching a display name.
+- The compute stage is still named `walter-compute`.
+- Providers walter cannot power cycle render **no** `outputs.tf` at all —
+  checked against hcloud. The output only makes sense where the power verbs
+  work, and rendering it elsewhere would reference a resource the template never
+  declares.
 
 **Bump the ONCE pin deliberately and rarely.** Nothing forces it. Run
 `bb golden` immediately after, and read the diff rather than accepting it.
