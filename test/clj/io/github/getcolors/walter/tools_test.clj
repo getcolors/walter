@@ -354,6 +354,93 @@
       (is (= "~/code/me/dotfiles" (:dotfiles-dest data)))
       (is (= "ubuntu" (:dotfiles-profile data))))))
 
+;; ---------------------------------------------------------------------------
+;; atuin
+
+(deftest the-remote-playbook-omits-atuin-when-no-username-is-named
+  (testing "gated in the template, so a project that names no account renders a
+           playbook that does not mention atuin at all"
+    (let [rendered (render-remote-playbook {})]
+      (is (not (str/includes? rendered "atuin"))))))
+
+(deftest the-atuin-secrets-never-reach-the-rendered-playbook
+  (testing "colors.yml is committed and the encryption key decrypts every
+           machine's history, so only the username comes from desired state —
+           the rest is read from walter's own environment at run time"
+    (let [rendered (render-remote-playbook {:nix-packages ["atuin"]
+                                            :atuin-username "someone"})]
+      (is (str/includes? rendered "-u someone"))
+      (is (str/includes? rendered "lookup('env', 'COLORS_PAR_ATUIN_PASSWORD')"))
+      (is (str/includes? rendered "lookup('env', 'COLORS_PAR_ATUIN_KEY')"))
+      (testing "no key named atuin-password or atuin-key is interpolated at all"
+        (is (not (str/includes? rendered "atuin-password")))
+        (is (not (str/includes? rendered "atuin-key")))))))
+
+(deftest a-failed-atuin-login-cannot-print-the-key
+  (testing "Ansible echoes a failed command's arguments, and a failed login is
+           precisely when the key would otherwise appear in the output"
+    (let [rendered (render-remote-playbook {:nix-packages ["atuin"]
+                                            :atuin-username "someone"})
+          at #(str/index-of rendered %)]
+      (is (str/includes? rendered "no_log: true"))
+      (testing "the credentials are checked before they are used, so an unset
+               variable fails with walter's reason rather than atuin's"
+        (is (< (at "Refuse to log in to atuin") (at "atuin login"))))
+      (testing "atuin keeps its session in meta.db, so there is no session file
+               to guard on — an earlier version pointed `creates` at one that
+               never exists and the login silently re-ran on every converge"
+        (is (not (str/includes? rendered ".local/share/atuin/session")))
+        (is (str/includes? rendered
+                           "creates: \"{{ ansible_env.HOME }}/.local/state/walter/atuin-someone\"")
+            "the stamp carries the username, so a different account converges")
+        (is (< (at "atuin login") (at "Record that atuin is logged in"))
+            "stamped after the login, so a failure retries on the next create")))))
+
+(deftest the-history-sync-runs-on-every-create
+  (testing "pulling history is the point of the account and a second run undoes
+           nothing, so unlike the login it is not stamped"
+    (let [rendered (render-remote-playbook {:nix-packages ["atuin"]
+                                            :atuin-username "someone"})
+          at #(str/index-of rendered %)]
+      (is (str/includes? rendered "cmd: atuin sync"))
+      (is (< (at "atuin login") (at "cmd: atuin sync"))
+          "syncing before the login would run against the wrong account")
+      (testing "it always transfers something, and a step that is always changed
+               tells you nothing"
+        (is (str/includes? rendered "changed_when: false"))))))
+
+(deftest the-state-directory-follows-the-steps-that-stamp
+  (testing "hoisted out of the blocks that use it, but gated on their union — a
+           machine that asked for neither should not carry an empty directory"
+    (is (not (str/includes? (render-remote-playbook {}) ".local/state/walter")))
+    (is (str/includes? (render-remote-playbook {:nix-packages ["atuin"]
+                                                :atuin-username "someone"})
+                       "Ensure walter's state directory exists"))
+    (is (str/includes? (render-remote-playbook {:nix-packages ["babashka"]
+                                                :dotfiles-repo "git@github.com:me/d.git"})
+                       "Ensure walter's state directory exists"))
+    (testing "and it is created before anything writes a stamp into it"
+      (let [rendered (render-remote-playbook {:nix-packages ["atuin" "babashka"]
+                                              :dotfiles-repo "git@github.com:me/d.git"
+                                              :atuin-username "someone"})
+            at #(str/index-of rendered %)]
+        (is (= 1 (count (re-seq #"Ensure walter's state directory exists" rendered)))
+            "one task, not one per feature")
+        (is (< (at "Ensure walter's state directory")
+               (at "Record that the dotfiles profile is installed")))
+        (is (< (at "Ensure walter's state directory")
+               (at "Record that atuin is logged in")))))))
+
+(deftest atuin-logs-in-after-the-dotfiles-that-configure-it
+  (testing "a dotfiles profile is what puts ~/.config/atuin/config.toml there,
+           and that file can name a self-hosted sync_address — logging in first
+           would authenticate against the wrong server"
+    (let [rendered (render-remote-playbook {:nix-packages ["atuin" "babashka"]
+                                            :dotfiles-repo "git@github.com:me/dotfiles.git"
+                                            :atuin-username "someone"})
+          at #(str/index-of rendered %)]
+      (is (< (at "Clone the dotfiles") (at "atuin login"))))))
+
 (deftest asdf-tools-render-as-one-looped-task-each
   (testing "a JSON array is a valid YAML flow sequence, so the playbook keeps one
            task with an Ansible loop rather than N generated ones"

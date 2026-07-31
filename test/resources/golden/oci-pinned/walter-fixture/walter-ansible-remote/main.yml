@@ -121,13 +121,13 @@
     # not make.
     - name: Install the project's nix packages
       ansible.builtin.command:
-        cmd: nix profile add github:NixOS/nixpkgs/nixpkgs-unstable#asdf-vm github:NixOS/nixpkgs/nixpkgs-unstable#ripgrep github:NixOS/nixpkgs/nixpkgs-unstable#fish github:NixOS/nixpkgs/nixpkgs-unstable#babashka
+        cmd: nix profile add github:NixOS/nixpkgs/nixpkgs-unstable#asdf-vm github:NixOS/nixpkgs/nixpkgs-unstable#ripgrep github:NixOS/nixpkgs/nixpkgs-unstable#fish github:NixOS/nixpkgs/nixpkgs-unstable#babashka github:NixOS/nixpkgs/nixpkgs-unstable#atuin
       environment:
         PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
       register: walter_nix_packages
       changed_when: >-
         walter_nix_packages.stderr_lines
-        | select('search', 'is already added') | list | length < 4
+        | select('search', 'is already added') | list | length < 5
 
 
     # Changing the login shell is the one task here that can lock a machine out
@@ -346,6 +346,21 @@
     # transient MELPA failure into a failed provision.
 
 
+    # Where the steps below record that a once-only action has been done.
+    #
+    # ~/.local/state is the XDG home for exactly this: data that survives
+    # reboots, means nothing to the user, and belongs to the tool that wrote it.
+    #
+    # Hoisted out of the blocks that use it rather than repeated inside each,
+    # and gated on their union rather than left ungated — a machine that asked
+    # for neither should not carry an empty directory it never explains.
+    - name: Ensure walter's state directory exists
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/.local/state/walter"
+        state: directory
+        mode: "0755"
+
+
     # The operator's dotfiles, cloned and then applied to $HOME.
     #
     # Last in the play on purpose. The profile it installs can carry shell and
@@ -375,15 +390,6 @@
     # profile is a different desired state and should converge, where a second
     # create against an unchanged file should not.
     #
-    # It lives under ~/.local/state, which is the XDG home for exactly this: data
-    # that survives reboots, means nothing to the user, and belongs to the tool
-    # that wrote it.
-    - name: Ensure walter's state directory exists
-      ansible.builtin.file:
-        path: "{{ ansible_env.HOME }}/.local/state/walter"
-        state: directory
-        mode: "0755"
-
     # `bb` comes from nix-packages like everything else here, so validate.clj
     # refuses a `dotfiles-repo` without "babashka" beside it rather than letting
     # this fail on the machine as command-not-found.
@@ -410,3 +416,102 @@
           Written by walter. Its presence is what stops `bb install -p ubuntu`
           running again and copying rendered files over edits made on this machine.
           Delete it to reinstall the profile on the next create.
+
+
+    # Shell history, synced to an existing account. A replacement machine that
+    # cannot see the history of the one it replaced has lost the thing that made
+    # the old one worth keeping.
+    #
+    # Last in the play: the account is configured against ~/.config/atuin/config.toml,
+    # which a dotfiles profile may well be what puts there — including a
+    # self-hosted `sync_address`. Logging in before that would authenticate
+    # against the wrong server.
+    #
+    # Only the username comes from desired state. The password and the
+    # encryption key are read from walter's own process environment, because
+    # colors.yml is committed and the key decrypts every machine's history — so
+    # they travel as COLORS_PAR_* like every other credential in this stack and
+    # never reach a rendered file. `lookup` runs on the controller, and
+    # ansible-playbook can see them because green merges its parent environment
+    # into the one it runs with.
+    #
+    # Checked before use rather than after: unset, the login would run with empty
+    # flags and fail with atuin's own error, which says nothing about the real
+    # cause. This is not in validate.clj on purpose — `build` renders from
+    # desired state alone and must stay credential-free, so a secret that only
+    # `create` needs has to be checked where `create` runs.
+    #
+    # The assertion names the variables and tests only their length; neither the
+    # message nor a failing `that:` expression can print a value.
+    - name: Refuse to log in to atuin without its credentials
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'COLORS_PAR_ATUIN_PASSWORD') | length > 0
+          - lookup('env', 'COLORS_PAR_ATUIN_KEY') | length > 0
+        fail_msg: >-
+          atuin-username is set, but COLORS_PAR_ATUIN_PASSWORD and
+          COLORS_PAR_ATUIN_KEY are not both in the environment. They belong in
+          .envrc.private, never in colors.yml — the key decrypts this account's
+          history on every machine.
+        success_msg: "atuin credentials are present in the environment"
+
+    # A stamp of walter's own, deliberately, and not for want of trying to
+    # observe the machine instead. atuin keeps its session inside meta.db, a
+    # sqlite database — there is no session file to point `creates` at, and an
+    # earlier version of this step pointed at one that never exists, so the login
+    # silently re-ran on every converge. The other candidate, parsing `atuin
+    # status` for the username, reads output that is not a stable contract: the
+    # workstation this was written on runs 18.15.2 and the machine 18.18.0.
+    #
+    # ~/.local/share/atuin/key cannot serve either. atuin writes it the first
+    # time it runs, before any login, so a machine that has merely started a
+    # shell already has one.
+    #
+    # The name carries the username, so pointing this at a different account
+    # converges where a second create against the same one does not.
+    #
+    # no_log because Ansible echoes a failed command's arguments, and a failed
+    # login is exactly when the key would otherwise be printed. The cost is real:
+    # when this fails it fails opaquely, and diagnosing it means running the same
+    # command by hand on the machine.
+    #
+    # Logging in replaces any locally generated key, which makes history written
+    # before this point unreadable. That is what adopting an existing account
+    # means, and it is the reason this runs once rather than on every create.
+    - name: Log in to atuin
+      ansible.builtin.command:
+        cmd: >-
+          atuin login
+          -u fixture-user
+          -p "{{ lookup('env', 'COLORS_PAR_ATUIN_PASSWORD') }}"
+          -k "{{ lookup('env', 'COLORS_PAR_ATUIN_KEY') }}"
+        creates: "{{ ansible_env.HOME }}/.local/state/walter/atuin-fixture-user"
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+      no_log: true
+
+    - name: Record that atuin is logged in
+      ansible.builtin.copy:
+        dest: "{{ ansible_env.HOME }}/.local/state/walter/atuin-fixture-user"
+        mode: "0644"
+        content: |
+          Written by walter after `atuin login -u fixture-user`. atuin keeps its
+          session in meta.db rather than a file, so this stamp is what stops the
+          login re-running on every create. Delete it to log in again.
+
+    # Unlike the login, this is not stamped: pulling history is the point of the
+    # account, and there is nothing about it a second run would undo. It reports
+    # `ok` rather than `changed` because it always transfers something, and a
+    # step that is always changed tells you nothing.
+    #
+    # It is the last task in the play, so a transient api.atuin.sh failure fails
+    # a create in which everything else has already succeeded. That is the
+    # deliberate opposite of the Emacs choice above, where packages are left
+    # unfetched precisely to keep MELPA out of the provisioning path: history
+    # that silently did not sync is a machine you would trust and should not.
+    - name: Sync the shell history
+      ansible.builtin.command:
+        cmd: atuin sync
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+      changed_when: false

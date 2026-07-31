@@ -285,7 +285,13 @@
          ;; DOTFILES_PROFILE is given, so this defers to the tool rather than
          ;; inventing a second answer.
          :dotfiles-profile (or (not-empty (str/trim (str (:dotfiles-profile opts))))
-                               "default")))
+                               "default")
+         ;; The union of the steps that stamp a once-only action. Computed here
+         ;; rather than as an `or` in the template because Selmer's `<% if %>`
+         ;; takes one value, and a second feature needing the directory should
+         ;; extend this expression rather than duplicate the task.
+         :needs-state-dir (boolean (or (not-empty (str (:dotfiles-repo opts)))
+                                       (not-empty (str (:atuin-username opts)))))))
 
 (defn ansible-local-step
   "Manage the `Host <alias>` block in `~/.ssh/config`.

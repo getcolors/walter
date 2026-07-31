@@ -169,3 +169,16 @@
                       :dotfiles-profile "ubuntu")))))
   (testing "no repository named is the common case and never an error"
     (is (= [] (validate/state-errors (assoc base :nix-packages ["ripgrep"]))))))
+
+(deftest atuin-needs-atuin-installed
+  (testing "there is nothing to log in without it"
+    (is (seq (errors-matching (assoc base :atuin-username "someone")
+                              #":atuin-username"))))
+  (testing "naming atuin satisfies it"
+    (is (= [] (validate/state-errors
+               (assoc base :nix-packages ["atuin"] :atuin-username "someone")))))
+  (testing "the password and key are deliberately not validated here — build
+           renders from desired state alone and must stay credential-free, so
+           the remote playbook asserts them at create time instead"
+    (is (= [] (validate/state-errors
+               (assoc base :nix-packages ["atuin"] :atuin-username "someone"))))))

@@ -155,7 +155,15 @@
        (when (and (not (placeholder? (:dotfiles-repo opts)))
                   (not (contains? packages "babashka")))
          [(str ":dotfiles-repo needs \"babashka\" in :nix-packages — "
-               "the installer is a bb script and nothing else puts bb on the machine")]))))))
+               "the installer is a bb script and nothing else puts bb on the machine")])
+       ;; Same shape again. The password and key are deliberately not checked
+       ;; here — they are COLORS_PAR_* secrets, and `build` renders from desired
+       ;; state alone and must stay credential-free, so the remote playbook
+       ;; asserts them at create time instead.
+       (when (and (not (placeholder? (:atuin-username opts)))
+                  (not (contains? packages "atuin")))
+         [(str ":atuin-username needs \"atuin\" in :nix-packages — "
+               "there is nothing to log in without it")]))))))
 
 (defn secret-errors
   "Credentials the selected providers need that no `COLORS_PAR_*` variable

@@ -72,6 +72,8 @@ nix-packages:
   # Required by dotfiles-repo below — the installer is a bb script, and
   # validate.clj refuses the combination without it.
   - babashka
+  # Likewise required by atuin-username below.
+  - atuin
 
 # Set so every golden renders the login-shell block and the fish integration that
 # has to precede it. The other shells' branch — a login shell that reaches nix
@@ -102,3 +104,10 @@ emacs-config-dest: ~/.config/fixture-emacs
 dotfiles-repo: git@github.com:fixture/dotfiles.git
 dotfiles-dest: ~/code/fixture/dotfiles
 dotfiles-profile: ubuntu
+
+# Set so every golden renders the atuin login. Only the username belongs in
+# desired state — the password and the encryption key are COLORS_PAR_* secrets
+# the playbook reads from the environment, which is exactly what these goldens
+# exist to hold still. The absent branch is
+# `the-remote-playbook-omits-atuin-when-no-username-is-named` in tools_test.
+atuin-username: fixture-user
