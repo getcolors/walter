@@ -70,6 +70,44 @@
   [opts ks]
   (keep (fn [k] (when (placeholder? (get opts k)) k)) ks))
 
+(def ^:private gated-keys
+  "Walter's optional keys that a template interpolates behind an
+  `<% if key|not-empty %>` gate.
+
+  Deliberately a list rather than a scan of everything unrequired, which is what
+  this started as and got wrong. A colors.yml carries REPLACE_ME for every
+  provider it is *not* using — walter's own example ships `s3-region` and the
+  whole yandex block that way — and those are genuinely harmless, because the
+  template that would read them is never rendered.
+
+  These are the ones where a placeholder is not harmless. Adding a gated feature
+  means adding its key here, which is the same discipline its own rule below
+  already needs."
+  [:nix-packages :login-shell
+   :emacs-config-repo :emacs-config-dest
+   :dotfiles-repo :dotfiles-dest :dotfiles-profile
+   :atuin-username
+   :oci-image-id])
+
+(defn- leftover-placeholders
+  "Gated keys still carrying the scaffold's REPLACE_ME.
+
+  A missing optional key is genuinely absent and its block does not render. One
+  left as REPLACE_ME is *present*, so the gate fires and the placeholder reaches
+  the generated file verbatim — `repo: \"REPLACE_ME\"` — which builds cleanly and
+  then fails on the machine, during a create, against live infrastructure.
+
+  The fix is to delete the line, not to invent a value, and the message says so."
+  [opts]
+  (for [k gated-keys
+        :when (and (contains? opts k)
+                   (placeholder? (get opts k))
+                   (some? (get opts k))
+                   (not (str/blank? (str (get opts k)))))]
+    (str k " still says REPLACE_ME — fill it in, or delete the key. "
+         "An optional key is not treated as absent while it holds a "
+         "placeholder: it renders into the generated files verbatim.")))
+
 (def profile-par
   "The one `COLORS_PAR_*` variable walter refuses to honour."
   (green-cli/par-name :profile))
@@ -102,6 +140,7 @@
    (concat
     (map #(str % " is required")
          (missing-keys opts (concat [:profile :workdir] (slot-keys opts :required))))
+    (leftover-placeholders opts)
     (for [slot slots
           :let [provider (get opts slot)]
           :when (not (contains? (get providers slot) provider))]

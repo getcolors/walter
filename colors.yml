@@ -20,6 +20,16 @@
 #   oci            (none — uses oci-config-file-profile from ~/.oci/config)
 #   r2 backend     COLORS_PAR_R2_ACCESS_KEY_ID COLORS_PAR_R2_SECRET_ACCESS_KEY
 #   s3 backend     (none — OpenTofu uses the ambient AWS credential chain)
+#
+# Required by an optional feature, rather than by a provider:
+#   atuin-username COLORS_PAR_ATUIN_PASSWORD COLORS_PAR_ATUIN_KEY
+#
+# Everything below marked optional is commented out rather than set to
+# REPLACE_ME, and that is not a style choice. A key that is absent is absent,
+# and its block does not render. A key holding REPLACE_ME is *present*, so the
+# block renders the placeholder verbatim — `repo: "REPLACE_ME"`. Walter now
+# refuses to build in that state rather than letting it reach the machine, but
+# the shape of this file is what stops it happening at all.
 
 # Names the work directory, the OpenTofu state keys, and the ~/.ssh/config Host
 # alias. Keep it unique across every project on this machine: it is the only
@@ -113,3 +123,143 @@ s3-bucket: REPLACE_ME
 s3-region: REPLACE_ME
 r2-bucket: REPLACE_ME
 r2-endpoint: REPLACE_ME
+
+# ============================================================================
+# Everything below is optional. Uncomment a block to turn that feature on; a
+# machine that names none of it still gets nix and a working terminfo, which is
+# what walter treats as the floor for a development machine.
+# ============================================================================
+
+# --- toolchain --------------------------------------------------------------
+#
+# Installed with one `nix profile add` on top of the nix every walter machine
+# gets. Names are nixpkgs attribute paths, resolved against nixpkgs-unstable.
+#
+# That ref is a channel branch and not a revision, so these track upstream: two
+# creates months apart do not produce the same versions. Deliberate for a
+# development machine, and it is what makes asdf 0.20 reachable at all.
+#
+# This list is the machine's baseline, not an inventory of it. Anything
+# installed by hand there is invisible here and does not survive a delete;
+# adding a name is what makes it come back.
+#
+# nix-packages:
+#   - ripgrep
+#   - fd
+
+# The login shell, resolved under ~/.nix-profile/bin — so it has to be one of
+# nix-packages above, and walter refuses to build if it is not.
+#
+# Switching this is not merely a passwd(5) write. nix reaches a login shell
+# through /etc/profile.d/nix.sh, which is sh-only: fish does not read it, and a
+# nix-built fish does not read /etc/fish/conf.d either, since its sysconfdir is
+# inside the store. A fish login would otherwise start unable to find nix
+# itself, which is a hole you cannot climb out of from inside that shell — so
+# the playbook writes ~/.config/fish/conf.d/nix.fish before it changes the
+# shell, never after.
+#
+# Note that `ssh <alias> <command>` then runs this shell. Anything scripted
+# against the machine gets its syntax, not bash's.
+#
+# login-shell: fish
+
+# --- language runtimes ------------------------------------------------------
+#
+# Through asdf, which is itself just an entry in nix-packages — so asking for
+# tools without "asdf-vm" there is refused at build time.
+#
+# nixpkgs-unstable ships asdf 0.20, the Go rewrite, so the playbook uses
+# `asdf set --home`. 0.16 removed `asdf global` outright — it answers "invalid
+# command provided" rather than warning — so a nixpkgs ref carrying 0.15 would
+# need the playbook changed in the same commit.
+#
+# `plugin` is optional; asdf resolves a bare name against its own index.
+#
+# asdf-tools:
+#   - name: nodejs
+#     version: 24.18.1
+#     plugin: https://github.com/asdf-vm/asdf-nodejs.git
+
+# Package managers enabled through Node's own corepack, which is why this needs
+# a nodejs entry in asdf-tools rather than being a package in its own right.
+#
+# corepack installs its shims into that Node's bin directory, which asdf does
+# not expose until `asdf reshim` — without it `corepack enable pnpm` reports
+# success and `pnpm` stays command-not-found. The playbook reshims.
+#
+# corepack downloads the package manager itself on first use, so the first run
+# is slow and needs a network. That is corepack's design, not a failure.
+#
+# corepack-packages:
+#   - pnpm
+
+# --- editor -----------------------------------------------------------------
+#
+# Adds Emacs on top of nix and clones a configuration for it. Ordering is
+# handled for you: cloning a config for an Emacs that is not installed leaves a
+# machine that looks provisioned and is not.
+#
+# An ssh:// URL rather than https:// rides the agent ~/.ssh/config forwards, so
+# no private key is written to the machine and the checkout can push back —
+# which is the point of a development machine, and needs your local agent to be
+# holding the key when create runs.
+#
+# The clone happens once. A later create leaves an existing checkout alone, so
+# uncommitted work on the machine survives; `git pull` there is how it moves.
+#
+# Packages are not pre-fetched. The first interactive launch pulls from
+# ELPA/MELPA and native-compiles, which takes minutes and is not a provisioning
+# failure.
+#
+# emacs-config-repo: git@github.com:you/emacs.d.git
+#
+# Defaults to ~/.config/emacs, the XDG path Emacs 29+ reads on its own. Name
+# another and you must launch with `emacs --init-directory <path>`.
+# emacs-config-dest: ~/.config/emacs
+
+# --- dotfiles ---------------------------------------------------------------
+#
+# Cloned to the machine and then applied to $HOME, last in the play — the
+# profile can carry shell and editor configuration, which only makes sense once
+# the shell and the editor it configures are already installed.
+#
+# The installer is a Babashka script, so "babashka" has to be in nix-packages;
+# walter refuses to build otherwise.
+#
+# Same ssh:// reasoning as the editor above, and the same clone-once rule. The
+# install itself is stamped under ~/.local/state/walter, because it copies
+# rendered files over $HOME with replace-existing: re-running it on every
+# converge would silently undo edits made on the machine. Changing
+# dotfiles-profile re-runs it; a second create against the same one does not.
+#
+# dotfiles-repo: git@github.com:you/dotfiles.git
+#
+# Defaults to ~/.dotfiles. There is no equivalent of Emacs' XDG path to defer
+# to here, so this is a convention rather than a lookup.
+# dotfiles-dest: ~/.dotfiles
+#
+# Selects which profile the installer renders. Defaults to "default", which is
+# the installer's own answer when given neither -p nor DOTFILES_PROFILE.
+# dotfiles-profile: default
+
+# --- shell history ----------------------------------------------------------
+#
+# Adopts an existing atuin account, so a rebuilt machine can still see the
+# history of the one it replaced. Needs "atuin" in nix-packages.
+#
+# Only the username belongs here. The password and the encryption key are
+# COLORS_PAR_ATUIN_PASSWORD and COLORS_PAR_ATUIN_KEY: this file is committed,
+# and that key decrypts the account's history on every machine it reaches. The
+# playbook reads them from the environment at create time and refuses to run
+# without them. `build` never needs them, which is why they are not checked at
+# validation time.
+#
+# Logging in replaces whatever key atuin generated locally, so history written
+# on the machine beforehand becomes unreadable. That is what adopting an
+# existing account means, and it is why the login runs once — guarded by
+# ~/.local/state/walter/atuin-<username>, a stamp walter writes, because atuin
+# keeps its session inside meta.db and offers no file to watch.
+#
+# `atuin sync` runs after it, on every create, and is not guarded.
+#
+# atuin-username: you

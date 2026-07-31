@@ -170,6 +170,40 @@
   (testing "no repository named is the common case and never an error"
     (is (= [] (validate/state-errors (assoc base :nix-packages ["ripgrep"]))))))
 
+(deftest an-optional-key-left-as-replace-me-is-an-error
+  (testing "the dangerous case, and the reason this rule exists: an absent
+           optional key does not render its block, but one holding a placeholder
+           is present — `<% if key|not-empty %>` fires and REPLACE_ME reaches the
+           playbook verbatim, which builds fine and fails on the machine"
+    (is (seq (errors-matching (assoc base :dotfiles-repo "REPLACE_ME")
+                              #":dotfiles-repo still says REPLACE_ME")))
+    (is (seq (errors-matching (assoc base :atuin-username "REPLACE_ME")
+                              #":atuin-username still says REPLACE_ME")))
+    (is (seq (errors-matching (assoc base :emacs-config-repo "replace_me")
+                              #":emacs-config-repo"))))
+  (testing "a provider the project is not using may hold placeholders freely —
+           the template that would read them is never rendered, and walter's own
+           example colors.yml ships every unused provider exactly that way"
+    (is (= [] (validate/state-errors
+               (assoc base
+                      :s3-bucket "REPLACE_ME"
+                      :s3-region "REPLACE_ME"
+                      :yandex-cloud-id "REPLACE_ME"
+                      :digitalocean-vpc-uuid "REPLACE_ME"
+                      :hcloud-ssh-keys "REPLACE_ME"
+                      :no-infra-compute-ip "REPLACE_ME")))))
+  (testing "a required key reports only that it is required — one problem, one
+           message"
+    (let [errs (validate/state-errors (assoc base :oci-subnet-id "REPLACE_ME"))]
+      (is (= 1 (count (filter #(str/includes? % ":oci-subnet-id") errs))))
+      (is (some #(re-find #":oci-subnet-id is required" %) errs))))
+  (testing "engine state is not desired state and is never scaffolded"
+    (is (= [] (validate/state-errors (assoc base :green/state-file "REPLACE_ME")))))
+  (testing "a filled-in value is fine, and so is no key at all"
+    (is (= [] (validate/state-errors
+               (assoc base :nix-packages ["atuin"] :atuin-username "someone"))))
+    (is (= [] (validate/state-errors base)))))
+
 (deftest atuin-needs-atuin-installed
   (testing "there is nothing to log in without it"
     (is (seq (errors-matching (assoc base :atuin-username "someone")

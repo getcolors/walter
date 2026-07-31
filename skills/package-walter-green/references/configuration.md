@@ -3,6 +3,14 @@
 A single flat YAML map, found by walking up from the working directory. Keys
 arrive as kebab-case keywords. Credentials never live here.
 
+**Omit an optional key you are not using — do not set it to `REPLACE_ME`.** A
+key that is absent is absent, and its block does not render. A key holding a
+placeholder is *present*, so the block renders and carries the placeholder into
+the generated files verbatim (`repo: "REPLACE_ME"`), which builds cleanly and
+then fails on the machine. Walter refuses to build in that state, naming the
+key; the message is telling you to delete the line, not to fill in a value you
+did not want.
+
 ## Always required
 
 | Key | Meaning |
@@ -113,6 +121,106 @@ read-only.
 It is cloned **once**. A later `create` leaves an existing checkout alone, so
 edits made on the machine are never discarded — pulling is the user's call.
 
+## Toolchain
+
+| Key | Meaning |
+|---|---|
+| `nix-packages` | Optional. A list of nixpkgs attribute paths, installed with one `nix profile add`. |
+| `login-shell` | Optional. A shell from `nix-packages`, made the account's login shell. |
+
+Resolved against `nixpkgs-unstable`. That is a channel branch and not a
+revision, so these track upstream: two creates months apart do not produce the
+same versions. Deliberate for a development machine — and it is what makes asdf
+0.20 reachable at all.
+
+The list is the machine's **baseline, not an inventory**. Anything installed by
+hand on the machine is invisible here and does not survive a delete; adding a
+name is what makes it come back.
+
+`login-shell` must also appear in `nix-packages`, and walter refuses to build
+otherwise — nothing else puts a shell there, so the alternative is an account
+that cannot start a session. The playbook checks again on the machine before it
+writes to passwd.
+
+`fish` gets one extra file, `~/.config/fish/conf.d/nix.fish`, written **before**
+the shell changes. nix reaches a login shell through `/etc/profile.d/nix.sh`,
+which is sh-only, and a nix-built fish reads neither it nor `/etc/fish/conf.d`
+because its sysconfdir is inside the store. Without that file a login fish
+cannot find `nix` itself, which is unrecoverable from inside that shell.
+
+Note that `ssh <profile> <command>` runs this shell. Anything scripted against
+the machine gets its syntax, not bash's.
+
+## Language runtimes
+
+| Key | Meaning |
+|---|---|
+| `asdf-tools` | Optional. List of `{name, version, plugin?}`. `plugin` is optional — asdf resolves a bare name against its own index. |
+| `corepack-packages` | Optional. Package managers enabled through Node's corepack. |
+
+`asdf-tools` needs `asdf-vm` in `nix-packages`; asdf is not special-cased and
+reaches the machine like anything else. `corepack-packages` needs a `nodejs`
+entry in `asdf-tools`, because corepack ships inside Node rather than being a
+package of its own.
+
+The playbook uses `asdf set --home`, which is 0.16+ syntax. 0.16 rewrote asdf in
+Go and removed `asdf global` outright — it answers "invalid command provided"
+rather than warning — so a nixpkgs ref carrying 0.15 would need the playbook
+changed in the same commit.
+
+corepack installs its shims into that Node's own bin directory, which asdf does
+not expose until told to look again; the playbook reshims. Skip that and
+`corepack enable pnpm` reports success while `pnpm` stays command-not-found.
+
+## Dotfiles
+
+| Key | Meaning |
+|---|---|
+| `dotfiles-repo` | Optional. A git URL. Set it and the machine clones it and applies a profile to `$HOME`. |
+| `dotfiles-dest` | Where the clone lands. Defaults to `~/.dotfiles`. |
+| `dotfiles-profile` | Which profile the installer renders. Defaults to `default`. |
+
+Needs `babashka` in `nix-packages` — the installer is a `bb` script and walter
+refuses to build without it.
+
+Same `ssh://` reasoning and the same clone-once rule as the editor. The
+**install** is separately guarded, by a stamp under `~/.local/state/walter`,
+because it copies rendered files over `$HOME` with replace-existing: re-running
+it on every converge would silently undo edits made on the machine, which is the
+one thing cloning-once exists to prevent. The stamp carries the profile name, so
+changing `dotfiles-profile` re-runs it where a second create does not.
+
+It runs last, after the shell and the editor, because the profile can carry
+configuration for both.
+
+## Shell history
+
+| Key | Meaning |
+|---|---|
+| `atuin-username` | Optional. Logs the machine into an existing atuin account and syncs its history. |
+
+Needs `atuin` in `nix-packages`.
+
+**The password and the encryption key are not keys in this file.** They are
+`COLORS_PAR_ATUIN_PASSWORD` and `COLORS_PAR_ATUIN_KEY`, read from the
+environment at create time — `colors.yml` is committed, and that key decrypts
+the account's history on every machine it reaches. The playbook asserts both
+before it uses them, and the task is `no_log`, so a failure is opaque by design:
+diagnosing one means running `atuin login` by hand on the machine.
+
+They are checked in the playbook rather than in validation because `build`
+renders from desired state alone and must stay credential-free.
+
+Logging in **replaces** whatever key atuin generated locally, so history written
+on the machine beforehand becomes unreadable. That is what adopting an existing
+account means, and it is why the login is stamped under
+`~/.local/state/walter/atuin-<username>` rather than converged — atuin keeps its
+session inside `meta.db` and offers no file to watch, and its CLI output is not
+a stable enough contract to parse.
+
+`atuin sync` runs after the login on every create, and is deliberately not
+guarded: pulling history is the point, and a second run undoes nothing.
+
 ## State backends
 
 | Backend | Keys | Credentials |
@@ -165,11 +273,23 @@ It is symlinked into `~/.terminfo` rather than exported via `TERMINFO_DIRS`
 because the system ncurses reads that directory already, and `TERMINFO_DIRS`
 would only reach a login shell — `ssh host vim …` is not one.
 
-When `emacs-config-repo` names a repository, two more tasks follow: Emacs from a
-pinned nixpkgs (`nixos-25.05#emacs-nox`, a terminal build with native
-compilation and tree-sitter), then the configuration cloned over the forwarded
-agent. Both are skipped when the binary or the checkout is already there, so a
-re-run of `create` costs one SSH round trip.
+Everything after that is gated on a key, and a project that names none of them
+renders a playbook that does not mention them at all:
+
+| Key | Adds |
+|---|---|
+| `nix-packages` | one `nix profile add` for the whole list |
+| `login-shell` | `/etc/shells` plus a passwd change, guarded by a check on the machine |
+| `asdf-tools` | plugin add, install, and `asdf set --home` |
+| `corepack-packages` | `corepack enable`, then `asdf reshim nodejs` |
+| `emacs-config-repo` | Emacs, then the configuration cloned over the forwarded agent |
+| `dotfiles-repo` | the clone, then `bb install -p <profile>` applied to `$HOME` |
+| `atuin-username` | `atuin login`, then `atuin sync` |
+
+Emacs comes from `nixpkgs-unstable#emacs-nox`, the same ref as the terminfo and
+`nix-packages` steps — a terminal build with native compilation and tree-sitter.
+It and the clone are both skipped when the binary or the checkout is already
+there, so a re-run of `create` costs one SSH round trip.
 
 Packages are **not** pre-fetched. The first interactive launch pulls from
 ELPA/MELPA, native-compiles and clones tree-sitter grammars on its own; doing it
