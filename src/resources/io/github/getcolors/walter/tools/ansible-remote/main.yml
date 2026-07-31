@@ -57,13 +57,13 @@
     # `less` all die with "Terminal type ... is not defined" over an SSH session
     # that is otherwise perfect. TERM travels; the database does not.
     #
-    # Taken from a pinned nixpkgs rather than copied from the controller with
+    # Taken from nixpkgs rather than copied from the controller with
     # infocmp, because walter cannot assume the machine running it has an
     # interactive TERM at all — a create from CI or from an agent would then
     # install nothing, or garbage.
     - name: Install the Ghostty terminfo
       ansible.builtin.command:
-        cmd: nix profile install github:NixOS/nixpkgs/nixos-25.05#ghostty.terminfo
+        cmd: nix profile install github:NixOS/nixpkgs/nixpkgs-unstable#ghostty.terminfo
         creates: "{{ ansible_env.HOME }}/.nix-profile/share/terminfo/x/xterm-ghostty"
       environment:
         PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
@@ -92,6 +92,222 @@
       loop:
         - {dir: x, name: xterm-ghostty}
         - {dir: g, name: ghostty}
+<% if nix-package-flakerefs|not-empty %>
+    # The project's own toolchain, named as nixpkgs attribute paths in
+    # colors.yml. Gated on the key, so a project that names nothing renders a
+    # playbook that does not mention this at all.
+    #
+    # The same nixpkgs ref as the terminfo and Emacs steps above — a channel
+    # branch, so these track upstream rather than being reproducible. Stated in
+    # tools/nixpkgs-ref, where the trade is made.
+    #
+    # Not `become`, for the same reason Emacs is not — the profile has to be the
+    # login user's or the binaries land in root's and `ssh <alias>` cannot see
+    # them.
+    #
+    # `add` rather than the older `install` spelling, and no `creates` guard:
+    # re-adding a flakeref already in the profile warns and exits 0 instead of
+    # adding a second element, so the task is safely re-runnable and `create`
+    # is re-run routinely. A `creates` check could not have been written anyway —
+    # it would have to name a binary, and the attribute rarely matches it
+    # (asdf-vm ships `asdf`, ripgrep ships `rg`).
+    #
+    # All of them in one invocation, so nix resolves the set together and the
+    # profile takes a single generation.
+    #
+    # nix reports each no-op on stderr as "warning: '<name>' is already added",
+    # so one warning per package means nothing was installed. Counting them is
+    # what keeps a converged machine reporting ok rather than a change it did
+    # not make.
+    - name: Install the project's nix packages
+      ansible.builtin.command:
+        cmd: nix profile add <{ nix-package-flakerefs }>
+      environment:
+        PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+      register: walter_nix_packages
+      changed_when: >-
+        walter_nix_packages.stderr_lines
+        | select('search', 'is already added') | list | length < <{ nix-package-count }>
+<% endif %>
+<% if login-shell|not-empty %>
+    # Changing the login shell is the one task here that can lock a machine out
+    # of its own toolchain, so it is guarded before it is applied.
+    #
+    # The shell comes from the nix profile, which is why validate.clj refuses a
+    # `login-shell` that is not also in `nix-packages`. That check is on the
+    # desired state; this one is on the machine, and catches the case the file
+    # cannot know about — a profile that did not end up with what it declared.
+    - name: Locate the login shell in the nix profile
+      ansible.builtin.stat:
+        path: "{{ ansible_env.HOME }}/.nix-profile/bin/<{ login-shell }>"
+      register: walter_login_shell
+
+    - name: Refuse to set a login shell that is not installed
+      ansible.builtin.assert:
+        that: walter_login_shell.stat.exists
+        fail_msg: >-
+          <{ login-shell }> is not in {{ ansible_env.HOME }}/.nix-profile/bin.
+          Setting it as the login shell would leave an account that cannot start
+          a session.
+        success_msg: "<{ login-shell }> is installed and can be made the login shell"
+<% if login-shell-is-fish %>
+    # This has to happen BEFORE the shell is switched, or the first login is the
+    # broken one.
+    #
+    # nix reaches a login shell through /etc/profile.d/nix.sh, which is a POSIX
+    # shell mechanism — fish does not read it, and a nix-built fish does not read
+    # /etc/fish/conf.d either, since its sysconfdir is inside the store. A clean
+    # login fish therefore starts with PATH=/run/current-system/sw/bin:/bin:/usr/bin
+    # and cannot find `nix` itself, which makes the breakage unrecoverable from
+    # inside that shell.
+    #
+    # nix ships the fish half of its own integration next to the sh one, so this
+    # sources that rather than reimplementing the PATH arithmetic. ~/.config is
+    # read by any fish regardless of how it was built.
+    # `copy` does not create the path to its destination, and on a fresh machine
+    # nothing else has made this — fish only creates it once it has run.
+    - name: Ensure fish's conf.d exists
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/.config/fish/conf.d"
+        state: directory
+        mode: "0755"
+
+    - name: Make nix visible to fish before it becomes the login shell
+      ansible.builtin.copy:
+        dest: "{{ ansible_env.HOME }}/.config/fish/conf.d/nix.fish"
+        mode: "0644"
+        content: |
+          # Managed by walter. nix's own fish integration: /etc/profile.d/nix.sh
+          # is sh-only, so without this a login fish cannot find nix or anything
+          # installed with it.
+          if test -e /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.fish
+              source /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.fish
+          end
+<% endif %>
+    # chsh insists the shell appear in /etc/shells. The `user` module shells out
+    # to usermod, which does not — but a shell missing from the file is still
+    # wrong, and it is what stops the user changing it back by hand later.
+    - name: Allow the shell in /etc/shells
+      become: true
+      ansible.builtin.lineinfile:
+        path: /etc/shells
+        line: "{{ walter_login_shell.stat.path }}"
+        state: present
+        create: true
+        mode: "0644"
+
+    # `become`, because changing a login shell is a passwd(5) write. The user is
+    # the one Ansible connected as, not a name from colors.yml: walter has no
+    # other account, and naming one here would let a typo point this at root.
+    - name: Set the login shell
+      become: true
+      ansible.builtin.user:
+        name: "{{ ansible_user_id }}"
+        shell: "{{ walter_login_shell.stat.path }}"
+<% endif %>
+<% if asdf-tools-json|not-empty %>
+    # Language runtimes through asdf, which is itself just another entry in
+    # nix-packages — so this block assumes nothing that colors.yml did not ask
+    # for, and validate.clj refuses the combination that would fail here.
+    #
+    # `asdf set --home` is 0.16+ syntax. 0.16 rewrote asdf in Go and removed
+    # `asdf global` outright — it does not warn, it answers "invalid command
+    # provided" — so this block only works on the Go asdf, which is why the
+    # nixpkgs ref above is a channel branch rather than a release one. If that
+    # ref is ever moved back to a branch carrying 0.15, this line has to become
+    # `asdf global` in the same commit.
+    #
+    # Every one of these is safely re-runnable on its own terms: `plugin add`
+    # exits 0 with "already added", `install` exits 0 with "already installed"
+    # (0.15 and 0.20 word it differently, so the check matches the fragment they
+    # share), and `set --home` rewrites a file whose content is already what it
+    # would write.
+    - name: Add the asdf plugins
+      ansible.builtin.command:
+        cmd: asdf plugin add {{ item.name }} {{ item.plugin | default('', true) }}
+      loop: <{ asdf-tools-json|safe }>
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+      register: walter_asdf_plugins
+      # Both streams: 0.20 writes "already added" to stderr, and checking stdout
+      # alone reported a change on every converged run.
+      changed_when: "'already added' not in walter_asdf_plugins.stdout + walter_asdf_plugins.stderr"
+
+    - name: Install the asdf versions
+      ansible.builtin.command:
+        cmd: asdf install {{ item.name }} {{ item.version }}
+      loop: <{ asdf-tools-json|safe }>
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+      register: walter_asdf_installs
+      # Likewise on stderr. The two versions word it differently — 0.15 says
+      # "nodejs 24.18.1 is already installed", 0.20 "version 24.18.1 of nodejs
+      # is already installed" — so the match is on the fragment they share.
+      changed_when: "'already installed' not in walter_asdf_installs.stdout + walter_asdf_installs.stderr"
+
+    - name: Set the home asdf versions
+      ansible.builtin.command:
+        cmd: asdf set --home {{ item.name }} {{ item.version }}
+      loop: <{ asdf-tools-json|safe }>
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+      changed_when: false
+
+    # What asdf installs is reached through its shims directory, and nothing puts
+    # that on PATH by itself. Without these two files `node` exists on disk and
+    # no shell can see it.
+    #
+    # The Go asdf ships no asdf.sh or asdf.fish to source — that was the bash
+    # implementation, and 0.16 dropped the whole share/asdf-vm directory. There
+    # is nothing left to source, and a `source` of it would be a silent no-op:
+    # PATH is now the entire integration.
+<% if login-shell-is-fish %>
+    - name: Put asdf on PATH for fish
+      ansible.builtin.copy:
+        dest: "{{ ansible_env.HOME }}/.config/fish/conf.d/asdf.fish"
+        mode: "0644"
+        content: |
+          # Managed by walter. The Go asdf is reached through its shims alone.
+          # fish_add_path rather than `set -gx PATH`, so a shell started inside a
+          # shell does not accumulate copies of the entry.
+          fish_add_path --prepend {{ ansible_env.HOME }}/.asdf/shims
+<% endif %>
+    - name: Put asdf on PATH for POSIX shells
+      ansible.builtin.blockinfile:
+        path: "{{ ansible_env.HOME }}/.profile"
+        create: true
+        mode: "0644"
+        marker: "# {mark} walter asdf"
+        block: |
+          case ":$PATH:" in
+            *":$HOME/.asdf/shims:"*) ;;
+            *) PATH="$HOME/.asdf/shims:$PATH"; export PATH ;;
+          esac
+<% endif %>
+<% if corepack-packages-json|not-empty %>
+    # corepack ships inside Node and installs its shims into that Node's own bin
+    # directory — which asdf does not expose until it is told to look again. Skip
+    # the reshim and `corepack enable pnpm` reports success while `pnpm` stays
+    # "command not found", which is a genuinely confusing way to fail.
+    #
+    # corepack itself downloads the package manager on first use, so the first
+    # `pnpm` is slower than the rest and needs a network. That is corepack's
+    # design, not a provisioning failure.
+    - name: Enable the corepack package managers
+      ansible.builtin.command:
+        cmd: corepack enable {{ item }}
+      loop: <{ corepack-packages-json|safe }>
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.asdf/shims:{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+      changed_when: false
+
+    - name: Reshim so the corepack binaries are reachable
+      ansible.builtin.command:
+        cmd: asdf reshim nodejs
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+      changed_when: false
+<% endif %>
 <% if emacs-config-repo|not-empty %>
     # Ordering below is deliberate: Emacs from nix, then the configuration.
     # Cloning a config for an Emacs that is not installed leaves a machine that
@@ -105,7 +321,7 @@
     # root's and `ssh walter-oci` cannot see it.
     - name: Install Emacs
       ansible.builtin.command:
-        cmd: nix profile install github:NixOS/nixpkgs/nixos-25.05#emacs-nox
+        cmd: nix profile install github:NixOS/nixpkgs/nixpkgs-unstable#emacs-nox
         creates: "{{ ansible_env.HOME }}/.nix-profile/bin/emacs"
       environment:
         PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"

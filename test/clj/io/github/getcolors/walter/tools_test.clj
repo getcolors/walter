@@ -179,6 +179,88 @@
           "linked into ~/.terminfo, which the system ncurses already reads —
            TERMINFO_DIRS would only reach a login shell"))))
 
+(deftest the-remote-playbook-omits-nix-packages-when-none-are-named
+  (testing "gated in the template, so a project naming no packages renders a
+           playbook that does not carry a bare `nix profile add`"
+    (let [rendered (render-remote-playbook {})]
+      (is (not (str/includes? rendered "nix profile add")))
+      (is (not (str/includes? rendered "walter_nix_packages"))))))
+
+(deftest named-packages-are-added-from-the-pinned-nixpkgs
+  (testing "attribute paths in colors.yml become flakerefs against the same pin
+           the terminfo and Emacs steps use, so a rebuilt machine matches — all
+           in one invocation, so the profile takes a single generation"
+    (let [rendered (render-remote-playbook {:nix-packages ["asdf-vm" "ripgrep" "fd" "fish"]})]
+      (is (str/includes? rendered
+                         (str "cmd: nix profile add "
+                              "github:NixOS/nixpkgs/nixpkgs-unstable#asdf-vm "
+                              "github:NixOS/nixpkgs/nixpkgs-unstable#ripgrep "
+                              "github:NixOS/nixpkgs/nixpkgs-unstable#fd "
+                              "github:NixOS/nixpkgs/nixpkgs-unstable#fish"))))))
+
+(deftest re-adding-is-safe-so-no-creates-guard-is-needed
+  (testing "nix profile add warns and exits 0 on a flakeref already in the
+           profile, so the task is re-runnable — and a `creates` check could not
+           have been written, since the attribute rarely matches the binary
+           (asdf-vm ships asdf, ripgrep ships rg)"
+    (let [rendered (render-remote-playbook {:nix-packages ["ripgrep"]})]
+      (is (not (str/includes? rendered "creates: \"{{ ansible_env.HOME }}/.nix-profile/bin/ripgrep\"")))
+      (is (str/includes? rendered "is already added")
+          "the no-op is detected from nix's own warning, per package")
+      (is (str/includes? rendered "list | length < 1")
+          "one warning per package means nothing was installed"))))
+
+(deftest package-names-tolerate-the-flat-key-overlay
+  (testing "nix-packages is walter's only non-scalar key, and read-pars overlays
+           COLORS_PAR_* as strings — a string must not render as one impossible
+           package name"
+    (is (= ["asdf-vm" "ripgrep" "fd" "fish"]
+           (tools/nix-package-names {:nix-packages ["asdf-vm" "ripgrep" "fd" "fish"]})))
+    (is (= ["asdf-vm" "ripgrep" "fd" "fish"]
+           (tools/nix-package-names {:nix-packages "asdf-vm ripgrep fd fish"})))
+    (is (= "" (tools/nix-package-flakerefs {})))
+    (is (= "" (tools/nix-package-flakerefs {:nix-packages []}))
+        "an empty list is the same intent as no key at all")
+    (is (= (str tools/nixpkgs-ref "#ripgrep")
+           (tools/nix-package-flakerefs {:nix-packages ["  ripgrep  " ""]}))
+        "blank entries are dropped rather than rendered as a bare pin#")))
+
+(deftest the-remote-playbook-omits-the-login-shell-when-none-is-named
+  (testing "gated, so a project that names no shell leaves passwd alone"
+    (let [rendered (render-remote-playbook {:nix-packages ["ripgrep"]})]
+      (is (not (str/includes? rendered "Set the login shell")))
+      (is (not (str/includes? rendered "/etc/shells"))))))
+
+(deftest the-login-shell-is-checked-on-the-machine-before-it-is-set
+  (testing "a shell that is not in the profile would leave an account that
+           cannot start a session, so the stat gates the usermod"
+    (let [rendered (render-remote-playbook {:nix-packages ["fish"] :login-shell "fish"})
+          at #(str/index-of rendered %)]
+      (is (str/includes? rendered ".nix-profile/bin/fish\""))
+      (is (str/includes? rendered "that: walter_login_shell.stat.exists"))
+      (is (str/includes? rendered "name: \"{{ ansible_user_id }}\"")
+          "the connected user, not a name from colors.yml that a typo could
+           point at root")
+      (is (< (at "Locate the login shell") (at "Refuse to set") (at "Set the login shell"))))))
+
+(deftest fish-gets-nix-on-path-before-it-becomes-the-login-shell
+  (testing "/etc/profile.d/nix.sh is sh-only and a nix-built fish reads neither
+           it nor /etc/fish/conf.d, so a clean login fish cannot find nix itself
+           — unrecoverable from inside that shell, hence ordered before the switch"
+    (let [rendered (render-remote-playbook {:nix-packages ["fish"] :login-shell "fish"})
+          at #(str/index-of rendered %)]
+      (is (str/includes? rendered "nix-daemon.fish")
+          "nix ships the fish half of its own integration; do not reimplement it")
+      (is (str/includes? rendered ".config/fish/conf.d/nix.fish"))
+      (is (< (at "conf.d/nix.fish") (at "Set the login shell"))))))
+
+(deftest only-fish-gets-the-extra-shell-integration
+  (testing "bash and sh already reach nix through /etc/profile.d/nix.sh, so the
+           fish file would be dead weight — and wrong — for them"
+    (let [rendered (render-remote-playbook {:nix-packages ["bash"] :login-shell "bash"})]
+      (is (str/includes? rendered "Set the login shell"))
+      (is (not (str/includes? rendered "nix.fish"))))))
+
 (deftest the-remote-playbook-omits-emacs-when-no-repo-is-named
   (testing "gated in the template rather than at runtime, so a project that
            names no repository renders a playbook that does not mention Emacs"
@@ -192,8 +274,8 @@
     (let [rendered (render-remote-playbook {:emacs-config-repo "git@github.com:me/emacs.d.git"
                                             :emacs-config-dest "~/.config/neoemacs"})
           at #(str/index-of rendered %)]
-      (is (str/includes? rendered "nixos-25.05#emacs-nox")
-          "pinned, so a rebuilt machine gets the Emacs this one has")
+      (is (str/includes? rendered "nixpkgs-unstable#emacs-nox")
+          "from the same nixpkgs ref as everything else here")
       (is (str/includes? rendered "repo: \"git@github.com:me/emacs.d.git\""))
       (is (str/includes? rendered "dest: \"~/.config/neoemacs\""))
       (is (str/includes? rendered "update: false")
@@ -206,3 +288,58 @@
     (let [rendered (render-remote-playbook {:emacs-config-repo "git@github.com:me/emacs.d.git"})]
       (is (str/includes? rendered "accept_hostkey: true"))
       (is (str/includes? rendered "dest: \"~/.config/emacs\"")))))
+
+(deftest asdf-tools-render-as-one-looped-task-each
+  (testing "a JSON array is a valid YAML flow sequence, so the playbook keeps one
+           task with an Ansible loop rather than N generated ones"
+    (let [rendered (render-remote-playbook
+                    {:nix-packages ["asdf-vm"]
+                     :asdf-tools [{:name "nodejs" :version "24.18.1"
+                                   :plugin "https://github.com/asdf-vm/asdf-nodejs.git"}]})
+          at #(str/index-of rendered %)]
+      (is (str/includes? rendered "\"name\":\"nodejs\""))
+      (is (str/includes? rendered "\"version\":\"24.18.1\""))
+      (is (str/includes? rendered "cmd: asdf set --home {{ item.name }} {{ item.version }}")
+          "0.16 rewrote asdf in Go and removed `global` outright — it answers
+           \"invalid command provided\", so the two are not interchangeable")
+      (is (< (at "Add the asdf plugins") (at "Install the asdf versions") (at "Set the home asdf")))
+      (testing "0.20 writes its no-op messages to stderr, so checking stdout
+               alone reported a change on every converged run"
+        (is (str/includes? rendered "walter_asdf_plugins.stdout + walter_asdf_plugins.stderr"))
+        (is (str/includes? rendered "walter_asdf_installs.stdout + walter_asdf_installs.stderr")))))
+  (testing "the plugin URL is optional — asdf resolves a bare name itself"
+    (let [rendered (render-remote-playbook
+                    {:nix-packages ["asdf-vm"]
+                     :asdf-tools [{:name "nodejs" :version "24.18.1"}]})]
+      (is (str/includes? rendered "item.plugin | default('', true)")))))
+
+(deftest corepack-is-reshimmed-or-it-is-invisible
+  (testing "corepack writes into Node's own bin directory, which asdf does not
+           expose until told to look again — without the reshim `corepack enable`
+           reports success and the binary stays command-not-found"
+    (let [rendered (render-remote-playbook
+                    {:nix-packages ["asdf-vm"]
+                     :asdf-tools [{:name "nodejs" :version "24.18.1"}]
+                     :corepack-packages ["pnpm"]})
+          at #(str/index-of rendered %)]
+      (is (str/includes? rendered "cmd: corepack enable {{ item }}"))
+      (is (< (at "corepack enable") (at "asdf reshim nodejs"))))))
+
+(deftest no-asdf-tools-means-no-asdf-tasks
+  (testing "matched on task names, not the bare word — the nix-packages comment
+           mentions asdf-vm to explain why a `creates` guard cannot be written"
+    (let [rendered (render-remote-playbook {:nix-packages ["ripgrep"]})]
+      (is (not (str/includes? rendered "- name: Add the asdf plugins")))
+      (is (not (str/includes? rendered "- name: Install the asdf versions")))
+      (is (not (str/includes? rendered "- name: Enable the corepack package managers"))))))
+
+(deftest the-loop-list-is-json-that-survived-selmer
+  (testing "Selmer escapes by default and JSON is all double quotes, so without
+           |safe every loop renders as &quot; and Ansible sees no list at all"
+    (let [rendered (render-remote-playbook
+                    {:nix-packages ["asdf-vm"]
+                     :asdf-tools [{:name "nodejs" :version "24.18.1"}]
+                     :corepack-packages ["pnpm"]})]
+      (is (not (str/includes? rendered "&quot;")))
+      (is (str/includes? rendered "loop: [{\"name\":\"nodejs\""))
+      (is (str/includes? rendered "loop: [\"pnpm\"]")))))

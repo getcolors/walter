@@ -11,6 +11,7 @@
   (:require
    [cheshire.core :as json]
    [clojure.java.io :as io]
+   [clojure.string :as str]
    [clojure.walk :as walk]
    [green.ansible :as ansible]
    [green.scaffold :as sc]
@@ -176,6 +177,76 @@
    {:all {:hosts {(or host-alias "walter") {:ansible_host ip :ansible_user user}}}}
    {:pretty true}))
 
+(def nixpkgs-ref
+  "The nixpkgs every `nix profile add` here resolves against.
+
+  Deliberately a channel branch and not a revision: a development machine is
+  wanted current, and the tools it carries move faster than any release branch
+  does — asdf is the clearest case, since 0.16 rewrote it in Go and renamed the
+  verbs, and no stable branch carries that yet.
+
+  The cost is stated rather than hidden: two creates months apart do not produce
+  the same machine, and a create can pick up an upstream change that a previous
+  one did not have. That is the trade this project has chosen; if a machine ever
+  has to be reproducible, this becomes a revision and the asdf verbs below have
+  to match whatever that revision ships."
+  "github:NixOS/nixpkgs/nixpkgs-unstable")
+
+(defn nix-package-names
+  "The `nix-packages` entries, trimmed and with blanks dropped.
+
+  A YAML list is the shape colors.yml wants — it reads well and
+  `green.cli/keywordize` carries it through untouched. A plain string is accepted
+  too, and not as a convenience: `nix-packages` is otherwise the only non-scalar
+  key walter has, and `green.cli/read-pars` overlays `COLORS_PAR_*` onto flat keys
+  as strings. Without this, setting COLORS_PAR_NIX_PACKAGES would replace the
+  vector with a string that renders as one impossible package name."
+  [opts]
+  (let [names (:nix-packages opts)]
+    (->> (if (sequential? names) names (str/split (str names) #"\s+"))
+         (map (comp str/trim str))
+         (remove str/blank?))))
+
+(defn nix-package-flakerefs
+  "The names as pinned flakerefs, space-separated for one `nix profile add`.
+
+  Empty when nothing is named, which is what gates the step. One invocation
+  rather than one per package, so nix resolves the set together and the profile
+  takes a single generation."
+  [opts]
+  (->> (nix-package-names opts)
+       (map #(str nixpkgs-ref "#" %))
+       (str/join " ")))
+
+(defn asdf-tools
+  "The `asdf-tools` entries, normalised to {:name :version :plugin}.
+
+  `plugin` is optional: asdf resolves a bare name against its own plugin index,
+  and only a plugin outside that index — or one deliberately pinned to a fork —
+  needs the URL spelled out."
+  [opts]
+  (->> (:asdf-tools opts)
+       (keep (fn [t]
+               (let [name* (not-empty (str/trim (str (:name t))))
+                     version (not-empty (str/trim (str (:version t))))]
+                 (when (and name* version)
+                   (cond-> {:name name* :version version}
+                     (not-empty (str/trim (str (:plugin t))))
+                     (assoc :plugin (str/trim (str (:plugin t)))))))))
+       vec))
+
+(defn corepack-packages
+  "The `corepack-packages` names — package managers Node's own corepack enables.
+
+  Same string tolerance as `nix-package-names`, for the same `COLORS_PAR_*`
+  reason."
+  [opts]
+  (let [names (:corepack-packages opts)]
+    (->> (if (sequential? names) names (str/split (str names) #"\s+"))
+         (map (comp str/trim str))
+         (remove str/blank?)
+         vec)))
+
 (defn data-fn
   "Template data for the Ansible stages: opts, with the address, login and alias
   guaranteed present so a build renders without ever reaching for state.
@@ -190,6 +261,17 @@
          :ip (or (not-empty (str (:ip opts))) "192.168.0.1")
          :user (or (not-empty (str (:user opts))) "root")
          :host-alias (utils/host-alias opts)
+         :nix-package-flakerefs (nix-package-flakerefs opts)
+         :nix-package-count (count (nix-package-names opts))
+         :login-shell-is-fish (= "fish" (not-empty (str/trim (str (:login-shell opts)))))
+         ;; Rendered as JSON rather than looped in the template: a JSON array is
+         ;; a valid YAML flow sequence, so the playbook keeps one task with an
+         ;; Ansible `loop` instead of N generated ones, and the indentation
+         ;; cannot drift.
+         :asdf-tools-json (let [tools (asdf-tools opts)]
+                            (when (seq tools) (json/generate-string tools)))
+         :corepack-packages-json (let [pkgs (corepack-packages opts)]
+                                   (when (seq pkgs) (json/generate-string pkgs)))
          :emacs-config-dest (or (not-empty (str (:emacs-config-dest opts)))
                                 "~/.config/emacs")))
 

@@ -108,3 +108,45 @@
   (testing "the message names the variable to export, not the key"
     (is (str/includes? (first (validate/secret-errors (assoc base :provider-compute "hcloud")))
                        "COLORS_PAR_HCLOUD_TOKEN"))))
+
+(deftest a-login-shell-must-be-one-of-the-installed-packages
+  (testing "nothing but nix-packages puts a binary in the profile, so a shell
+           missing from it names a path that will not exist — and the failure on
+           the machine is an account whose shell does not start"
+    (is (seq (errors-matching (assoc base :login-shell "fish") #":login-shell")))
+    (is (seq (errors-matching (assoc base :login-shell "fish"
+                                     :nix-packages ["ripgrep"])
+                              #":login-shell"))))
+  (testing "naming it in both places is what makes it valid"
+    (is (= [] (validate/state-errors (assoc base :login-shell "fish"
+                                            :nix-packages ["ripgrep" "fish"])))))
+  (testing "the flat-key spelling of nix-packages is accepted here too"
+    (is (= [] (validate/state-errors (assoc base :login-shell "fish"
+                                            :nix-packages "ripgrep fish")))))
+  (testing "no shell named is the common case and never an error"
+    (is (= [] (validate/state-errors (assoc base :nix-packages ["fish"]))))))
+
+(deftest asdf-tools-need-asdf-installed
+  (testing "asdf reaches the machine as a nix-packages entry like anything else,
+           so asking for tools without it renders a playbook that cannot work"
+    (is (seq (errors-matching (assoc base :asdf-tools [{:name "nodejs" :version "24.18.1"}])
+                              #":asdf-tools"))))
+  (testing "naming asdf-vm satisfies it"
+    (is (= [] (validate/state-errors
+               (assoc base :nix-packages ["asdf-vm"]
+                      :asdf-tools [{:name "nodejs" :version "24.18.1"}]))))))
+
+(deftest corepack-needs-a-node-to-ship-inside
+  (let [with-asdf (assoc base :nix-packages ["asdf-vm"])]
+    (testing "corepack is part of Node, not a package of its own"
+      (is (seq (errors-matching (assoc with-asdf :corepack-packages ["pnpm"])
+                                #":corepack-packages")))
+      (is (seq (errors-matching (assoc with-asdf
+                                       :asdf-tools [{:name "python" :version "3.13.0"}]
+                                       :corepack-packages ["pnpm"])
+                                #":corepack-packages"))))
+    (testing "a nodejs entry satisfies it"
+      (is (= [] (validate/state-errors
+                 (assoc with-asdf
+                        :asdf-tools [{:name "nodejs" :version "24.18.1"}]
+                        :corepack-packages ["pnpm"])))))))

@@ -61,6 +61,31 @@ s3-region: eu-central-1
 r2-bucket: walter-fixture-state
 r2-endpoint: https://fixture.eu.r2.cloudflarestorage.com
 
+# Set so every golden renders the nix-packages step. Its absent branch is
+# `the-remote-playbook-omits-nix-packages-when-none-are-named` in tools_test, for
+# the same reason the Emacs one is: eight identical copies of an absence prove
+# nothing eight times.
+nix-packages:
+  - asdf-vm
+  - ripgrep
+  - fish
+
+# Set so every golden renders the login-shell block and the fish integration that
+# has to precede it. The other shells' branch — a login shell that reaches nix
+# through /etc/profile.d/nix.sh and needs no extra file — is
+# `only-fish-gets-the-extra-shell-integration` in tools_test.
+login-shell: fish
+
+# Set so every golden renders the asdf block and the corepack reshim behind it.
+# The absent branch is `no-asdf-tools-means-no-asdf-tasks` in tools_test.
+asdf-tools:
+  - name: nodejs
+    version: 24.18.1
+    plugin: https://github.com/asdf-vm/asdf-nodejs.git
+
+corepack-packages:
+  - pnpm
+
 # Set so every golden renders the Emacs half of the remote playbook. The other
 # branch — no repository, no mention of Emacs — is not a golden: it is
 # `the-remote-playbook-omits-emacs-when-no-repo-is-named` in tools_test, because

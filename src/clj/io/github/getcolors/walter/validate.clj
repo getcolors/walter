@@ -124,7 +124,30 @@
     (when-not (or (nil? (:power-wait-seconds opts))
                   (and (integer? (:power-wait-seconds opts))
                        (pos? (:power-wait-seconds opts))))
-      [":power-wait-seconds must be a positive integer"]))))
+      [":power-wait-seconds must be a positive integer"])
+    ;; The login shell has to come from the nix profile, and nothing else puts
+    ;; anything there — so a shell that is not also in :nix-packages names a
+    ;; binary that will not exist. Caught here rather than on the machine,
+    ;; because the failure there is a user whose shell does not start.
+    (let [shell (not-empty (str/trim (str (:login-shell opts))))
+          packages (let [p (:nix-packages opts)]
+                     (set (map (comp str/trim str)
+                               (if (sequential? p) p (str/split (str p) #"\s+")))))]
+      (concat
+       (when (and shell (not (contains? packages shell)))
+         [(str ":login-shell " (pr-str shell) " is not in :nix-packages — "
+               "the shell has to be installed before it can be set")])
+       ;; asdf is not special-cased anywhere: it reaches the machine as an entry
+       ;; in :nix-packages like everything else, so asking for tools without it
+       ;; renders a playbook whose every asdf task fails.
+       (when (and (seq (:asdf-tools opts)) (not (contains? packages "asdf-vm")))
+         [(str ":asdf-tools needs \"asdf-vm\" in :nix-packages — "
+               "nothing else puts asdf on the machine")])
+       ;; corepack is part of Node, not a package of its own.
+       (when (and (seq (:corepack-packages opts))
+                  (not (some #(= "nodejs" (str (:name %))) (:asdf-tools opts))))
+         [(str ":corepack-packages needs a \"nodejs\" entry in :asdf-tools — "
+               "corepack ships inside Node and cannot be installed separately")]))))))
 
 (defn secret-errors
   "Credentials the selected providers need that no `COLORS_PAR_*` variable
