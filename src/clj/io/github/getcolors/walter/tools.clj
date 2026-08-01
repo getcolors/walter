@@ -325,6 +325,13 @@
          :seed-agent-credentials-json (let [agents (seed-agent-credentials opts)]
                                         (when (seq agents)
                                           (json/generate-string agents)))
+         ;; Claude Code keeps the bearer tokens in the credential file above,
+         ;; but gates an interactive start separately in ~/.claude.json. This
+         ;; only controls whether the playbook renders that non-secret repair;
+         ;; the task still checks that the controller credential actually exists.
+         :seed-claude-credentials (boolean
+                                   (some #(= "claude" (:agent %))
+                                         (seed-agent-credentials opts)))
          ;; JSON for the same reason as the three above. Organisation names
          ;; only: what gets cloned is decided on the machine at create time,
          ;; against GitHub's API, so nothing here can go stale between a build

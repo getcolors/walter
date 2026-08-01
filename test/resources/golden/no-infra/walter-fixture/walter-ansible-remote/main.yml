@@ -539,6 +539,58 @@
       no_log: true
 
 
+    # Claude Code keeps its bearer tokens in ~/.claude/.credentials.json, but
+    # interactive startup has a second gate in ~/.claude.json. A credential-only
+    # seed therefore makes `claude auth status` report logged in while `claude`
+    # still presents first-run login methods.
+    #
+    # Do not copy the workstation's ~/.claude.json: it holds machine-local
+    # project and usage state, and is much larger than this one required bit.
+    # Merge the bit only when absent, so a value already chosen on the machine —
+    # including false — is preserved. The write is atomic and 0600; malformed
+    # existing JSON fails rather than being overwritten.
+    - name: Complete Claude onboarding for the seeded login
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+              import json
+              import os
+              import sys
+              import tempfile
+              from pathlib import Path
+
+              path = Path(sys.argv[1])
+              try:
+                  data = json.loads(path.read_text())
+              except FileNotFoundError:
+                  data = {}
+              if "hasCompletedOnboarding" not in data:
+                  data["hasCompletedOnboarding"] = True
+                  with tempfile.NamedTemporaryFile(
+                      "w", dir=path.parent, prefix=f".{path.name}.", delete=False
+                  ) as stream:
+                      json.dump(data, stream, separators=(",", ":"))
+                  temporary = Path(stream.name)
+                  try:
+                      os.chmod(temporary, 0o600)
+                      os.replace(temporary, path)
+                  finally:
+                      temporary.unlink(missing_ok=True)
+                  print("added")
+          - "{{ ansible_env.HOME }}/.claude.json"
+      loop: "{{ walter_agent_credentials.results }}"
+      loop_control:
+        label: "{{ item.item.agent }}"
+      when:
+        - item.item.agent == "claude"
+        - item.stat.exists
+      register: walter_claude_onboarding
+      changed_when: walter_claude_onboarding.stdout == "added"
+
+
+
     # Every source repository in the named organisations, checked out under
     # ~/code/<org>/<repo>.
     #

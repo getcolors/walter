@@ -109,7 +109,8 @@ dotfiles-profile: ubuntu
 # multi-agent loop. Nothing secret is involved: only the agent names are desired
 # state, and the files they select are read from the operator's home directory
 # at create time — which is exactly what these goldens exist to prove, since a
-# token appearing under .colors/ would show up here as a diff. The absent branch
+# token appearing under .colors/ would show up here as a diff. Naming Claude
+# also renders its non-secret, missing-only onboarding repair. The absent branch
 # is `the-remote-playbook-omits-agent-credentials-when-none-are-named` in
 # tools_test.
 seed-agent-credentials:

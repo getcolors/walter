@@ -604,6 +604,7 @@
            playbook that does not mention their credential files at all"
     (let [rendered (render-remote-playbook {})]
       (is (not (str/includes? rendered "Seed the agent credentials")))
+      (is (not (str/includes? rendered "Complete Claude onboarding")))
       (is (not (str/includes? rendered ".credentials.json")))
       (is (not (str/includes? rendered "walter_agent_credentials"))))))
 
@@ -656,6 +657,31 @@
                that content is a bearer token"
         (is (str/includes? rendered "no_log: true"))))))
 
+(deftest claude-seeding-completes-onboarding-without-copying-machine-state
+  (testing "Claude Code recognizes the bearer tokens for `auth status` but
+           refuses an interactive start until ~/.claude.json says onboarding
+           completed; walter adds only that missing bit rather than copying the
+           workstation's machine-local project and usage state"
+    (let [rendered (render-remote-playbook {:seed-agent-credentials ["claude"]})]
+      (is (str/includes? rendered "Complete Claude onboarding for the seeded login"))
+      (is (str/includes? rendered
+                         "if \"hasCompletedOnboarding\" not in data:"))
+      (is (str/includes? rendered
+                         "data[\"hasCompletedOnboarding\"] = True"))
+      (is (str/includes? rendered "item.item.agent == \"claude\""))
+      (is (str/includes? rendered "item.stat.exists")
+          "a missing controller credential must leave Claude logged out")
+      (is (str/includes? rendered
+                         "changed_when: walter_claude_onboarding.stdout == \"added\""))
+      (is (str/includes? rendered "os.replace(temporary, path)")
+          "the merge writes atomically")
+      (is (str/includes? rendered "os.chmod(temporary, 0o600)")))
+    (testing "an existing true or false is preserved by the missing-key guard"
+      (is (not (str/includes?
+                (render-remote-playbook {:seed-agent-credentials ["codex"]})
+                "Complete Claude onboarding"))
+          "other agent seeds do not render Claude-specific machine state"))))
+
 (deftest seeding-never-overwrites-a-login-the-machine-already-has
   (testing "these are OAuth refresh tokens the CLI rotates in place, so two
            overwrites have to be prevented: one the machine refreshed for
@@ -694,6 +720,7 @@
       (is (< (at "Install the dotfiles profile")
              (at "- name: Seed the agent credentials")))
       (is (< (at "- name: Seed the agent credentials")
+             (at "- name: Complete Claude onboarding")
              (at "cmd: atuin sync"))))))
 
 ;; ---------------------------------------------------------------------------

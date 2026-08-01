@@ -171,13 +171,21 @@ block: those are tasks inside a play that runs regardless, where this is the
 whole stage, so a project with no `emacs-config-repo` renders no directory at
 all. Delete skips it too — the packages go with the boot volume.
 
-`seed-agent-credentials` copies one file per named agent from the controller,
-never the directory around it: `validate/agent-credential-paths` is the registry,
-and those directories are mostly session transcripts. The guard is `force: false`
-rather than a `~/.local/state/walter` stamp, deliberately — the credential file
-is its own evidence, and it is the only guard that also refuses to clobber a
-login made on the machine directly. These are OAuth refresh tokens rotated in
-place, so both overwrites matter.
+`seed-agent-credentials` copies one credential file per named agent from the
+controller, never the directory around it: `validate/agent-credential-paths` is
+the registry, and those directories are mostly session transcripts. The guard
+is `force: false` rather than a `~/.local/state/walter` stamp, deliberately — the
+credential file is its own evidence, and it is the only guard that also refuses
+to clobber a login made on the machine directly. These are OAuth refresh tokens
+rotated in place, so both overwrites matter.
+
+Claude Code has one non-credential companion to that copy: interactive startup
+checks `hasCompletedOnboarding` in `~/.claude.json` separately, and otherwise
+shows login methods even while `claude auth status` recognizes the copied bearer
+tokens. When the controller's Claude credential exists, the playbook atomically
+adds that key as `true` only if it is absent. It never copies the workstation's
+large, machine-local `~/.claude.json`, and it preserves an existing value — true
+or false — rather than overriding a choice made on the machine.
 
 `clone-orgs` names GitHub organisations, never repositories, and checks each
 one's source repositories out under `~/code/<org>/<repo>`. The list is read from

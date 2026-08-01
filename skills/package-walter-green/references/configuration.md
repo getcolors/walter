@@ -291,11 +291,18 @@ machine has no use for another machine's history. That is also why the key names
 agents rather than paths: a "copy these local files to the machine" key would be
 the same feature with nothing stopping it pointing at `~/.ssh`.
 
+Claude Code also gates interactive startup on `hasCompletedOnboarding` in
+`~/.claude.json`; the credential file alone can make `claude auth status` report
+logged in while `claude` still presents first-run login methods. Walter does not
+copy that machine-local file. When the controller's Claude credential exists, it
+atomically adds `hasCompletedOnboarding: true` only if the key is absent,
+preserving every existing field and an existing true or false value.
+
 **Nothing here is a secret and nothing is rendered.** Only the agent names are
 desired state; the files are read from the operator's home directory at create
 time, so `build` stays credential-free and no token ever reaches `.colors/`. The
-copy is `no_log`, because `ansible-playbook --diff` prints a copy module's file
-content and that content is a bearer token.
+credential copy is `no_log`, because `ansible-playbook --diff` prints a copy
+module's file content and that content is a bearer token.
 
 **A missing file is reported and skipped, by name.** A create from CI, or from a
 laptop that has not logged in, still succeeds and leaves those CLIs logged out —
@@ -381,7 +388,7 @@ renders a playbook that does not mention them at all:
 | `corepack-packages` | `corepack enable`, then `asdf reshim nodejs` |
 | `emacs-config-repo` | Emacs, then the configuration cloned over the forwarded agent |
 | `dotfiles-repo` | the clone, then `bb install -p <profile>` applied to `$HOME` |
-| `seed-agent-credentials` | one credential file per named agent, copied from the controller |
+| `seed-agent-credentials` | one credential file per named agent, copied from the controller; Claude also gets a missing onboarding flag |
 | `clone-orgs` | every source repository of each org, cloned to `~/code/<org>/<repo>` |
 | `atuin-username` | `atuin login`, then `atuin sync` |
 
