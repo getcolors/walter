@@ -1,0 +1,101 @@
+---
+# Start the Emacs package bootstrap, and deliberately do not wait for it.
+#
+# This is the one thing walter starts and does not see finish. Everything else
+# in a create is synchronous because its result is what the next step needs;
+# this is a cache being warmed, and nothing downstream reads it.
+#
+# The reason it exists at all is that the alternative is worse. Left to the
+# first interactive launch, ~80 packages arrive from ELPA/MELPA while Emacs
+# shows nothing at all — a multi-minute wait with no output, at the exact moment
+# you sat down to work. Moving it here does not make it faster; it moves it to
+# a point where nobody is watching.
+#
+# Its own stage rather than another task in the remote play, because it is the
+# only step with different failure semantics: a create cannot fail on this, and
+# a create must not block on it either. Keeping it separate is what makes both
+# true by construction rather than by an `ignore_errors` bolted onto a task
+# among many.
+- name: Warm the Emacs package cache
+  hosts: all
+  gather_facts: true
+  vars:
+    # `emacs-config-dest` is written the way a human would write it, so it
+    # usually begins with `~`. Ansible's `path` type expands that for modules
+    # that declare one, but a shell `cmd` is just a string — and a *quoted* `~`
+    # does not expand in bash either, so the naive fix silently produces a
+    # directory named `~`. Resolve it once here against the machine's own home
+    # and quote it everywhere below, which also keeps a path with a space in it
+    # from splitting into two arguments.
+    walter_emacs_dest: >-
+      {{ '~/.config/fixture-emacs' | regex_replace('^~', ansible_env.HOME) }}
+    walter_emacs_log: "{{ ansible_env.HOME }}/.local/state/walter/emacs-packages.log"
+  tasks:
+    # The same directory the dotfiles and atuin stamps live in. Created here
+    # too, rather than assumed: those are gated on their own keys, so a project
+    # that uses neither has never made it.
+    - name: Ensure walter's state directory exists
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/.local/state/walter"
+        state: directory
+        mode: "0755"
+
+    # `--batch` does NOT load the init file — it implies `-q`, and an
+    # `--init-directory` without `-l` merely sets `user-emacs-directory` while
+    # leaving `user-init-file` nil. That failure is silent and fast: Emacs exits
+    # 0 in under a tenth of a second having installed nothing, which looks
+    # exactly like a cache that was already warm. Hence the explicit `-l`.
+    #
+    # Loading init.el is the whole mechanism. The configuration sets
+    # `use-package-always-ensure`, so every `use-package` form installs what it
+    # names, and the one package that is not on an archive
+    # (`consult-claude`) calls `package-vc-install` over https from init.el
+    # itself. Nothing here needs to know the package list, which is the point —
+    # walter must not carry a copy of a list that lives in the configuration.
+    #
+    # `async` with `poll: 0` is fire-and-forget: Ansible's wrapper daemonizes
+    # the job, so it outlives this play, this SSH connection and the create that
+    # started it. The timeout is a ceiling on the job, not a wait.
+    #
+    # Output goes to a log rather than nowhere, because a job nobody waits for
+    # is a job nobody can debug. Truncated per run, so what is in it always
+    # describes the most recent attempt.
+    #
+    # `changed_when: false` — this reports that a fetch was *started*, which is
+    # true on every create and says nothing about whether anything was
+    # installed. Only the job itself knows that, and by then this task is over.
+    - name: Start the package fetch, and do not wait for it
+      ansible.builtin.shell:
+        cmd: |
+          {
+            echo "walter: started $(date -Is)"
+            "$HOME/.nix-profile/bin/emacs" \
+              --init-directory {{ walter_emacs_dest | quote }} \
+              --batch \
+              -l {{ (walter_emacs_dest ~ '/init.el') | quote }}
+            # Saved before anything else runs. `$?` in the line below would
+            # otherwise report the status of the `$(date)` substitution, which
+            # bash expands first and which always succeeds — so the log would
+            # claim rc=0 for every failed fetch. On a job nobody waits for, that
+            # log is the only diagnostic there is.
+            rc=$?
+            echo "walter: finished $(date -Is) rc=$rc"
+            exit "$rc"
+          } > {{ walter_emacs_log | quote }} 2>&1
+        executable: /bin/bash
+      async: 3600
+      poll: 0
+      changed_when: false
+
+    # Said once, here, because this is the only part of a create whose result
+    # arrives after the create has already reported success — so the machine is
+    # briefly one where `emacs` works and the packages are still landing.
+    - name: Say where the fetch reports to
+      ansible.builtin.debug:
+        msg: >-
+          Emacs packages are downloading in the background and will keep going
+          after this create finishes. Watch with
+          `ssh {{ inventory_hostname }} tail -f {{ walter_emacs_log }}`,
+          or just wait — the first launch will simply have less to do.
+          Tree-sitter grammars and `nerd-icons-install-fonts` are still
+          first-use and manual respectively.

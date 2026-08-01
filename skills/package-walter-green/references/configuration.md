@@ -295,11 +295,14 @@ anything you would be annoyed to lose.
 <workdir>/<profile>/
 ├── walter-compute/          backend.tf.json  main.tf  [outputs.tf]
 ├── walter-ansible-local/    ansible.cfg  inventory.ini  main.yml
-└── walter-ansible-remote/   ansible.cfg  inventory.json  main.yml
+├── walter-ansible-remote/   ansible.cfg  inventory.json  main.yml
+└── walter-emacs-packages/   ansible.cfg  inventory.json  main.yml
 ```
 
 `outputs.tf` appears only for providers walter can power cycle; it publishes the
-instance id the power verbs act on.
+instance id the power verbs act on. `walter-emacs-packages/` appears only when
+`emacs-config-repo` is set — it is a whole stage rather than a task, so with no
+Emacs there is no directory at all.
 
 Never edit any of it. It is regenerated on every run.
 
@@ -359,10 +362,27 @@ Native compilation and any C-based package (`vterm`, tree-sitter grammars built
 on the machine) need a compiler at run time, which Emacs does not bring with it.
 Put `gcc` in `nix-packages` if the configuration needs one.
 
-Packages are **not** pre-fetched. The first interactive launch pulls from
-ELPA/MELPA, native-compiles and clones tree-sitter grammars on its own; doing it
-during provisioning would add minutes to every `create` and turn a transient
-MELPA failure into a failed provision.
+**Packages are fetched by a final stage that `create` starts and does not wait
+for.** `walter-emacs-packages` runs `emacs --batch -l init.el` on the machine
+under `async` with `poll: 0`, so the job is daemonized and keeps going after
+`create` has already reported success. Nothing downstream reads the result — it
+is a cache being warmed — so a transient MELPA failure still cannot fail a
+provision, which was the original reason for not fetching at all. What changed is
+only *when* the wait happens: off your first interactive launch, where Emacs
+shows nothing at all for minutes, onto a machine nobody is watching.
+
+Loading `init.el` is the whole mechanism, so walter carries no package list and
+no elisp of its own — a configuration using `use-package` with `:ensure`, or
+`package-vc-install`, installs whatever it names. Watch it with:
+
+```sh
+ssh <profile> tail -f ~/.local/state/walter/emacs-packages.log
+```
+
+The log records a start line, a finish line and the real exit status, and is
+truncated per run. Two things are still **not** covered: tree-sitter grammars,
+which most configurations install lazily the first time a matching file is
+opened, and `nerd-icons-install-fonts`, which is interactive.
 
 nix lands on `PATH` through `/etc/profile.d/nix.sh`, which the installer writes.
 That is a *login* shell mechanism: `ssh walter-oci` picks it up, `ssh walter-oci

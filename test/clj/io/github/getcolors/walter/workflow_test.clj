@@ -22,8 +22,19 @@
   (is (= [:walter/ansible-local :walter/ansible-remote]
          (steps-for :create :walter/compute)))
   (testing "neither joins — they are independent"
-    (is (= [] (steps-for :create :walter/ansible-local)))
-    (is (= [] (steps-for :create :walter/ansible-remote)))))
+    (is (= [] (steps-for :create :walter/ansible-local)))))
+
+(deftest emacs-packages-comes-last-and-hangs-off-the-remote-stage
+  (testing "it needs Emacs and the cloned configuration, which is what that
+           stage installs — so it cannot hang off compute beside it"
+    (is (= [:walter/emacs-packages] (steps-for :create :walter/ansible-remote)))
+    (is (= [] (steps-for :create :walter/emacs-packages))))
+  (testing "the local branch is untouched — it still does not join"
+    (is (= [] (steps-for :create :walter/ansible-local))))
+  (testing "and it is not in any other graph: there is nothing to warm on a
+           power cycle, and nothing to undo on a delete"
+    (is (= [] (steps-for :delete :walter/compute)))
+    (is (= [:walter/ansible-local] (steps-for :start :walter/power-on)))))
 
 (deftest build-runs-the-same-graph-as-create
   (is (= (steps-for :create :walter/compute) (steps-for :build :walter/compute))))
@@ -47,6 +58,7 @@
 
 (deftest every-side-effecting-step-is-dry-runnable
   (doseq [step [:walter/compute :walter/ansible-local :walter/ansible-remote
+                :walter/emacs-packages
                 :walter/ansible-cleanup :walter/power-off :walter/power-on]]
     (is (contains? (set workflow/side-effecting-steps) step)
         (str step " must be skipped by --dry-run"))))

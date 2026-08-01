@@ -142,12 +142,34 @@ transition completes.
 | `:walter/compute` | `walter-compute` | ONCE's provider template + walter's `outputs.tf`; outputs ip/user/sudoer/name |
 | `:walter/ansible-local` | `walter-ansible-local` | the managed `Host <profile>` block in `~/.ssh/config` |
 | `:walter/ansible-remote` | `walter-ansible-remote` | ping, nix, terminfo, and — when the gating key is set — packages, shell, runtimes, Emacs, dotfiles, agent credentials, atuin |
+| `:walter/emacs-packages` | `walter-emacs-packages` | starts the ELPA/MELPA bootstrap and does **not** wait for it |
 
 `nix profile add` runs with `NIXPKGS_ALLOW_UNFREE=1` and `--impure` so unfree
 attributes (`claude-code`) install beside free ones in the one invocation that
 lets nix resolve the set together. The two flags need each other — flake
 evaluation is pure by default and would ignore the variable — and the cost is
 that the licence check is relaxed for the whole list.
+
+`emacs-packages` is the one step walter starts without waiting for. `async` with
+`poll: 0` daemonizes the job, so it outlives the play, the SSH connection and the
+create — **the graph finishing is not the machine being finished**, which is true
+nowhere else here. Nothing downstream reads the result, so waiting would buy only
+the ability to fail a create on an ELPA outage, which the remote play already
+refused when it left packages unfetched; what moves is *when* the wait happens,
+off the first interactive launch where Emacs shows nothing for minutes.
+
+Two traps live in that stage. `--batch` implies `-q`, so an `--init-directory`
+without an explicit `-l init.el` sets `user-emacs-directory`, leaves
+`user-init-file` nil, installs nothing and exits 0 in under a tenth of a
+second — indistinguishable from an already-warm cache. And the log's exit status
+is saved to `rc` *before* the timestamp is taken, because bash expands `$(date)`
+first and it always succeeds, so reading `$?` after it reports 0 for every
+failure. On a job nobody waits for, that log is the only diagnostic there is.
+
+It is gated in Clojure rather than in the template, unlike every other optional
+block: those are tasks inside a play that runs regardless, where this is the
+whole stage, so a project with no `emacs-config-repo` renders no directory at
+all. Delete skips it too — the packages go with the boot volume.
 
 `seed-agent-credentials` copies one file per named agent from the controller,
 never the directory around it: `validate/agent-credential-paths` is the registry,

@@ -513,6 +513,90 @@
       (is (str/includes? rendered "loop: [\"pnpm\"]")))))
 
 ;; ---------------------------------------------------------------------------
+;; emacs packages
+
+(defn- render-emacs-packages
+  "Run the emacs-packages step as a build, and hand back the playbook it wrote —
+  or nil when the step declined to render a stage at all."
+  [opts]
+  (let [dir (str (fs/create-temp-dir))
+        merged (merge {:profile "p"
+                       :workdir dir
+                       :provider-compute "oci"
+                       :green/event :build}
+                      opts)]
+    (tools/emacs-packages-step merged)
+    (let [f (str (tools/tool-dir merged tools/emacs-packages-tool) "/main.yml")]
+      (when (fs/exists? f) (slurp f)))))
+
+(deftest no-emacs-config-means-no-stage-at-all
+  (testing "gated in Clojure rather than in the template, unlike every other
+           optional block — those are tasks inside a play that runs regardless,
+           where this is the whole stage, and a project with no Emacs should
+           render no directory rather than a playbook full of absence"
+    (is (nil? (render-emacs-packages {})))
+    (is (nil? (render-emacs-packages {:emacs-config-repo "   "}))))
+  (testing "and a delete renders nothing either — the packages go with the boot
+           volume, so there is no work to undo"
+    (is (nil? (render-emacs-packages {:emacs-config-repo "git@github.com:me/e.git"
+                                      :green/event :delete})))))
+
+(deftest the-batch-load-names-init-el-explicitly
+  (testing "--batch implies -q: an --init-directory without -l sets
+           user-emacs-directory and leaves user-init-file nil, so Emacs exits 0
+           in under a tenth of a second having installed nothing — a silent
+           no-op indistinguishable from an already-warm cache"
+    (let [rendered (render-emacs-packages
+                    {:emacs-config-repo "git@github.com:me/e.git"
+                     :emacs-config-dest "~/.config/neoemacs"})]
+      (is (str/includes? rendered "--batch"))
+      (is (str/includes? rendered "-l {{ (walter_emacs_dest ~ '/init.el') | quote }}")
+          "the -l is what actually loads the configuration")
+      (testing "walter carries no elisp of its own — loading init.el is the
+               whole mechanism, and the package list lives in the configuration
+               where it belongs. Asserted on `--eval` rather than on the word
+               `use-package`, which appears in the commentary explaining why."
+        (is (not (str/includes? rendered "--eval")))
+        (is (not (str/includes? rendered "package-install-selected")))))))
+
+(deftest a-tilde-destination-is-resolved-against-the-machines-home
+  (testing "a quoted ~ does not expand in bash, so the naive fix silently
+           creates a directory literally named ~"
+    (let [rendered (render-emacs-packages
+                    {:emacs-config-repo "git@github.com:me/e.git"
+                     :emacs-config-dest "~/.config/neoemacs"})]
+      (is (str/includes? rendered "regex_replace('^~', ansible_env.HOME)"))
+      (is (str/includes? rendered "'~/.config/neoemacs'"))
+      (testing "and every use of it is quoted, so a path with a space in it
+               does not split into two arguments"
+        (is (str/includes? rendered "{{ walter_emacs_dest | quote }}"))))))
+
+(deftest the-fetch-is-started-and-not-waited-for
+  (testing "nothing downstream reads what this produces — it is a cache being
+           warmed — so waiting would buy only the ability to fail a create on an
+           ELPA outage, which the remote play already refused"
+    (let [rendered (render-emacs-packages
+                    {:emacs-config-repo "git@github.com:me/e.git"})]
+      (is (str/includes? rendered "poll: 0")
+          "fire-and-forget: Ansible's wrapper daemonizes the job so it outlives
+           the play, the SSH connection and the create")
+      (is (str/includes? rendered "async: 3600")
+          "a ceiling on the job, not a wait")
+      (testing "started is not installed, so this is never reported as a change"
+        (is (str/includes? rendered "changed_when: false")))
+      (testing "a job nobody waits for is a job nobody can debug without a log"
+        (is (str/includes? rendered ".local/state/walter/emacs-packages.log")))
+      (testing "the exit status is saved before the timestamp is taken. bash
+               expands `$(date)` first and it always succeeds, so reading `$?`
+               after it would log rc=0 for every failed fetch — and on a job
+               nobody waits for, that log is the only diagnostic there is."
+        (is (str/includes? rendered "rc=$?"))
+        (is (str/includes? rendered "rc=$rc"))
+        (is (not (str/includes? rendered "rc=$?\"")))
+        (is (< (str/index-of rendered "rc=$?")
+               (str/index-of rendered "rc=$rc")))))))
+
+;; ---------------------------------------------------------------------------
 ;; agent credentials
 
 (deftest the-remote-playbook-omits-agent-credentials-when-none-are-named

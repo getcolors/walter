@@ -2,7 +2,7 @@
   "The DAG the launcher runs, and the steps that are not a tool.
 
       create / build   start ─ compute ─┬─ ansible-local
-                                        └─ ansible-remote
+                                        └─ ansible-remote ─ emacs-packages
 
       delete           start ─ ansible-cleanup ─ compute
 
@@ -16,7 +16,14 @@
   Create and build fork after compute: the two Ansible stages are independent
   and neither joins. Delete drops the managed ssh block before anything is
   destroyed, so a machine that is already gone still cleans up. Stop and start
-  never reach OpenTofu (see io.github.getcolors.walter.oci)."
+  never reach OpenTofu (see io.github.getcolors.walter.oci).
+
+  `emacs-packages` hangs off `ansible-remote` rather than off `compute`, because
+  it needs what that stage installs — Emacs and the cloned configuration. It is
+  last, and it is the only step walter starts without waiting for: the job is
+  daemonized on the machine and outlives the create. So the graph finishing is
+  not the same as the machine being finished, which is stated here because it is
+  true nowhere else in walter."
   (:require
    [clojure.string :as str]
    [green.cli :as green-cli]
@@ -191,7 +198,8 @@
       :walter/start          [start-step :walter/compute]
       :walter/compute        [tools/compute-step :walter/ansible-local :walter/ansible-remote]
       :walter/ansible-local  [tools/ansible-local-step]
-      :walter/ansible-remote [tools/ansible-remote-step])))
+      :walter/ansible-remote [tools/ansible-remote-step :walter/emacs-packages]
+      :walter/emacs-packages [tools/emacs-packages-step])))
 
 ;; ---------------------------------------------------------------------------
 ;; backends
@@ -220,6 +228,7 @@
 
 (def side-effecting-steps
   [:walter/compute :walter/ansible-local :walter/ansible-remote
+   :walter/emacs-packages
    :walter/ansible-cleanup :walter/power-off :walter/power-on])
 
 (def workflow

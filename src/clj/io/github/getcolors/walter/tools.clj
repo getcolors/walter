@@ -31,6 +31,7 @@
 
 (def ansible-local-tool "walter-ansible-local")
 (def ansible-remote-tool "walter-ansible-remote")
+(def emacs-packages-tool "walter-emacs-packages")
 
 (def ^:private walter-root "io.github.getcolors.walter.tools")
 (def ^:private once-root "io.github.getcolors.once.tools")
@@ -378,3 +379,42 @@
                                       :inventory "inventory.json"
                                       :playbooks {:create "main.yml"}
                                       :host-key-checking false}))))
+
+(defn emacs-packages-step
+  "Start the Emacs package bootstrap on the machine and return without waiting.
+
+  Gated on `emacs-config-repo` in *Clojure* rather than in the template, unlike
+  every other optional block here. Those gate in Selmer because they are tasks
+  inside a play that runs regardless; this is the whole stage, and a project
+  with no Emacs should render no directory at all rather than a playbook whose
+  only content is an absence.
+
+  The fire-and-forget is the design, not an optimisation. Nothing downstream
+  reads what this produces — it is a cache being warmed — so waiting would buy
+  only the ability to fail a create on an ELPA outage, which is the trade the
+  remote play already refused when it left packages unfetched. What changes here
+  is *when* the wait happens, not whether: it moves off the first interactive
+  launch, where Emacs shows nothing for minutes, onto a machine nobody is
+  watching.
+
+  Delete skips it too. There is no work to undo — the packages go with the boot
+  volume — and scaffolding a stage against `:delete` only to remove it would
+  render a tree for a machine being destroyed."
+  [opts]
+  (if (or (str/blank? (str (:emacs-config-repo opts)))
+          (= :delete (:green/event opts)))
+    (assoc opts :green/exit 0)
+    (let [dir (tool-dir opts emacs-packages-tool)
+          data (data-fn opts)
+          specs [(template-spec (walter-template "emacs-packages" "ansible.cfg")
+                                (str dir "/ansible.cfg") data)
+                 (template-spec (walter-template "emacs-packages" "main.yml")
+                                (str dir "/main.yml") data)
+                 (raw-spec (str dir "/inventory.json") (inventory data))]
+          rendered (sc/scaffold opts specs)]
+      (if (= :build (:green/event opts))
+        rendered
+        (ansible/ansible-step rendered {:dir dir
+                                        :inventory "inventory.json"
+                                        :playbooks {:create "main.yml"}
+                                        :host-key-checking false})))))
