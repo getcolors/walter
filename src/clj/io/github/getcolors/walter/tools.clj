@@ -248,6 +248,27 @@
          (remove str/blank?)
          vec)))
 
+(defn clone-orgs
+  "The `clone-orgs` entries — GitHub organisations whose every source repository
+  is checked out under `~/code/<org>/`.
+
+  Only the organisation is desired state. The repository list is not: it is
+  whatever the organisation holds at create time, read from GitHub's API on the
+  machine, so a repository added upstream arrives on the next create without
+  anything here changing. That is the whole point of naming an org rather than
+  fifteen repositories.
+
+  Same string tolerance as `nix-package-names`, for the same `COLORS_PAR_*`
+  reason, and `distinct` because naming one twice would clone it twice into the
+  same path."
+  [opts]
+  (let [names (:clone-orgs opts)]
+    (->> (if (sequential? names) names (str/split (str names) #"\s+"))
+         (map (comp str/trim str))
+         (remove str/blank?)
+         distinct
+         vec)))
+
 (defn seed-agent-credentials
   "The `seed-agent-credentials` entries, resolved to {:agent :path} against
   `validate/agent-credential-paths`.
@@ -304,6 +325,12 @@
          :seed-agent-credentials-json (let [agents (seed-agent-credentials opts)]
                                         (when (seq agents)
                                           (json/generate-string agents)))
+         ;; JSON for the same reason as the three above. Organisation names
+         ;; only: what gets cloned is decided on the machine at create time,
+         ;; against GitHub's API, so nothing here can go stale between a build
+         ;; and the create that uses it.
+         :clone-orgs-json (let [orgs (clone-orgs opts)]
+                            (when (seq orgs) (json/generate-string orgs)))
          :emacs-config-dest (or (not-empty (str (:emacs-config-dest opts)))
                                 "~/.config/emacs")
          ;; Defaulted for the same reason as the Emacs destination: a repo with

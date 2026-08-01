@@ -538,6 +538,88 @@
         label: "{{ item.item.agent }}"
       no_log: true
 <% endif %>
+<% if clone-orgs-json|not-empty %>
+    # Every source repository in the named organisations, checked out under
+    # ~/code/<org>/<repo>.
+    #
+    # Only the organisation is desired state. The repository list is read from
+    # GitHub here, on the machine, rather than written into colors.yml — so a
+    # repository added upstream arrives on the next create and nothing has to be
+    # kept in step by hand. That is the entire reason this key names an org.
+    #
+    # Placed after the dotfiles installer, which copies rendered files over
+    # $HOME and could otherwise land on top of a checkout, and after the
+    # credential seeding, which is cheap: this is the longest and most
+    # network-dependent step in the play, and a GitHub outage should not be able
+    # to fail a create before the things that make the machine usable are done.
+    #
+    # Unauthenticated on purpose. These repositories are public, and a token
+    # would be a credential every create then needs and every operator then has
+    # to hold. The costs, stated rather than discovered: private repositories are
+    # invisible to this, and the anonymous rate limit is 60 requests an hour per
+    # address — one request per organisation, which no create comes near.
+    #
+    # `type=sources` drops forks at the server, and archived repositories are
+    # dropped at the clone below, where the API offers no filter. Both are the
+    # same judgement: a fork or an archived repository is not a working copy.
+    - name: List the source repositories in each organisation
+      ansible.builtin.uri:
+        url: "https://api.github.com/orgs/{{ item }}/repos?per_page=100&type=sources&sort=full_name"
+        headers:
+          Accept: application/vnd.github+json
+      loop: <{ clone-orgs-json|safe }>
+      register: walter_org_repos
+      # A GET, so it is `ok` rather than `changed` however many repositories it
+      # names. `json` is populated from the response's content type; asking for
+      # return_content as well would only carry the raw body into the register.
+      changed_when: false
+
+    # per_page tops out at 100 and this step does not follow the `Link:` header,
+    # so an organisation past that boundary would clone its first hundred
+    # repositories and report success. Fail instead — a silently partial
+    # checkout is the kind of thing found weeks later, on the one repository
+    # that was missing.
+    - name: Refuse to clone a partial page
+      ansible.builtin.assert:
+        that: item.json | length < 100
+        fail_msg: >-
+          {{ item.item }} has 100 or more source repositories, which is one full
+          page. Walter reads a single page and would omit the rest without
+          saying so. Paginate this step before relying on it.
+        success_msg: "{{ item.item }}: {{ item.json | length }} source repositories"
+      loop: "{{ walter_org_repos.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # `subelements` pairs each organisation with its own repositories, so one
+    # flat loop carries both halves of the path and the two cannot drift apart:
+    # item.0.item is the organisation that was asked, item.1 the repository it
+    # answered with.
+    #
+    # Archived repositories are skipped with `when` rather than filtered out of
+    # the loop, so the run says which ones it passed over instead of silently
+    # producing a shorter list.
+    #
+    # git@github.com: rather than https://, like the Emacs and dotfiles clones
+    # above and for the same reason — the clone rides the agent ansible.cfg
+    # forwards, so no private key is written to the machine and the checkouts can
+    # push back. They are only writable while your local agent holds the key.
+    #
+    # Same `update: false`, also for the same reason: these are working copies on
+    # a development machine, and a later create must not discard edits made
+    # there. `git pull` on the machine is how one moves; a repository added to
+    # the organisation later arrives on the next create.
+    - name: Clone the organisations' repositories
+      ansible.builtin.git:
+        repo: "git@github.com:{{ item.0.item }}/{{ item.1.name }}.git"
+        dest: "{{ ansible_env.HOME }}/code/{{ item.0.item }}/{{ item.1.name }}"
+        accept_hostkey: true
+        update: false
+      loop: "{{ walter_org_repos.results | subelements('json') }}"
+      loop_control:
+        label: "{{ item.0.item }}/{{ item.1.name }}"
+      when: not item.1.archived
+<% endif %>
 <% if atuin-username|not-empty %>
     # Shell history, synced to an existing account. A replacement machine that
     # cannot see the history of the one it replaced has lost the thing that made

@@ -117,6 +117,15 @@ seed-agent-credentials:
   - codex
   - pi
 
+# Set so every golden renders the organisation-checkout block, including the
+# subelements loop that pairs each org with its own repositories. Only the org
+# name is desired state — what gets cloned is read from GitHub on the machine at
+# create time, which is exactly what these goldens exist to hold still: a
+# rendered repository list would be a list gone stale. The absent branch is
+# `the-remote-playbook-omits-org-clones-when-none-are-named` in tools_test.
+clone-orgs:
+  - fixture-org
+
 # Set so every golden renders the atuin login. Only the username belongs in
 # desired state — the password and the encryption key are COLORS_PAR_* secrets
 # the playbook reads from the environment, which is exactly what these goldens

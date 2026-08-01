@@ -203,6 +203,44 @@ changing `dotfiles-profile` re-runs it where a second create does not.
 It runs last, after the shell and the editor, because the profile can carry
 configuration for both.
 
+## Organisation checkouts
+
+| Key | Meaning |
+|---|---|
+| `clone-orgs` | Optional. A list of GitHub organisations whose every source repository is cloned to `~/code/<org>/<repo>`. |
+
+**Organisations, not repositories.** The repository list is read from GitHub's
+API on the machine at create time rather than rendered into the playbook, so one
+added upstream arrives on the next create with nothing in `colors.yml` to keep in
+step. That is the whole reason the key takes an org — a rendered list would be a
+list gone stale. A value carrying a `/` or a scheme is refused at build time,
+because the realistic mistake is pasting `org/repo` or a full URL into it.
+
+The call is **unauthenticated**, deliberately: a token would be a credential
+every `create` then needs and every operator then holds. The costs are real and
+stated rather than discovered — private repositories are invisible to it, and the
+anonymous rate limit is 60 requests an hour per address, against one request per
+organisation.
+
+Two filters, applied in different places because the API only offers one.
+`type=sources` drops forks at the server; archived repositories are skipped at
+the clone with an Ansible `when:`, so the run names what it passed over instead
+of quietly producing a shorter list. Both are the same judgement: neither is a
+working copy.
+
+One page of 100 is read, and the `Link:` header is not followed. An organisation
+at or past that boundary **fails the create** rather than cloning its first
+hundred and reporting success — a silently partial checkout is found weeks later,
+on the one repository that was missing.
+
+The clones use `git@github.com:` and `update: false`, like the editor and
+dotfiles clones: they ride the agent `ansible.cfg` forwards, so no private key is
+written to the machine and each checkout can push back, and a later create leaves
+an existing one alone. `git pull` on the machine is how one moves. They run after
+the dotfiles installer, which copies rendered files over `$HOME`, and after the
+credential seeding — this is the longest network step in the play, and a GitHub
+outage should not fail a create before the machine is usable.
+
 ## Shell history
 
 | Key | Meaning |
@@ -344,6 +382,7 @@ renders a playbook that does not mention them at all:
 | `emacs-config-repo` | Emacs, then the configuration cloned over the forwarded agent |
 | `dotfiles-repo` | the clone, then `bb install -p <profile>` applied to `$HOME` |
 | `seed-agent-credentials` | one credential file per named agent, copied from the controller |
+| `clone-orgs` | every source repository of each org, cloned to `~/code/<org>/<repo>` |
 | `atuin-username` | `atuin login`, then `atuin sync` |
 
 Emacs comes from `nixpkgs-unstable#emacs`, the same ref as the terminfo and

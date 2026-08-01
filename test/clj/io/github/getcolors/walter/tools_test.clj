@@ -695,3 +695,93 @@
              (at "- name: Seed the agent credentials")))
       (is (< (at "- name: Seed the agent credentials")
              (at "cmd: atuin sync"))))))
+
+;; ---------------------------------------------------------------------------
+;; organisation checkouts
+
+(deftest the-remote-playbook-omits-org-clones-when-none-are-named
+  (testing "gated in the template, so a project that names no organisation
+           renders a playbook that does not mention GitHub's API at all"
+    (let [rendered (render-remote-playbook {})]
+      (is (not (str/includes? rendered "api.github.com")))
+      (is (not (str/includes? rendered "walter_org_repos"))))))
+
+(deftest only-the-organisation-is-desired-state
+  (testing "the repository list is read on the machine at create time, so one
+           added upstream arrives on the next create with nothing here changed —
+           which is the entire reason this key names an org rather than repos"
+    (is (= ["getcolors"] (tools/clone-orgs {:clone-orgs ["getcolors"]})))
+    (testing "a COLORS_PAR_* overlay arrives as one string, like nix-packages"
+      (is (= ["getcolors" "amiorin"] (tools/clone-orgs {:clone-orgs "getcolors amiorin"}))))
+    (testing "named twice is cloned once — the two would share a path"
+      (is (= ["getcolors"] (tools/clone-orgs {:clone-orgs ["getcolors" "getcolors"]}))))
+    (testing "and it renders as a JSON flow sequence, like the other list keys"
+      (is (= "[\"getcolors\"]" (:clone-orgs-json (tools/data-fn {:profile "p"
+                                                                 :clone-orgs ["getcolors"]}))))
+      (is (nil? (:clone-orgs-json (tools/data-fn {:profile "p"})))))))
+
+(deftest the-checkout-layout-is-code-org-repo
+  (testing "one flat loop carries both halves of the path, so the organisation
+           asked for and the repository answered with cannot drift apart"
+    (let [rendered (render-remote-playbook {:clone-orgs ["getcolors"]})]
+      (is (str/includes? rendered "loop: [\"getcolors\"]"))
+      (is (str/includes? rendered
+                         "dest: \"{{ ansible_env.HOME }}/code/{{ item.0.item }}/{{ item.1.name }}\""))
+      (is (str/includes? rendered "subelements('json')")))))
+
+(deftest the-org-listing-needs-no-credential
+  (testing "these repositories are public, and a token would be a credential
+           every create then needs — so build stays credential-free here too"
+    (let [rendered (render-remote-playbook {:clone-orgs ["getcolors"]})]
+      (is (str/includes? rendered "https://api.github.com/orgs/{{ item }}/repos"))
+      (is (not (str/includes? rendered "Authorization")))
+      (is (not (str/includes? rendered "GITHUB_TOKEN")))
+      (is (str/includes? rendered "changed_when: false")
+          "a GET is `ok`, not `changed`, however many repositories it names"))))
+
+(deftest forks-and-archived-repositories-are-not-working-copies
+  (testing "forks are dropped at the server, where the API has a filter, and
+           archived ones at the clone, where it does not"
+    (let [rendered (render-remote-playbook {:clone-orgs ["getcolors"]})]
+      (is (str/includes? rendered "type=sources"))
+      (is (str/includes? rendered "when: not item.1.archived")
+          "`when` rather than a loop filter, so the run says what it passed over"))))
+
+(deftest a-partial-page-fails-rather-than-cloning-quietly
+  (testing "per_page tops out at 100 and this does not follow the Link header,
+           so an organisation past that boundary would clone a hundred
+           repositories and report success"
+    (let [rendered (render-remote-playbook {:clone-orgs ["getcolors"]})
+          at #(str/index-of rendered %)]
+      (is (str/includes? rendered "per_page=100"))
+      (is (str/includes? rendered "that: item.json | length < 100"))
+      (is (< (at "Refuse to clone a partial page")
+             (at "Clone the organisations' repositories"))
+          "the assertion runs before anything is cloned"))))
+
+(deftest the-org-clones-never-write-a-key-to-the-machine
+  (testing "git@github.com: rather than https://, so they ride the forwarded
+           agent and can push back — and update: false, so a later create does
+           not discard edits made on the machine"
+    (let [rendered (render-remote-playbook {:clone-orgs ["getcolors"]})]
+      (is (str/includes? rendered "repo: \"git@github.com:{{ item.0.item }}/{{ item.1.name }}.git\""))
+      (is (not (str/includes? rendered "https://github.com/")))
+      (is (str/includes? rendered "update: false"))
+      (is (str/includes? rendered "accept_hostkey: true")))))
+
+(deftest the-org-clones-run-after-everything-that-writes-home
+  (testing "the dotfiles installer copies rendered files over $HOME and could
+           land on top of a checkout; the credential seeding is cheap, and this
+           is the longest network step in the play — a GitHub outage should not
+           fail a create before the machine is usable"
+    (let [rendered (render-remote-playbook {:nix-packages ["babashka" "atuin"]
+                                            :dotfiles-repo "git@github.com:me/dotfiles.git"
+                                            :seed-agent-credentials ["claude"]
+                                            :clone-orgs ["getcolors"]
+                                            :atuin-username "someone"})
+          at #(str/index-of rendered %)]
+      (is (< (at "Install the dotfiles profile")
+             (at "- name: Seed the agent credentials")
+             (at "Clone the organisations' repositories")))
+      (is (< (at "Clone the organisations' repositories") (at "cmd: atuin sync"))
+          "atuin stays the last task in the play, for the reason given there"))))

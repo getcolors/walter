@@ -242,6 +242,30 @@ r2-endpoint: REPLACE_ME
 # the installer's own answer when given neither -p nor DOTFILES_PROFILE.
 # dotfiles-profile: default
 
+# --- organisation checkouts --------------------------------------------------
+#
+# Clones every source repository of the named GitHub organisations to
+# ~/code/<org>/<repo>, so a rebuilt machine comes back with the working copies
+# on it rather than fifteen `git clone`s to type.
+#
+# Only the organisation is desired state. The repository list is read from
+# GitHub's API on the machine at create time, so one added upstream arrives on
+# the next create with nothing here to keep in step — which is the whole reason
+# this key names an org rather than repositories.
+#
+# Unauthenticated, so it sees public repositories only and no token is needed;
+# `type=sources` skips forks and archived repositories are skipped at the clone.
+# A single page of 100 is read, and an organisation past that fails the create
+# rather than cloning a silent subset.
+#
+# Same ssh:// reasoning as the editor and dotfiles above, and the same
+# clone-once rule: the checkouts ride the forwarded agent so they can push back,
+# and a later create leaves an existing one alone. `git pull` on the machine is
+# how one moves.
+#
+# clone-orgs:
+#   - your-org
+
 # --- shell history ----------------------------------------------------------
 #
 # Adopts an existing atuin account, so a rebuilt machine can still see the

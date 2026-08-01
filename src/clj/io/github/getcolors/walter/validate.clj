@@ -111,6 +111,7 @@
    :dotfiles-repo :dotfiles-dest :dotfiles-profile
    :atuin-username
    :seed-agent-credentials
+   :clone-orgs
    :oci-image-id])
 
 (defn- leftover-placeholders
@@ -155,6 +156,23 @@
           "run from the project directory rather than overriding it.")]))
 
 (def ^:private instance-id-re #"^ocid1\.instance\.[A-Za-z0-9._-]+$")
+
+(def ^:private github-login-re
+  "A GitHub account name: alphanumerics and interior hyphens, 39 characters at
+  most. Deliberately strict about what it excludes rather than clever about what
+  it allows — the realistic mistakes are pasting `getcolors/walter` or a full
+  https://github.com/getcolors URL into a key that wants the org alone, and both
+  carry a character this rejects."
+  #"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
+
+(defn clone-org-names
+  "The `clone-orgs` entries as plain strings, with the same flat-key string
+  tolerance every list key here has."
+  [opts]
+  (let [orgs (:clone-orgs opts)]
+    (->> (if (sequential? orgs) orgs (str/split (str orgs) #"\s+"))
+         (map (comp str/trim str))
+         (remove str/blank?))))
 
 (defn state-errors
   "Everything wrong with `opts` that does not depend on credentials, as a vector
@@ -204,6 +222,17 @@
         (str ":seed-agent-credentials does not know " (pr-str agent)
              " — walter knows where " (str/join ", " (sort known))
              " keep their credentials, and nothing else")))
+    ;; This key names an organisation, not a repository and not a URL. Anything
+    ;; else is interpolated straight into an API path and a clone URL, where a
+    ;; slash produces a 404 from GitHub half way through a create — legible only
+    ;; if you already know the key's shape. There is no rule about `git` in
+    ;; :nix-packages to go with it: Ubuntu ships one, and the Emacs and dotfiles
+    ;; clones above have always relied on that.
+    (for [org (clone-org-names opts)
+          :when (not (re-matches github-login-re org))]
+      (str ":clone-orgs entry " (pr-str org)
+           " is not a GitHub organisation name — this key takes the org alone, "
+           "as in \"getcolors\", not a URL and not owner/repo"))
     ;; The login shell has to come from the nix profile, and nothing else puts
     ;; anything there — so a shell that is not also in :nix-packages names a
     ;; binary that will not exist. Caught here rather than on the machine,

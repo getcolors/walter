@@ -240,3 +240,30 @@
     (is (not-any? #(str/includes? % "auth.json")
                   (validate/state-errors
                    (assoc base :seed-agent-credentials ["codex"]))))))
+
+(deftest clone-orgs-takes-an-organisation-and-not-a-url
+  (testing "the value is interpolated into an API path and a clone URL, so a
+           slash produces a 404 from GitHub half way through a create — legible
+           only if you already know the key's shape"
+    (doseq [bad ["getcolors/walter"
+                 "https://github.com/getcolors"
+                 "get colors"
+                 "-getcolors"
+                 "getcolors-"]]
+      (let [errs (errors-matching (assoc base :clone-orgs [bad]) #":clone-orgs")]
+        (is (seq errs) (str bad " should be refused"))
+        (is (str/includes? (first errs) (pr-str bad))
+            "the message names the entry, not just the key"))))
+  (testing "a plain organisation name is accepted"
+    (is (= [] (validate/state-errors (assoc base :clone-orgs ["getcolors"]))))
+    (is (= [] (validate/state-errors (assoc base :clone-orgs ["getcolors" "amiorin"])))))
+  (testing "a COLORS_PAR_* overlay arrives as one string, like every other list key"
+    (is (= [] (validate/state-errors (assoc base :clone-orgs "getcolors amiorin"))))
+    (is (seq (errors-matching (assoc base :clone-orgs "getcolors bad/name")
+                              #":clone-orgs"))))
+  (testing "REPLACE_ME is refused as a gated key rather than sent to GitHub"
+    (is (seq (errors-matching (assoc base :clone-orgs "REPLACE_ME")
+                              #"REPLACE_ME"))))
+  (testing "there is no companion :nix-packages rule — Ubuntu ships git, which
+           the Emacs and dotfiles clones have always relied on"
+    (is (= [] (validate/state-errors (assoc base :clone-orgs ["getcolors"]))))))

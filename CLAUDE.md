@@ -179,6 +179,18 @@ is its own evidence, and it is the only guard that also refuses to clobber a
 login made on the machine directly. These are OAuth refresh tokens rotated in
 place, so both overwrites matter.
 
+`clone-orgs` names GitHub organisations, never repositories, and checks each
+one's source repositories out under `~/code/<org>/<repo>`. The list is read from
+GitHub's API **on the machine at create time** rather than rendered, which is the
+point of the key: a repository added upstream arrives on the next create with
+nothing in desired state to keep in step. It is unauthenticated on purpose — a
+token would be a credential every create needs — so it sees public repositories
+only, and it reads one page of 100 and *fails* rather than cloning a silent
+subset past that. Forks are dropped by the API's `type=sources`; archived
+repositories are skipped with an Ansible `when:`, so the run names what it passed
+over. Same `update: false` and ssh:// as the two clones above, for the same
+reasons.
+
 The Emacs half is gated in the **template**, with Selmer's `<% if %>`, not with
 an Ansible `when:`. A project that names no repository therefore renders a
 playbook that does not mention Emacs at all, which is what `scripts/golden.sh`
