@@ -286,10 +286,21 @@ renders a playbook that does not mention them at all:
 | `dotfiles-repo` | the clone, then `bb install -p <profile>` applied to `$HOME` |
 | `atuin-username` | `atuin login`, then `atuin sync` |
 
-Emacs comes from `nixpkgs-unstable#emacs-nox`, the same ref as the terminfo and
-`nix-packages` steps — a terminal build with native compilation and tree-sitter.
+Emacs comes from `nixpkgs-unstable#emacs`, the same ref as the terminfo and
+`nix-packages` steps — the full build, with native compilation and tree-sitter.
+Not `emacs-nox`: that one drops X and with it the image and SVG support a
+configuration may assume, and on a machine that is rebuilt rather than rebooted
+the larger closure costs download time rather than disk.
+
 It and the clone are both skipped when the binary or the checkout is already
-there, so a re-run of `create` costs one SSH round trip.
+there, so a re-run of `create` costs one SSH round trip. That guard cannot tell
+the two Emacs builds apart — both put `emacs` in `bin` — so **changing this
+converges a new machine, not an existing one.** A machine already carrying the
+other build needs `nix profile remove` first, or a delete and create.
+
+Native compilation and any C-based package (`vterm`, tree-sitter grammars built
+on the machine) need a compiler at run time, which Emacs does not bring with it.
+Put `gcc` in `nix-packages` if the configuration needs one.
 
 Packages are **not** pre-fetched. The first interactive launch pulls from
 ELPA/MELPA, native-compiles and clones tree-sitter grammars on its own; doing it
