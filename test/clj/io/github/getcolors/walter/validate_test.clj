@@ -216,3 +216,27 @@
            the remote playbook asserts them at create time instead"
     (is (= [] (validate/state-errors
                (assoc base :nix-packages ["atuin"] :atuin-username "someone"))))))
+
+(deftest only-agents-walter-has-a-path-for-can-be-seeded
+  (testing "an unknown name would render a task that looks like it seeds
+           something and copies nothing, and the symptom is a CLI asking you to
+           log in on a machine you thought was provisioned"
+    (let [errs (errors-matching (assoc base :seed-agent-credentials ["claude" "cursor"])
+                                #":seed-agent-credentials")]
+      (is (seq errs))
+      (is (str/includes? (first errs) "\"cursor\""))
+      (is (str/includes? (first errs) "claude, codex, pi")
+          "the message names what walter does know")))
+  (testing "the three it knows are accepted"
+    (is (= [] (validate/state-errors
+               (assoc base :seed-agent-credentials ["claude" "codex" "pi"])))))
+  (testing "unlike :atuin-username there is no companion :nix-packages rule —
+           nothing on the machine runs these, the playbook only writes a file,
+           and a login seeded for a CLI installed by other means is legitimate"
+    (is (= [] (validate/state-errors
+               (assoc base :seed-agent-credentials ["claude"])))))
+  (testing "the credentials themselves are never validated: they are secrets,
+           and build renders from desired state alone"
+    (is (not-any? #(str/includes? % "auth.json")
+                  (validate/state-errors
+                   (assoc base :seed-agent-credentials ["codex"]))))))

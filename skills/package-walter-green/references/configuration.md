@@ -137,6 +137,16 @@ The list is the machine's **baseline, not an inventory**. Anything installed by
 hand on the machine is invisible here and does not survive a delete; adding a
 name is what makes it come back.
 
+**Unfree packages install.** The one `nix profile add` runs with
+`NIXPKGS_ALLOW_UNFREE=1` and `--impure`, which are needed by each other: the
+variable opens the licence gate, and flake evaluation is pure by default and
+does not read the environment, so without `--impure` the variable is ignored and
+the add still fails. This is what makes `claude-code` installable beside `codex`
+and `pi-coding-agent`, which are not unfree. The cost is that the check is
+relaxed for the **whole list**, so an unfree package added later installs without
+announcing itself. `--impure` changes what evaluation may read, not what is
+fetched — the flakeref is still pinned to the same nixpkgs ref.
+
 `login-shell` must also appear in `nix-packages`, and walter refuses to build
 otherwise — nothing else puts a shell there, so the alternative is an account
 that cannot start a session. The playbook checks again on the machine before it
@@ -221,6 +231,52 @@ a stable enough contract to parse.
 `atuin sync` runs after the login on every create, and is deliberately not
 guarded: pulling history is the point, and a second run undoes nothing.
 
+## Agent CLI credentials
+
+| Key | Meaning |
+|---|---|
+| `seed-agent-credentials` | Optional. A list of agent names whose subscription login is copied from the machine running `create`. |
+
+`claude`, `codex` and `pi` are the names walter knows; anything else fails the
+build rather than rendering a task that copies nothing. Each resolves to **one
+file**, never the directory around it:
+
+| Name | File, under `$HOME` on both sides |
+|---|---|
+| `claude` | `.claude/.credentials.json` |
+| `codex` | `.codex/auth.json` |
+| `pi` | `.pi/agent/auth.json` |
+
+The directories those live in are overwhelmingly session transcripts and caches —
+a few hundred megabytes against a few kilobytes of tokens — and a development
+machine has no use for another machine's history. That is also why the key names
+agents rather than paths: a "copy these local files to the machine" key would be
+the same feature with nothing stopping it pointing at `~/.ssh`.
+
+**Nothing here is a secret and nothing is rendered.** Only the agent names are
+desired state; the files are read from the operator's home directory at create
+time, so `build` stays credential-free and no token ever reaches `.colors/`. The
+copy is `no_log`, because `ansible-playbook --diff` prints a copy module's file
+content and that content is a bearer token.
+
+**A missing file is reported and skipped, by name.** A create from CI, or from a
+laptop that has not logged in, still succeeds and leaves those CLIs logged out —
+which is the behaviour of a machine that was never seeded at all.
+
+**Seeding happens once and never repairs.** The guard is `force: false` on the
+copy, deliberately *not* a `~/.local/state/walter` stamp like the atuin login:
+the credential file is its own evidence, and watching it answers the question a
+stamp cannot — whether *this machine* has a login, rather than whether walter
+once wrote one. These are OAuth refresh tokens the CLI rotates in place, so two
+overwrites have to be prevented, and a stamp only prevents the first: a token the
+machine refreshed for itself, and a login made on the machine directly, which a
+stamp would clobber the first time it ran. When a machine's tokens expire, log in
+there, or delete the file there and run `create` again.
+
+Note that seeding a shared account means two machines refreshing against one
+refresh token, and `~/.pi/agent/auth.json` in particular can hold long-lived API
+keys alongside the OAuth triple.
+
 ## State backends
 
 | Backend | Keys | Credentials |
@@ -284,6 +340,7 @@ renders a playbook that does not mention them at all:
 | `corepack-packages` | `corepack enable`, then `asdf reshim nodejs` |
 | `emacs-config-repo` | Emacs, then the configuration cloned over the forwarded agent |
 | `dotfiles-repo` | the clone, then `bb install -p <profile>` applied to `$HOME` |
+| `seed-agent-credentials` | one credential file per named agent, copied from the controller |
 | `atuin-username` | `atuin login`, then `atuin sync` |
 
 Emacs comes from `nixpkgs-unstable#emacs`, the same ref as the terminfo and

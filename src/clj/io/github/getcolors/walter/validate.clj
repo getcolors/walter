@@ -43,6 +43,29 @@
   [opts]
   (contains? stoppable (str (:provider-compute opts))))
 
+(def agent-credential-paths
+  "Agent CLIs walter can carry a subscription login for, and the one file each
+  keeps it in — relative to $HOME, because both sides read the same path under
+  whichever home they find themselves in and the two homes differ: the
+  controller's is the operator's, the machine's is the login user's.
+
+  One file per agent, never the directory holding it. All three of ~/.claude,
+  ~/.codex and ~/.pi are overwhelmingly session transcripts and caches — a few
+  hundred megabytes against a few kilobytes of tokens — and copying those to a
+  development machine would put every conversation held on the workstation onto
+  a host in a shared subnet, for no benefit.
+
+  A map here rather than paths in colors.yml, and that is the reason this key
+  names agents rather than files: a `copy these local paths to the machine` key
+  would be the same feature with nothing stopping it pointing at ~/.ssh.
+
+  Walter seeds these and does nothing else with them. It never reads a value,
+  and no rule in this namespace can — they are secrets, and `build` renders from
+  desired state alone."
+  {"claude" ".claude/.credentials.json"
+   "codex" ".codex/auth.json"
+   "pi" ".pi/agent/auth.json"})
+
 (defn- entry
   [opts slot]
   (get-in providers [slot (get opts slot)]))
@@ -87,6 +110,7 @@
    :emacs-config-repo :emacs-config-dest
    :dotfiles-repo :dotfiles-dest :dotfiles-profile
    :atuin-username
+   :seed-agent-credentials
    :oci-image-id])
 
 (defn- leftover-placeholders
@@ -164,6 +188,22 @@
                   (and (integer? (:power-wait-seconds opts))
                        (pos? (:power-wait-seconds opts))))
       [":power-wait-seconds must be a positive integer"])
+    ;; An agent walter has no path for would render a task that looks like it
+    ;; seeds something and copies nothing, and the symptom is a CLI asking you
+    ;; to log in on a machine you thought was provisioned. Nothing on the
+    ;; machine runs these credentials, so unlike :atuin-username there is no
+    ;; companion rule about :nix-packages — the playbook only writes a file, and
+    ;; a login seeded for a CLI installed by some other means is legitimate.
+    (let [known (set (keys agent-credential-paths))
+          named (let [a (:seed-agent-credentials opts)]
+                  (->> (if (sequential? a) a (str/split (str a) #"\s+"))
+                       (map (comp str/trim str))
+                       (remove str/blank?)))]
+      (for [agent named
+            :when (not (contains? known agent))]
+        (str ":seed-agent-credentials does not know " (pr-str agent)
+             " — walter knows where " (str/join ", " (sort known))
+             " keep their credentials, and nothing else")))
     ;; The login shell has to come from the nix profile, and nothing else puts
     ;; anything there — so a shell that is not also in :nix-packages names a
     ;; binary that will not exist. Caught here rather than on the machine,

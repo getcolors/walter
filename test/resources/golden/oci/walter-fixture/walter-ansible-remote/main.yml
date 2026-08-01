@@ -119,11 +119,29 @@
     # so one warning per package means nothing was installed. Counting them is
     # what keeps a converged machine reporting ok rather than a change it did
     # not make.
+    #
+    # NIXPKGS_ALLOW_UNFREE and --impure travel together and are needed by each
+    # other: the variable is what opens the licence gate, and flake evaluation
+    # is pure by default and does not read the environment at all, so without
+    # --impure the variable is silently ignored and the add still fails.
+    #
+    # They are here because some of what a development machine wants is unfree —
+    # `claude-code` is, where `codex` and `pi-coding-agent` are not. One shared
+    # invocation is what makes nix resolve the set together, so the alternative
+    # was a second, --impure task and a second list in colors.yml to feed it.
+    #
+    # The cost, stated rather than hidden: this relaxes the licence check for
+    # every name in nix-packages, not only the ones that need it, so an unfree
+    # package added later installs without ever announcing itself. --impure is
+    # the narrower of the two — it lets evaluation read the environment, and
+    # changes nothing about what is fetched, since the flakeref is still pinned
+    # to the same nixpkgs ref.
     - name: Install the project's nix packages
       ansible.builtin.command:
-        cmd: nix profile add github:NixOS/nixpkgs/nixpkgs-unstable#asdf-vm github:NixOS/nixpkgs/nixpkgs-unstable#ripgrep github:NixOS/nixpkgs/nixpkgs-unstable#fish github:NixOS/nixpkgs/nixpkgs-unstable#babashka github:NixOS/nixpkgs/nixpkgs-unstable#atuin
+        cmd: nix profile add --impure github:NixOS/nixpkgs/nixpkgs-unstable#asdf-vm github:NixOS/nixpkgs/nixpkgs-unstable#ripgrep github:NixOS/nixpkgs/nixpkgs-unstable#fish github:NixOS/nixpkgs/nixpkgs-unstable#babashka github:NixOS/nixpkgs/nixpkgs-unstable#atuin
       environment:
         PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+        NIXPKGS_ALLOW_UNFREE: "1"
       register: walter_nix_packages
       changed_when: >-
         walter_nix_packages.stderr_lines
@@ -319,9 +337,17 @@
     #
     # Not `become` — the profile has to be the login user's, or Emacs lands in
     # root's and `ssh walter-oci` cannot see it.
+    # The full `emacs`, not `emacs-nox`. The nox build drops X and with it the
+    # image and SVG support some configurations assume, and the larger closure
+    # costs download time on a machine that is rebuilt rather than rebooted.
+    #
+    # `creates` cannot tell the two apart — both put `emacs` in bin — so a
+    # machine that already has one keeps it. Changing this attribute converges a
+    # new machine, not an existing one; that needs `nix profile remove` first,
+    # or a delete and create.
     - name: Install Emacs
       ansible.builtin.command:
-        cmd: nix profile install github:NixOS/nixpkgs/nixpkgs-unstable#emacs-nox
+        cmd: nix profile install github:NixOS/nixpkgs/nixpkgs-unstable#emacs
         creates: "{{ ansible_env.HOME }}/.nix-profile/bin/emacs"
       environment:
         PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
@@ -416,6 +442,101 @@
           Written by walter. Its presence is what stops `bb install -p ubuntu`
           running again and copying rendered files over edits made on this machine.
           Delete it to reinstall the profile on the next create.
+
+
+    # Subscription logins for the agent CLIs, carried from the workstation that
+    # runs create so the machine is usable without a browser on it.
+    #
+    # One file per agent and never the directory around it. ~/.claude, ~/.codex
+    # and ~/.pi are mostly session transcripts — 279 MB of them on the
+    # workstation this was written against, against 9 KB of actual tokens — and
+    # a development machine has no business holding another machine's history.
+    # validate/agent-credential-paths is where the one path per agent is named.
+    #
+    # Placed after the dotfiles above, whose installer copies rendered files
+    # over $HOME and could otherwise land on top of these, and before atuin,
+    # which stays the last task in the play for the reason given there.
+    #
+    # Nothing here is rendered. The files are read from the controller at play
+    # time, so `build` stays credential-free and no token ever reaches .colors/.
+    - name: Look for the agent credentials on this workstation
+      ansible.builtin.stat:
+        path: "{{ lookup('env', 'HOME') }}/{{ item.path }}"
+      loop: [{"agent":"claude","path":".claude/.credentials.json"},{"agent":"codex","path":".codex/auth.json"},{"agent":"pi","path":".pi/agent/auth.json"}]
+      loop_control:
+        label: "{{ item.agent }}"
+      delegate_to: localhost
+      # Explicit rather than inherited: this reads the operator's home
+      # directory, and it should keep doing that if the play ever grows a
+      # play-level become.
+      become: false
+      changed_when: false
+      register: walter_agent_credentials
+
+    # Named, not counted. "2 of 3 seeded" does not tell you which CLI is about
+    # to ask you to log in.
+    #
+    # A create from CI, or from a colleague's laptop, has none of these files
+    # and is not a broken create — it is the machine's pre-existing behaviour,
+    # where every agent CLI starts logged out. So this reports and continues.
+    - name: Report the agent credentials this workstation cannot supply
+      ansible.builtin.debug:
+        msg: >-
+          Not seeded, because the machine running create has no such file:
+          {{ walter_agent_missing | join(', ') }}.
+          Those CLIs start logged out. Log in on the machine itself, or log in
+          here and run create again.
+      vars:
+        walter_agent_missing: >-
+          {{ walter_agent_credentials.results
+             | rejectattr('stat.exists')
+             | map(attribute='item.agent') | list }}
+      when: walter_agent_missing | length > 0
+
+    # 0700 because the only things in these directories are credentials and
+    # per-tool state. The CLI would create them itself on first run; doing it
+    # here is what lets the copy below name a destination that exists.
+    - name: Ensure the agent configuration directories exist
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/{{ item.item.path | dirname }}"
+        state: directory
+        mode: "0700"
+      loop: "{{ walter_agent_credentials.results | selectattr('stat.exists') | list }}"
+      loop_control:
+        label: "{{ item.item.agent }}"
+
+    # `force: false` is the entire idempotency guard, and it is deliberately not
+    # a ~/.local/state/walter stamp like the atuin login and the dotfiles
+    # install above. Those need a stamp because neither leaves a file to watch —
+    # atuin keeps its session inside meta.db, and the dotfiles installer writes
+    # files indistinguishable from hand-edited ones. Here the credential file
+    # *is* the evidence, and watching it answers the question a stamp cannot:
+    # whether this machine has a login, rather than whether walter once wrote
+    # one.
+    #
+    # That difference is the whole point, because these are OAuth refresh tokens
+    # the CLI rotates in place. Two overwrites have to be prevented, and a stamp
+    # only prevents the first: a token the machine refreshed for itself, and a
+    # login made on the machine directly — which a stamp would clobber the first
+    # time it ran, potentially rotating the workstation's own session out.
+    #
+    # The accepted cost is that this seeds an empty machine once and never
+    # repairs one. When a machine's tokens expire, log in there, or delete the
+    # file there and run create again.
+    #
+    # no_log because `ansible-playbook --diff` prints a copy module's file
+    # content, and that content is a bearer token. The stat task above is what
+    # keeps this debuggable in spite of it: it already named every file found.
+    - name: Seed the agent credentials
+      ansible.builtin.copy:
+        src: "{{ lookup('env', 'HOME') }}/{{ item.item.path }}"
+        dest: "{{ ansible_env.HOME }}/{{ item.item.path }}"
+        mode: "0600"
+        force: false
+      loop: "{{ walter_agent_credentials.results | selectattr('stat.exists') | list }}"
+      loop_control:
+        label: "{{ item.item.agent }}"
+      no_log: true
 
 
     # Shell history, synced to an existing account. A replacement machine that

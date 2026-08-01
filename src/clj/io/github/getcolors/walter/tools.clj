@@ -247,6 +247,29 @@
          (remove str/blank?)
          vec)))
 
+(defn seed-agent-credentials
+  "The `seed-agent-credentials` entries, resolved to {:agent :path} against
+  `validate/agent-credential-paths`.
+
+  The path is relative to $HOME and the playbook prefixes each side with a
+  different one — the controller's for the source, the machine's for the
+  destination — so one entry describes both ends of the copy and they cannot
+  drift apart.
+
+  Same string tolerance as `nix-package-names`, for the same `COLORS_PAR_*`
+  reason. Unknown names drop out here and are refused by validate.clj, so a typo
+  fails the build rather than rendering a task that copies nothing."
+  [opts]
+  (let [names (:seed-agent-credentials opts)]
+    (->> (if (sequential? names) names (str/split (str names) #"\s+"))
+         (map (comp str/trim str))
+         (remove str/blank?)
+         distinct
+         (keep (fn [agent]
+                 (when-let [path (get validate/agent-credential-paths agent)]
+                   {:agent agent :path path})))
+         vec)))
+
 (defn data-fn
   "Template data for the Ansible stages: opts, with the address, login and alias
   guaranteed present so a build renders without ever reaching for state.
@@ -272,6 +295,14 @@
                             (when (seq tools) (json/generate-string tools)))
          :corepack-packages-json (let [pkgs (corepack-packages opts)]
                                    (when (seq pkgs) (json/generate-string pkgs)))
+         ;; JSON for the same reason as asdf-tools above: one Ansible `loop`
+         ;; over a flow sequence rather than N generated tasks whose
+         ;; indentation can drift. Only the agent name and its relative path —
+         ;; there is nothing secret in this, and the credentials themselves are
+         ;; read from the controller at play time and never rendered.
+         :seed-agent-credentials-json (let [agents (seed-agent-credentials opts)]
+                                        (when (seq agents)
+                                          (json/generate-string agents)))
          :emacs-config-dest (or (not-empty (str (:emacs-config-dest opts)))
                                 "~/.config/emacs")
          ;; Defaulted for the same reason as the Emacs destination: a repo with

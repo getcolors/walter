@@ -141,7 +141,21 @@ transition completes.
 |---|---|---|
 | `:walter/compute` | `walter-compute` | ONCE's provider template + walter's `outputs.tf`; outputs ip/user/sudoer/name |
 | `:walter/ansible-local` | `walter-ansible-local` | the managed `Host <profile>` block in `~/.ssh/config` |
-| `:walter/ansible-remote` | `walter-ansible-remote` | ping, nix, terminfo, and — when `emacs-config-repo` is set — Emacs and its clone |
+| `:walter/ansible-remote` | `walter-ansible-remote` | ping, nix, terminfo, and — when the gating key is set — packages, shell, runtimes, Emacs, dotfiles, agent credentials, atuin |
+
+`nix profile add` runs with `NIXPKGS_ALLOW_UNFREE=1` and `--impure` so unfree
+attributes (`claude-code`) install beside free ones in the one invocation that
+lets nix resolve the set together. The two flags need each other — flake
+evaluation is pure by default and would ignore the variable — and the cost is
+that the licence check is relaxed for the whole list.
+
+`seed-agent-credentials` copies one file per named agent from the controller,
+never the directory around it: `validate/agent-credential-paths` is the registry,
+and those directories are mostly session transcripts. The guard is `force: false`
+rather than a `~/.local/state/walter` stamp, deliberately — the credential file
+is its own evidence, and it is the only guard that also refuses to clobber a
+login made on the machine directly. These are OAuth refresh tokens rotated in
+place, so both overwrites matter.
 
 The Emacs half is gated in the **template**, with Selmer's `<% if %>`, not with
 an Ansible `when:`. A project that names no repository therefore renders a

@@ -105,6 +105,18 @@ dotfiles-repo: git@github.com:fixture/dotfiles.git
 dotfiles-dest: ~/code/fixture/dotfiles
 dotfiles-profile: ubuntu
 
+# Set so every golden renders the credential-seeding block, including the
+# multi-agent loop. Nothing secret is involved: only the agent names are desired
+# state, and the files they select are read from the operator's home directory
+# at create time — which is exactly what these goldens exist to prove, since a
+# token appearing under .colors/ would show up here as a diff. The absent branch
+# is `the-remote-playbook-omits-agent-credentials-when-none-are-named` in
+# tools_test.
+seed-agent-credentials:
+  - claude
+  - codex
+  - pi
+
 # Set so every golden renders the atuin login. Only the username belongs in
 # desired state — the password and the encryption key are COLORS_PAR_* secrets
 # the playbook reads from the environment, which is exactly what these goldens

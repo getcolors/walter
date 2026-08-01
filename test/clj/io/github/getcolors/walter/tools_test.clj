@@ -192,11 +192,27 @@
            in one invocation, so the profile takes a single generation"
     (let [rendered (render-remote-playbook {:nix-packages ["asdf-vm" "ripgrep" "fd" "fish"]})]
       (is (str/includes? rendered
-                         (str "cmd: nix profile add "
+                         (str "cmd: nix profile add --impure "
                               "github:NixOS/nixpkgs/nixpkgs-unstable#asdf-vm "
                               "github:NixOS/nixpkgs/nixpkgs-unstable#ripgrep "
                               "github:NixOS/nixpkgs/nixpkgs-unstable#fd "
                               "github:NixOS/nixpkgs/nixpkgs-unstable#fish"))))))
+
+(deftest unfree-packages-are-installable-and-the-two-flags-travel-together
+  (testing "some of what a development machine wants is unfree — claude-code is,
+           where codex and pi-coding-agent are not — and one shared invocation
+           is what makes nix resolve the set together, so the gate is opened for
+           the whole list rather than by splitting it in two"
+    (let [rendered (render-remote-playbook {:nix-packages ["claude-code" "codex"]})]
+      (is (str/includes? rendered "NIXPKGS_ALLOW_UNFREE: \"1\""))
+      (is (str/includes? rendered "nix profile add --impure")
+          "flake evaluation is pure by default and does not read the
+           environment, so without --impure the variable is silently ignored
+           and the add still fails on the licence")
+      (testing "the flakeref is untouched, so --impure changes what evaluation
+               may read and not what is fetched"
+        (is (str/includes? rendered
+                           "github:NixOS/nixpkgs/nixpkgs-unstable#claude-code"))))))
 
 (deftest re-adding-is-safe-so-no-creates-guard-is-needed
   (testing "nix profile add warns and exits 0 on a flakeref already in the
@@ -274,13 +290,13 @@
     (let [rendered (render-remote-playbook {:emacs-config-repo "git@github.com:me/emacs.d.git"
                                             :emacs-config-dest "~/.config/neoemacs"})
           at #(str/index-of rendered %)]
-      (is (str/includes? rendered "nixpkgs-unstable#emacs-nox")
+      (is (str/includes? rendered "nixpkgs-unstable#emacs")
           "from the same nixpkgs ref as everything else here")
       (is (str/includes? rendered "repo: \"git@github.com:me/emacs.d.git\""))
       (is (str/includes? rendered "dest: \"~/.config/neoemacs\""))
       (is (str/includes? rendered "update: false")
           "a development machine's working copy is not a deployment")
-      (is (< (at "install.determinate.systems") (at "#emacs-nox") (at "repo:"))))))
+      (is (< (at "install.determinate.systems") (at "#emacs") (at "repo:"))))))
 
 (deftest the-clone-never-writes-a-key-to-the-machine
   (testing "ansible.cfg forwards the agent, so the clone speaks SSH and can push
@@ -316,7 +332,7 @@
       (is (str/includes? rendered "cmd: bb install -p ubuntu"))
       (is (str/includes? rendered "chdir: \"~/code/me/dotfiles\"")
           "chdir is type: path, so Ansible expanduser's it and no shell is needed")
-      (is (< (at "Set the login shell") (at "#emacs-nox") (at "Clone the dotfiles"))))))
+      (is (< (at "Set the login shell") (at "#emacs") (at "Clone the dotfiles"))))))
 
 (deftest the-dotfiles-clone-does-not-discard-work-done-on-the-machine
   (testing "same update: false as the Emacs clone — a development machine's
@@ -495,3 +511,103 @@
       (is (not (str/includes? rendered "&quot;")))
       (is (str/includes? rendered "loop: [{\"name\":\"nodejs\""))
       (is (str/includes? rendered "loop: [\"pnpm\"]")))))
+
+;; ---------------------------------------------------------------------------
+;; agent credentials
+
+(deftest the-remote-playbook-omits-agent-credentials-when-none-are-named
+  (testing "gated in the template, so a project that names no agent renders a
+           playbook that does not mention their credential files at all"
+    (let [rendered (render-remote-playbook {})]
+      (is (not (str/includes? rendered "Seed the agent credentials")))
+      (is (not (str/includes? rendered ".credentials.json")))
+      (is (not (str/includes? rendered "walter_agent_credentials"))))))
+
+(deftest agents-resolve-to-one-file-each-not-to-their-directory
+  (testing "~/.claude, ~/.codex and ~/.pi are overwhelmingly session
+           transcripts and caches — hundreds of megabytes against a few
+           kilobytes of tokens — so walter names the credential file and never
+           the directory holding it"
+    (is (= [{:agent "claude" :path ".claude/.credentials.json"}
+            {:agent "codex" :path ".codex/auth.json"}
+            {:agent "pi" :path ".pi/agent/auth.json"}]
+           (tools/seed-agent-credentials
+            {:seed-agent-credentials ["claude" "codex" "pi"]})))
+    (testing "an unknown name drops out here and is refused by validate.clj"
+      (is (= [{:agent "codex" :path ".codex/auth.json"}]
+             (tools/seed-agent-credentials
+              {:seed-agent-credentials ["codex" "cursor"]}))))
+    (testing "a COLORS_PAR_* overlay arrives as one string, like nix-packages"
+      (is (= 2 (count (tools/seed-agent-credentials
+                       {:seed-agent-credentials "claude pi"})))))
+    (testing "named twice is copied once"
+      (is (= 1 (count (tools/seed-agent-credentials
+                       {:seed-agent-credentials ["pi" "pi"]})))))))
+
+(deftest the-two-homes-are-resolved-on-different-sides
+  (testing "the source home is the operator's and the destination home is the
+           login user's, so one relative path describes both ends of the copy
+           and they cannot drift apart"
+    (let [rendered (render-remote-playbook {:seed-agent-credentials ["claude"]})]
+      (is (str/includes? rendered
+                         "src: \"{{ lookup('env', 'HOME') }}/{{ item.item.path }}\"")
+          "lookup runs on the controller, whichever host the task targets")
+      (is (str/includes? rendered
+                         "dest: \"{{ ansible_env.HOME }}/{{ item.item.path }}\"")
+          "ansible_env is the machine's, from the facts the play gathers")
+      (is (str/includes? rendered "delegate_to: localhost")
+          "the source is stat'd on the workstation, not on the machine"))))
+
+(deftest no-credential-ever-reaches-a-rendered-file
+  (testing "the files are read from the controller at play time, so `build`
+           stays credential-free and nothing under .colors/ holds a token — the
+           goldens are what hold this still"
+    (let [rendered (render-remote-playbook {:seed-agent-credentials ["claude" "codex" "pi"]})]
+      (is (str/includes? rendered "loop: [{\"agent\":\"claude\""))
+      (testing "only names and relative paths are interpolated"
+        (is (not (str/includes? rendered "accessToken")))
+        (is (not (str/includes? rendered "refresh_token")))
+        (is (not (str/includes? rendered "COLORS_PAR"))))
+      (testing "ansible-playbook --diff prints a copy module's file content, and
+               that content is a bearer token"
+        (is (str/includes? rendered "no_log: true"))))))
+
+(deftest seeding-never-overwrites-a-login-the-machine-already-has
+  (testing "these are OAuth refresh tokens the CLI rotates in place, so two
+           overwrites have to be prevented: one the machine refreshed for
+           itself, and one made on the machine directly"
+    (let [rendered (render-remote-playbook {:seed-agent-credentials ["claude"]})
+          at #(str/index-of rendered %)]
+      (is (str/includes? rendered "force: false")
+          "the credential file is its own evidence")
+      (testing "and so, unlike the atuin login and the dotfiles install, this
+               needs no ~/.local/state/walter stamp — those need one because
+               neither leaves a file to watch, where a stamp here would answer
+               whether walter once wrote a login rather than whether the machine
+               has one, and clobber a direct login the first time it ran"
+        (is (not (str/includes? rendered ".local/state/walter/agent"))))
+      (testing "0600 on the file and 0700 on the directory holding it"
+        (is (str/includes? rendered "mode: \"0600\""))
+        (is (< (at "Ensure the agent configuration directories exist")
+               (at "- name: Seed the agent credentials"))
+            "the destination has to exist before the copy names it"))
+      (testing "a missing source is reported and skipped, so a create from CI or
+               a colleague's laptop still succeeds with those CLIs logged out"
+        (is (str/includes? rendered "rejectattr('stat.exists')"))
+        (is (str/includes? rendered "selectattr('stat.exists')"))
+        (is (< (at "Report the agent credentials this workstation cannot supply")
+               (at "- name: Seed the agent credentials")))))))
+
+(deftest credentials-are-seeded-after-dotfiles-and-before-atuin
+  (testing "the dotfiles installer copies rendered files over $HOME and could
+           otherwise land on top of these; atuin stays the last task in the play
+           for the reason given there"
+    (let [rendered (render-remote-playbook {:nix-packages ["babashka" "atuin"]
+                                            :dotfiles-repo "git@github.com:me/dotfiles.git"
+                                            :seed-agent-credentials ["claude"]
+                                            :atuin-username "someone"})
+          at #(str/index-of rendered %)]
+      (is (< (at "Install the dotfiles profile")
+             (at "- name: Seed the agent credentials")))
+      (is (< (at "- name: Seed the agent credentials")
+             (at "cmd: atuin sync"))))))
