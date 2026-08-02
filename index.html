@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="A remote development machine, as a green Package Skill."><title>walter — Package Skill</title><style>:root{color-scheme:light dark;font:17px/1.6 system-ui,sans-serif}body{max-width:760px;margin:auto;padding:3rem 1.25rem}h1{font-size:clamp(2.5rem,8vw,5rem);margin:.2em 0}a{color:#36a269}code,pre{font-family:ui-monospace,monospace}pre{padding:1rem;overflow:auto;background:#8882;border-radius:.6rem}.tag{font-weight:700;color:#36a269}</style></head><body><main><p class="tag">GREEN PACKAGE SKILL</p><h1>walter</h1><p>Provision and operate one remote development machine, maintain its SSH alias, and power supported OCI machines off and on when they are not in use.</p><pre><code>npx skills add getcolors/walter
+cp .agents/skills/package-walter-green/walter walter
+./walter build
+./walter create --dry-run
+./walter stop
+./walter start</code></pre><p>Desired state is <code>colors.yml</code>; credentials arrive only through <code>COLORS_PAR_*</code>. Real create and delete operations require explicit care.</p><p><a href="https://github.com/getcolors/walter">Source and full documentation on GitHub</a></p></main></body></html>
