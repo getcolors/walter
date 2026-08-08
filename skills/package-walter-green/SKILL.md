@@ -83,9 +83,12 @@ directory.
 
 ## What create puts on the machine
 
-Every machine gets **nix** and a **Ghostty terminfo entry**, unconditionally.
-Tell the user about nix rather than proposing walter changes for other tooling:
-once it is there, anything else is `nix profile install` and needs nothing from
+Every machine gets **nix**, a **Ghostty terminfo entry**, and kernel networking
+settings for unprivileged `cloudflared`, unconditionally. The sysctls allow the
+login user's primary group to use ping sockets and raise QUIC's receive/send
+buffer ceilings, so a tunnel should run without sudo or those warnings. Tell
+the user about nix rather than proposing walter changes for other tooling: once
+it is there, anything else is `nix profile install` and needs nothing from
 walter.
 
 The terminfo is why `Terminal type xterm-ghostty is not defined` does not

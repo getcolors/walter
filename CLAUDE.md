@@ -141,7 +141,7 @@ transition completes.
 |---|---|---|
 | `:walter/compute` | `walter-compute` | ONCE's provider template + walter's `outputs.tf`; outputs ip/user/sudoer/name |
 | `:walter/ansible-local` | `walter-ansible-local` | the managed `Host <profile>` block in `~/.ssh/config` |
-| `:walter/ansible-remote` | `walter-ansible-remote` | ping, nix, terminfo, and — when the gating key is set — packages, shell, runtimes, Emacs, dotfiles, agent credentials, atuin |
+| `:walter/ansible-remote` | `walter-ansible-remote` | ping, unprivileged cloudflared sysctls, nix, terminfo, and — when the gating key is set — packages, shell, runtimes, Emacs, dotfiles, agent credentials, atuin |
 | `:walter/emacs-packages` | `walter-emacs-packages` | starts the ELPA/MELPA bootstrap and does **not** wait for it |
 
 `nix profile add` runs with `NIXPKGS_ALLOW_UNFREE=1` and `--impure` so unfree

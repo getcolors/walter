@@ -169,6 +169,19 @@
       (is (str/includes? rendered "creates: /nix/receipt.json")
           "the receipt is what makes a re-run a no-op instead of a reinstall"))))
 
+(deftest the-remote-playbook-configures-unprivileged-cloudflared
+  (testing "cloudflared can use its optional ICMP proxy and QUIC socket buffers
+           without being run as root"
+    (let [rendered (render-remote-playbook {})]
+      (is (str/includes? rendered
+                         "net.ipv4.ping_group_range = {{ ansible_user_gid }} {{ ansible_user_gid }}")
+          "only the login user's primary group receives ping-socket access")
+      (is (str/includes? rendered "net.core.rmem_max = 7500000"))
+      (is (str/includes? rendered "net.core.wmem_max = 7500000"))
+      (is (str/includes? rendered
+                         "cmd: sysctl --load /etc/sysctl.d/90-cloudflared.conf")
+          "create also repairs runtime drift instead of waiting for a reboot"))))
+
 (deftest the-remote-playbook-installs-a-terminfo-database
   (testing "TERM travels over SSH and the terminfo database does not, so a
            machine whose distro predates the operator's terminal cannot run

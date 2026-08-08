@@ -32,12 +32,13 @@ project keeps running the old pin while `skills-lock.json` claims the new one.
 
 ## What v1 does and does not do
 
-It creates a machine, gets you onto it, and installs **nix** plus a **terminfo
-entry for Ghostty** — both on every machine, gated on nothing. nix, because with
-it present anything else is one `nix profile install` away and needs no change
-to walter; terminfo, because `TERM` travels over SSH and the terminfo database
-does not, so without it `vim`, `top` and `less` all die with `Terminal type
-xterm-ghostty is not defined`.
+It creates a machine, gets you onto it, and installs **nix**, a **terminfo entry
+for Ghostty**, and **cloudflared kernel networking settings** — all on every
+machine, gated on nothing. nix makes anything else one `nix profile install`
+away; terminfo keeps `vim`, `top` and `less` working when `TERM` travels over
+SSH; and the sysctls grant the login user's group ICMP sockets and QUIC-sized
+buffers so `cloudflared` needs no sudo and emits no permissions or buffer
+warnings.
 
 Set `emacs-config-repo` and the remote playbook also installs Emacs from a
 pinned nixpkgs and clones that configuration over the forwarded agent, so no
