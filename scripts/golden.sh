@@ -41,6 +41,14 @@ build_variant() {
     cd "$root"
     env COLORS_PAR_WORKDIR="$tmp/$variant" "$@" bb walter build -f "$state" >/dev/null
   )
+  # No rendered artefact may carry a real secret into a committed golden.
+  # Checked before --accept copies anything. POSIX grep on purpose: a missing
+  # binary inside `if` is simply false, so the guard must not depend on one
+  # that may be absent.
+  if grep -rEq 'client-key-data|client-certificate-data|BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY|github_pat_|ghp_|gho_|ghu_|ghs_|ghr_' "$tmp/$variant"; then
+    echo "golden: FAIL — $variant rendered a credential-shaped value" >&2
+    exit 1
+  fi
   if [ "$accept" = 1 ]; then
     rm -rf "${goldens:?}/$variant"
     mkdir -p "$goldens/$variant"
