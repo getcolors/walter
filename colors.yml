@@ -34,7 +34,7 @@
 # Names the work directory, the OpenTofu state keys, and the ~/.ssh/config Host
 # alias. Keep it unique across every project on this machine: it is the only
 # thing separating this machine's state from another project's.
-profile: walter
+profile: walter-example
 workdir: .colors
 
 provider-compute: oci # digitalocean | hcloud | oci | yandex | no-infra
