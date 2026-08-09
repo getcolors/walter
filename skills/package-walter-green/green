@@ -11,7 +11,7 @@
 ;; managed ssh alias, and overriding it from the environment can only point
 ;; walter at another project's state.
 ;;
-;; This file is both the skill payload and the repository entry point — ./walter
+;; This file is both the skill payload and the repository entry point — ./green
 ;; in the project root is a symlink to it. It deliberately holds no logic of its
 ;; own: validation, the graph and the steps all live in the `walter` library,
 ;; where the test suite reaches them. A copied payload is the one place in this
@@ -24,7 +24,7 @@
 
 (def script-dir
   (let [file (if (= "NO_SOURCE_PATH" *file*)
-               (fs/path (fs/cwd) "walter")
+               (fs/path (fs/cwd) "green")
                (fs/path *file*))]
     (str (fs/parent (fs/canonicalize file)))))
 
@@ -159,7 +159,7 @@
 (def commands #{"build" "create" "delete" "stop" "start"})
 
 (def usage
-  (str "Usage: walter <build|create|delete|stop|start> "
+  (str "Usage: green <build|create|delete|stop|start> "
        "[-f|--file colors.yml] [--dry-run]\n"
        "\n"
        "  build    render the work directory only — no provider is contacted\n"

@@ -39,7 +39,7 @@ build_variant() {
   shift
   (
     cd "$root"
-    env COLORS_PAR_WORKDIR="$tmp/$variant" "$@" bb walter build -f "$state" >/dev/null
+    env COLORS_PAR_WORKDIR="$tmp/$variant" "$@" ./green build -f "$state" >/dev/null
   )
   # No rendered artefact may carry a real secret into a committed golden.
   # Checked before --accept copies anything. POSIX grep on purpose: a missing

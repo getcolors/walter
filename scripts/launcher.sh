@@ -14,7 +14,7 @@ set -euo pipefail
 # just resolves the wrong thing.
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-launcher="$root/skills/package-walter-green/walter"
+launcher="$root/skills/package-walter-green/green"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -57,8 +57,8 @@ ok "carries no step, tofu or ansible logic"
 
 copy="$tmp/bare"
 mkdir -p "$copy"
-cp "$launcher" "$copy/walter"
-chmod +x "$copy/walter"
+cp "$launcher" "$copy/green"
+chmod +x "$copy/green"
 
 pin=$(grep -oE '\(def \^:private walter-sha (nil|"[0-9a-f]{40}")\)' "$launcher" || true)
 [ -n "$pin" ] || fail "could not read the launcher's own pin declaration"
@@ -66,7 +66,7 @@ ok "declares a walter-sha pin site"
 
 if echo "$pin" | grep -q 'nil'; then
   # Unpinned: the launcher must refuse and name the override, not guess.
-  out=$( (cd "$copy" && ./walter build 2>&1) || true )
+  out=$( (cd "$copy" && ./green build 2>&1) || true )
   echo "$out" | grep -q 'WALTER_LIB_ROOT' ||
     fail "an unpinned launcher must name WALTER_LIB_ROOT; got: $out"
   ok "an unpinned launcher explains itself instead of failing obscurely"
@@ -92,7 +92,7 @@ no-infra-compute-sudoer: root
 no-infra-compute-uid: 1000
 EOF
 
-out=$( (cd "$copy" && WALTER_LIB_ROOT="$root" ./walter build 2>&1) ) ||
+out=$( (cd "$copy" && WALTER_LIB_ROOT="$root" ./green build 2>&1) ) ||
   fail "WALTER_LIB_ROOT did not resolve the working tree: $out"
 [ -f "$copy/.colors/launcher-check/walter-compute/main.tf" ] ||
   fail "the override resolved but rendered nothing"
@@ -105,7 +105,7 @@ ok "WALTER_LIB_ROOT resolves a working tree from a copied payload"
 # its root. Only the launcher does this walk; nothing in the library can.
 
 mkdir -p "$copy/deep/nested"
-out=$( (cd "$copy/deep/nested" && WALTER_LIB_ROOT="$root" ./../../walter build 2>&1) ) ||
+out=$( (cd "$copy/deep/nested" && WALTER_LIB_ROOT="$root" ./../../green build 2>&1) ) ||
   fail "running from a subdirectory failed: $out"
 [ -f "$copy/.colors/launcher-check/walter-compute/main.tf" ] ||
   fail "a subdirectory run rendered somewhere other than beside colors.yml"
@@ -125,7 +125,7 @@ ok "launcher contract $lc is satisfied by library contract $libc"
 # --------------------------------------------------------------------------
 # Unknown verbs.
 
-out=$( (cd "$copy" && WALTER_LIB_ROOT="$root" ./walter frobnicate 2>&1) || true )
+out=$( (cd "$copy" && WALTER_LIB_ROOT="$root" ./green frobnicate 2>&1) || true )
 echo "$out" | grep -q 'Usage:' || fail "an unknown verb should print usage; got: $out"
 ok "an unknown verb prints usage"
 

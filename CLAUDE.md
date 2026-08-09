@@ -17,8 +17,8 @@ was ONCE's golden-file regression net as much as its parity check —
 
 The repository ships two things from one file:
 
-- **The launcher** `skills/package-walter-green/walter`, a single Babashka
-  script. `./walter` in the root is a symlink to it.
+- **The launcher** `skills/package-walter-green/green`, a single Babashka
+  script. `./green` in the root is a symlink to it.
 - **The `package-walter-green` skill**, whose payload is that launcher.
 
 `plans/0001-walter-v1.md` records why the design is what it is, including the
@@ -36,9 +36,9 @@ the code before acting on it.
 ## Commands
 
 ```bash
-bb walter build                      # render the work directory only
-bb walter create --dry-run           # print the graph, touch nothing
-bb walter stop | start               # power cycle (OCI only)
+./green build                         # render the work directory only
+./green create --dry-run              # print the graph, touch nothing
+./green stop | start                  # power cycle (OCI only)
 bb test                              # the unit suite, under babashka
 bb golden                            # every provider variant vs committed output
 bb golden:accept                     # regenerate after an intended change
@@ -46,7 +46,7 @@ bb golden:accept                     # regenerate after an intended change
 bb pin                               # stamp the launcher (maintainers, after a push)
 ```
 
-`bb walter build -f other.yml` overrides the `colors.yml` found by walking up.
+`./green build -f other.yml` overrides the `colors.yml` found by walking up.
 
 ## The reuse surface — read this before touching anything
 
@@ -267,6 +267,6 @@ Consumers hold a **copy** of the payload, not a symlink, so re-copy it into
 every project after a repin or they keep running the old pin:
 
 ```sh
-cp skills/package-walter-green/walter ../walter-oci/walter
-cp skills/package-walter-green/walter ../walter-oci/.agents/skills/package-walter-green/walter
+cp skills/package-walter-green/green ../walter-oci/green
+cp skills/package-walter-green/green ../walter-oci/.agents/skills/package-walter-green/green
 ```

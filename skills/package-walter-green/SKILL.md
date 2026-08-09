@@ -22,7 +22,7 @@ chain.
 
 - Never ask the user to paste a secret into chat.
 - Never put API tokens, passwords, private keys or access keys in `colors.yml`,
-  in the `walter` launcher, in shell history, or in generated examples. Every
+  in the `green` launcher, in shell history, or in generated examples. Every
   credential arrives through a `COLORS_PAR_*` environment variable named after
   the key it fills. Suggest a gitignored `.envrc.private`, never an inline
   export a shell history records.
@@ -33,7 +33,7 @@ chain.
   suggesting it as a workaround defeats the guard. The profile identifies the
   project, and the project is the directory. If the user wants a different
   profile, edit `colors.yml`.
-- Do not overwrite an existing `walter` launcher or `colors.yml` without
+- Do not overwrite an existing `green` launcher or `colors.yml` without
   explicit approval. If a project is already valid, operate it rather than
   regenerating it.
 - Default to `build` and `create --dry-run`. Run a real `create` or `delete`
@@ -53,12 +53,12 @@ generating or changing desired state, and before any real `create` or `delete`.
 ## Commands
 
 ```sh
-./walter build              # render .colors/<profile>/ only; contacts nothing
-./walter create --dry-run   # print the graph; touches nothing
-./walter create             # provision, and write the ssh config block
-./walter stop               # power off
-./walter start              # power on, and refresh the ssh config block
-./walter delete             # destroy, dropping the ssh block first
+./green build              # render .colors/<profile>/ only; contacts nothing
+./green create --dry-run   # print the graph; touches nothing
+./green create             # provision, and write the ssh config block
+./green stop               # power off
+./green start              # power on, and refresh the ssh config block
+./green delete             # destroy, dropping the ssh block first
 ```
 
 `-f/--file` overrides the `colors.yml` found by walking up from the working
@@ -66,7 +66,7 @@ directory.
 
 ## Initialize in the current directory
 
-1. Copy the `walter` payload beside this file into the project root and
+1. Copy the `green` payload beside this file into the project root and
    `chmod +x` it.
 2. Write `colors.yml`. Ask for the provider first, then only the keys that
    provider needs — `references/configuration.md` lists them.
@@ -79,7 +79,7 @@ directory.
    must live — the default is `~/.config/emacs`, and a configuration expecting
    another path needs `--init-directory` to reach it. Leave both out otherwise;
    the rendered playbook then does not mention Emacs.
-5. Run `./walter build` and show the user what was rendered.
+5. Run `./green build` and show the user what was rendered.
 
 ## What create puts on the machine
 
@@ -145,4 +145,4 @@ Consequences worth telling the user about:
   or the state backend is unreachable. `oci-instance-id` in `colors.yml` is the
   documented escape hatch.
 - **A contract mismatch** — the pinned commit is older than this launcher.
-  Re-copy `walter` from an updated skill; nothing inside the project fixes it.
+  Re-copy `green` from an updated skill; nothing inside the project fixes it.

@@ -7,12 +7,12 @@ reaches it, confirms Ansible can talk to it, and powers it off and on so you are
 not paying for it overnight.
 
 ```sh
-./walter build              # render .colors/<profile>/ — contacts nothing
-./walter create --dry-run   # print the graph — touches nothing
-./walter create             # provision, and record the ssh alias
-./walter stop               # power off
-./walter start              # power on, and refresh the alias
-./walter delete             # destroy, dropping the ssh block first
+./green build              # render .colors/<profile>/ — contacts nothing
+./green create --dry-run   # print the graph — touches nothing
+./green create             # provision, and record the ssh alias
+./green stop               # power off
+./green start              # power on, and refresh the alias
+./green delete             # destroy, dropping the ssh block first
 ```
 
 Desired state is `colors.yml`, found by walking up from wherever you run it.
@@ -23,7 +23,7 @@ variables. See `skills/package-walter-green/references/configuration.md`.
 
 ```sh
 npx skills add getcolors/walter
-cp .agents/skills/package-walter-green/walter walter
+cp .agents/skills/package-walter-green/green green
 ```
 
 The root launcher is a **copy** of the skill payload, not a symlink, so
