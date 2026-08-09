@@ -219,28 +219,18 @@ r2-endpoint: REPLACE_ME
 
 # --- dotfiles ---------------------------------------------------------------
 #
-# Cloned to the machine and then applied to $HOME, last in the play — the
-# profile can carry shell and editor configuration, which only makes sense once
-# the shell and the editor it configures are already installed.
+# Runs the existing `./green create` launcher in a getcolors/dotfiles checkout.
+# The checkout owns its colors.yml, including the selected profile and target;
+# walter supplies only COLORS_PAR_DOTFILES_PREVENT_OVERWRITE=false for the one
+# authorized create. It never overrides profile — COLORS_PAR_PROFILE remains
+# forbidden.
 #
-# The installer is a Babashka script, so "babashka" has to be in nix-packages;
-# walter refuses to build otherwise.
+# Normally clone-orgs below creates the checkout first. The launcher is a
+# Babashka script, so "babashka" has to be in nix-packages. Walter stamps a
+# successful run under ~/.local/state/walter and does not reapply it on later
+# creates, preserving edits made in $HOME.
 #
-# Same ssh:// reasoning as the editor above, and the same clone-once rule. The
-# install itself is stamped under ~/.local/state/walter, because it copies
-# rendered files over $HOME with replace-existing: re-running it on every
-# converge would silently undo edits made on the machine. Changing
-# dotfiles-profile re-runs it; a second create against the same one does not.
-#
-# dotfiles-repo: git@github.com:you/dotfiles.git
-#
-# Defaults to ~/.dotfiles. There is no equivalent of Emacs' XDG path to defer
-# to here, so this is a convention rather than a lookup.
-# dotfiles-dest: ~/.dotfiles
-#
-# Selects which profile the installer renders. Defaults to "default", which is
-# the installer's own answer when given neither -p nor DOTFILES_PROFILE.
-# dotfiles-profile: default
+# dotfiles-checkout: ~/code/getcolors/dotfiles
 
 # --- organisation checkouts --------------------------------------------------
 #

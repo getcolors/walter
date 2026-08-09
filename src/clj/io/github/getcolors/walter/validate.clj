@@ -108,7 +108,7 @@
   already needs."
   [:nix-packages :login-shell
    :emacs-config-repo :emacs-config-dest
-   :dotfiles-repo :dotfiles-dest :dotfiles-profile
+   :dotfiles-checkout
    :atuin-username
    :seed-agent-credentials
    :clone-orgs
@@ -256,14 +256,13 @@
                   (not (some #(= "nodejs" (str (:name %))) (:asdf-tools opts))))
          [(str ":corepack-packages needs a \"nodejs\" entry in :asdf-tools — "
                "corepack ships inside Node and cannot be installed separately")])
-       ;; Same shape as the asdf-vm rule above, and for the same reason: the
-       ;; dotfiles installer is a Babashka script, and nothing but :nix-packages
-       ;; puts bb on the machine. Caught here rather than as a
-       ;; command-not-found half way through a create.
-       (when (and (not (placeholder? (:dotfiles-repo opts)))
+       ;; The dotfiles checkout's Green launcher is a Babashka script, and
+       ;; nothing but :nix-packages puts bb on the machine. Catch the missing
+       ;; runtime here rather than half way through a create.
+       (when (and (not (placeholder? (:dotfiles-checkout opts)))
                   (not (contains? packages "babashka")))
-         [(str ":dotfiles-repo needs \"babashka\" in :nix-packages — "
-               "the installer is a bb script and nothing else puts bb on the machine")])
+         [(str ":dotfiles-checkout needs \"babashka\" in :nix-packages — "
+               "its Green launcher is a bb script and nothing else puts bb on the machine")])
        ;; Same shape again. The password and key are deliberately not checked
        ;; here — they are COLORS_PAR_* secrets, and `build` renders from desired
        ;; state alone and must stay credential-free, so the remote playbook

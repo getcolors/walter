@@ -186,22 +186,19 @@ not expose until told to look again; the playbook reshims. Skip that and
 
 | Key | Meaning |
 |---|---|
-| `dotfiles-repo` | Optional. A git URL. Set it and the machine clones it and applies a profile to `$HOME`. |
-| `dotfiles-dest` | Where the clone lands. Defaults to `~/.dotfiles`. |
-| `dotfiles-profile` | Which profile the installer renders. Defaults to `default`. |
+| `dotfiles-checkout` | Optional. A checkout of `getcolors/dotfiles` whose existing `./green` launcher Walter runs. |
 
-Needs `babashka` in `nix-packages` — the installer is a `bb` script and walter
-refuses to build without it.
+Needs `babashka` in `nix-packages`, because the Green launcher is a Babashka
+script. The checkout owns its `colors.yml`: that file selects the packaged
+profile and target, and Walter does not duplicate those keys. Walter invokes
+`./green create` from the checkout with
+`COLORS_PAR_DOTFILES_PREVENT_OVERWRITE=false`; it never sets
+`COLORS_PAR_PROFILE`.
 
-Same `ssh://` reasoning and the same clone-once rule as the editor. The
-**install** is separately guarded, by a stamp under `~/.local/state/walter`,
-because it copies rendered files over `$HOME` with replace-existing: re-running
-it on every converge would silently undo edits made on the machine, which is the
-one thing cloning-once exists to prevent. The stamp carries the profile name, so
-changing `dotfiles-profile` re-runs it where a second create does not.
-
-It runs last, after the shell and the editor, because the profile can carry
-configuration for both.
+Normally `clone-orgs` creates `~/code/getcolors/dotfiles` before this step. A
+successful create is stamped under `~/.local/state/walter`, so later Walter
+creates do not reapply the profile over edits made in `$HOME`. Delete the stamp
+to authorize another application.
 
 ## Organisation checkouts
 
@@ -233,13 +230,11 @@ at or past that boundary **fails the create** rather than cloning its first
 hundred and reporting success — a silently partial checkout is found weeks later,
 on the one repository that was missing.
 
-The clones use `git@github.com:` and `update: false`, like the editor and
-dotfiles clones: they ride the agent `ansible.cfg` forwards, so no private key is
-written to the machine and each checkout can push back, and a later create leaves
-an existing one alone. `git pull` on the machine is how one moves. They run after
-the dotfiles installer, which copies rendered files over `$HOME`, and after the
-credential seeding — this is the longest network step in the play, and a GitHub
-outage should not fail a create before the machine is usable.
+The clones use `git@github.com:` and `update: false`, like the editor clone:
+they ride the agent `ansible.cfg` forwards, so no private key is written to the
+machine and each checkout can push back, and a later create leaves an existing
+one alone. `git pull` on the machine is how one moves. They run after credential
+seeding and before the dotfiles launcher, whose checkout they may create.
 
 ## Shell history
 
@@ -387,7 +382,7 @@ renders a playbook that does not mention them at all:
 | `asdf-tools` | plugin add, install, and `asdf set --home` |
 | `corepack-packages` | `corepack enable`, then `asdf reshim nodejs` |
 | `emacs-config-repo` | Emacs, then the configuration cloned over the forwarded agent |
-| `dotfiles-repo` | the clone, then `bb install -p <profile>` applied to `$HOME` |
+| `dotfiles-checkout` | that checkout's `./green create`, once, with its own `colors.yml` |
 | `seed-agent-credentials` | one credential file per named agent, copied from the controller; Claude also gets a missing onboarding flag |
 | `clone-orgs` | every source repository of each org, cloned to `~/code/<org>/<repo>` |
 | `atuin-username` | `atuin login`, then `atuin sync` |

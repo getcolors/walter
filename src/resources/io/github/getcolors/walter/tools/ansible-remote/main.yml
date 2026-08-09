@@ -413,63 +413,6 @@
         state: directory
         mode: "0755"
 <% endif %>
-<% if dotfiles-repo|not-empty %>
-    # The operator's dotfiles, cloned and then applied to $HOME.
-    #
-    # Last in the play on purpose. The profile it installs can carry shell and
-    # editor configuration — ~/.config/fish/config.fish, ~/.doom.d — that only
-    # makes sense once the shell and the editor those files configure are
-    # already on the machine.
-    #
-    # Same `update: false` as the Emacs clone, for the same reason: this is a
-    # working copy on a development machine, and a later create must not discard
-    # edits made there. accept_hostkey covers the host being unknown on a fresh
-    # machine, and an ssh:// URL rides the agent ansible.cfg forwards — an
-    # https:// one clones fine and cannot push back.
-    - name: Clone the dotfiles
-      ansible.builtin.git:
-        repo: "<{ dotfiles-repo }>"
-        dest: "<{ dotfiles-dest }>"
-        accept_hostkey: true
-        update: false
-
-    # The installer copies rendered files over $HOME with replace-existing, so
-    # it is emphatically not something to re-run on every converge: it would
-    # silently overwrite work done on the machine, which is the one thing the
-    # clone above goes out of its way not to do.
-    #
-    # Hence a stamp rather than an Ansible `when:`. The name carries the profile,
-    # so changing `dotfiles-profile` in colors.yml is what re-runs it — switching
-    # profile is a different desired state and should converge, where a second
-    # create against an unchanged file should not.
-    #
-    # `bb` comes from nix-packages like everything else here, so validate.clj
-    # refuses a `dotfiles-repo` without "babashka" beside it rather than letting
-    # this fail on the machine as command-not-found.
-    #
-    # chdir and creates are both `type: path` in the command module, which
-    # expanduser's them — so a `~`-relative dest needs no shell to resolve it,
-    # and adding one would only reintroduce quoting bugs.
-    - name: Install the dotfiles profile
-      ansible.builtin.command:
-        cmd: bb install -p <{ dotfiles-profile }>
-        chdir: "<{ dotfiles-dest }>"
-        creates: "{{ ansible_env.HOME }}/.local/state/walter/dotfiles-<{ dotfiles-profile }>"
-      environment:
-        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
-
-    # Only reached when the install above exited 0 — a failure aborts the play,
-    # so the stamp is never written for an install that did not finish and the
-    # next create retries it.
-    - name: Record that the dotfiles profile is installed
-      ansible.builtin.copy:
-        dest: "{{ ansible_env.HOME }}/.local/state/walter/dotfiles-<{ dotfiles-profile }>"
-        mode: "0644"
-        content: |
-          Written by walter. Its presence is what stops `bb install -p <{ dotfiles-profile }>`
-          running again and copying rendered files over edits made on this machine.
-          Delete it to reinstall the profile on the next create.
-<% endif %>
 <% if seed-agent-credentials-json|not-empty %>
     # Subscription logins for the agent CLIs, carried from the workstation that
     # runs create so the machine is usable without a browser on it.
@@ -480,9 +423,9 @@
     # a development machine has no business holding another machine's history.
     # validate/agent-credential-paths is where the one path per agent is named.
     #
-    # Placed after the dotfiles above, whose installer copies rendered files
-    # over $HOME and could otherwise land on top of these, and before atuin,
-    # which stays the last task in the play for the reason given there.
+    # Placed before the organisation clones and dotfiles launcher: credential
+    # files are deliberately excluded from getcolors/dotfiles, so that later
+    # create cannot overwrite them. Atuin stays last for the reason given there.
     #
     # Nothing here is rendered. The files are read from the controller at play
     # time, so `build` stays credential-free and no token ever reaches .colors/.
@@ -679,8 +622,8 @@
     # the loop, so the run says which ones it passed over instead of silently
     # producing a shorter list.
     #
-    # git@github.com: rather than https://, like the Emacs and dotfiles clones
-    # above and for the same reason — the clone rides the agent ansible.cfg
+    # git@github.com: rather than https://, like the Emacs clone above and for
+    # the same reason — the clone rides the agent ansible.cfg
     # forwards, so no private key is written to the machine and the checkouts can
     # push back. They are only writable while your local agent holds the key.
     #
@@ -698,6 +641,40 @@
       loop_control:
         label: "{{ item.0.item }}/{{ item.1.name }}"
       when: not item.1.archived
+<% endif %>
+<% if dotfiles-checkout|not-empty %>
+    # Apply getcolors/dotfiles from the checkout clone-orgs made above. Walter
+    # does not carry a second copy of that package's configuration contract: the
+    # checkout's own colors.yml selects Ubuntu and $HOME, and its existing Green
+    # launcher drives the package.
+    #
+    # This has to follow the organisation clones — on a new machine the checkout
+    # does not exist before them — and precede atuin, whose endpoint may be
+    # configured by the files installed here.
+    #
+    # The package's overwrite guard is committed true. This is the one authorized
+    # create, so its runtime override is false; COLORS_PAR_PROFILE is deliberately
+    # absent because both packages reject it. A walter stamp makes the invocation
+    # once-only, preserving edits made in $HOME on later creates.
+    - name: Apply the dotfiles checkout once
+      ansible.builtin.command:
+        cmd: ./green create
+        chdir: "<{ dotfiles-checkout }>"
+        creates: "{{ ansible_env.HOME }}/.local/state/walter/dotfiles"
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+        COLORS_PAR_DOTFILES_PREVENT_OVERWRITE: "false"
+
+    # Only reached when the launcher exited 0. A failed create leaves no stamp,
+    # so the next walter create retries it.
+    - name: Record that the dotfiles checkout was applied
+      ansible.builtin.copy:
+        dest: "{{ ansible_env.HOME }}/.local/state/walter/dotfiles"
+        mode: "0644"
+        content: |
+          Written by walter after `<{ dotfiles-checkout }>/green create` completed.
+          Its presence protects edits in $HOME from later walter creates.
+          Delete it to apply the checkout again.
 <% endif %>
 <% if atuin-username|not-empty %>
     # Shell history, synced to an existing account. A replacement machine that

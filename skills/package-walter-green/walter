@@ -42,7 +42,7 @@
   "Minimum io.github.getcolors/walter contract this launcher requires. Guarded at
   run time so a stale pin fails loudly instead of rendering templates from an
   older commit."
-  1)
+  2)
 
 ;; Managed by `bb pin` — do not edit by hand.
 ;;

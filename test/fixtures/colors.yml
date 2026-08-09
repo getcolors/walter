@@ -69,8 +69,8 @@ nix-packages:
   - asdf-vm
   - ripgrep
   - fish
-  # Required by dotfiles-repo below — the installer is a bb script, and
-  # validate.clj refuses the combination without it.
+  # Required by dotfiles-checkout below — its Green launcher is a bb script,
+  # and validate.clj refuses the combination without it.
   - babashka
   # Likewise required by atuin-username below.
   - atuin
@@ -98,12 +98,10 @@ corepack-packages:
 emacs-config-repo: git@github.com:fixture/emacs.d.git
 emacs-config-dest: ~/.config/fixture-emacs
 
-# Set so every golden renders the dotfiles half. Its absent branch is
-# `the-remote-playbook-omits-dotfiles-when-no-repo-is-named` in tools_test, for
-# the same reason the Emacs one is.
-dotfiles-repo: git@github.com:fixture/dotfiles.git
-dotfiles-dest: ~/code/fixture/dotfiles
-dotfiles-profile: ubuntu
+# Set so every golden renders the dotfiles half. clone-orgs creates this
+# checkout before Walter runs its existing Green launcher. The absent branch is
+# covered once in tools_test rather than repeated across every provider golden.
+dotfiles-checkout: ~/code/fixture-org/dotfiles
 
 # Set so every golden renders the credential-seeding block, including the
 # multi-agent loop. Nothing secret is involved: only the agent names are desired

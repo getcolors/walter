@@ -152,22 +152,20 @@
                         :corepack-packages ["pnpm"])))))))
 
 (deftest dotfiles-need-babashka-installed
-  (testing "the installer is a bb script, and nothing but nix-packages puts bb on
-           the machine — so the combination fails here rather than as a
-           command-not-found half way through a create"
-    (is (seq (errors-matching (assoc base :dotfiles-repo "git@github.com:me/dotfiles.git")
-                              #":dotfiles-repo")))
+  (testing "the checkout's Green launcher is a bb script, so the combination
+           fails here rather than as command-not-found during a create"
+    (is (seq (errors-matching (assoc base :dotfiles-checkout "~/code/getcolors/dotfiles")
+                              #":dotfiles-checkout")))
     (is (seq (errors-matching (assoc base
                                      :nix-packages ["ripgrep"]
-                                     :dotfiles-repo "git@github.com:me/dotfiles.git")
-                              #":dotfiles-repo"))))
+                                     :dotfiles-checkout "~/code/getcolors/dotfiles")
+                              #":dotfiles-checkout"))))
   (testing "naming babashka satisfies it"
     (is (= [] (validate/state-errors
                (assoc base
                       :nix-packages ["babashka"]
-                      :dotfiles-repo "git@github.com:me/dotfiles.git"
-                      :dotfiles-profile "ubuntu")))))
-  (testing "no repository named is the common case and never an error"
+                      :dotfiles-checkout "~/code/getcolors/dotfiles")))))
+  (testing "no checkout named is the common case and never an error"
     (is (= [] (validate/state-errors (assoc base :nix-packages ["ripgrep"]))))))
 
 (deftest an-optional-key-left-as-replace-me-is-an-error
@@ -175,8 +173,8 @@
            optional key does not render its block, but one holding a placeholder
            is present — `<% if key|not-empty %>` fires and REPLACE_ME reaches the
            playbook verbatim, which builds fine and fails on the machine"
-    (is (seq (errors-matching (assoc base :dotfiles-repo "REPLACE_ME")
-                              #":dotfiles-repo still says REPLACE_ME")))
+    (is (seq (errors-matching (assoc base :dotfiles-checkout "REPLACE_ME")
+                              #":dotfiles-checkout still says REPLACE_ME")))
     (is (seq (errors-matching (assoc base :atuin-username "REPLACE_ME")
                               #":atuin-username still says REPLACE_ME")))
     (is (seq (errors-matching (assoc base :emacs-config-repo "replace_me")

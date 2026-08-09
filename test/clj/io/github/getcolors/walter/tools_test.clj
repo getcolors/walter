@@ -321,67 +321,44 @@
 ;; ---------------------------------------------------------------------------
 ;; the dotfiles
 
-(deftest the-remote-playbook-omits-dotfiles-when-no-repo-is-named
-  (testing "gated in the template rather than at runtime, so a project that
-           names no repository renders a playbook that does not mention them"
+(deftest the-remote-playbook-omits-dotfiles-when-no-checkout-is-named
+  (testing "gated in the template rather than at runtime"
     (let [rendered (render-remote-playbook {})]
       (is (not (str/includes? rendered "dotfiles")))
       (is (not (str/includes? rendered ".local/state/walter"))))))
 
-(deftest the-dotfiles-are-installed-after-the-shell-and-the-editor
-  (testing "the profile can carry ~/.config/fish/config.fish and ~/.doom.d, which
-           only make sense once the shell and the editor they configure are
-           already on the machine"
+(deftest the-dotfiles-package-runs-its-existing-launcher
+  (testing "the checkout owns colors.yml and the package interface"
     (let [rendered (render-remote-playbook
-                    {:nix-packages ["asdf-vm" "fish" "babashka"]
-                     :login-shell "fish"
-                     :emacs-config-repo "git@github.com:me/emacs.d.git"
-                     :dotfiles-repo "git@github.com:me/dotfiles.git"
-                     :dotfiles-dest "~/code/me/dotfiles"
-                     :dotfiles-profile "ubuntu"})
+                    {:nix-packages ["babashka"]
+                     :clone-orgs ["getcolors"]
+                     :dotfiles-checkout "~/code/getcolors/dotfiles"})]
+      (is (str/includes? rendered "cmd: ./green create"))
+      (is (str/includes? rendered "chdir: \"~/code/getcolors/dotfiles\""))
+      (is (str/includes? rendered
+                         "COLORS_PAR_DOTFILES_PREVENT_OVERWRITE: \"false\""))
+      (is (not (str/includes? rendered "COLORS_PAR_PROFILE:"))))))
+
+(deftest the-dotfiles-launcher-runs-after-its-org-checkout
+  (testing "a fresh machine has no checkout until clone-orgs creates it"
+    (let [rendered (render-remote-playbook {:nix-packages ["babashka"]
+                                            :clone-orgs ["getcolors"]
+                                            :dotfiles-checkout "~/code/getcolors/dotfiles"})
           at #(str/index-of rendered %)]
-      (is (str/includes? rendered "repo: \"git@github.com:me/dotfiles.git\""))
-      (is (str/includes? rendered "dest: \"~/code/me/dotfiles\""))
-      (is (str/includes? rendered "cmd: bb install -p ubuntu"))
-      (is (str/includes? rendered "chdir: \"~/code/me/dotfiles\"")
-          "chdir is type: path, so Ansible expanduser's it and no shell is needed")
-      (is (< (at "Set the login shell") (at "#emacs") (at "Clone the dotfiles"))))))
+      (is (< (at "Clone the organisations' repositories")
+             (at "Apply the dotfiles checkout once"))))))
 
-(deftest the-dotfiles-clone-does-not-discard-work-done-on-the-machine
-  (testing "same update: false as the Emacs clone — a development machine's
-           working copy is not a deployment"
+(deftest the-dotfiles-create-is-stamped
+  (testing "later creates preserve edits made in $HOME"
     (let [rendered (render-remote-playbook {:nix-packages ["babashka"]
-                                            :dotfiles-repo "git@github.com:me/dotfiles.git"})]
-      (is (str/includes? rendered "update: false"))
-      (is (str/includes? rendered "accept_hostkey: true")))))
-
-(deftest the-install-is-stamped-so-a-converge-does-not-overwrite-home
-  (testing "the installer copies rendered files over $HOME with replace-existing,
-           so re-running it on every create would silently undo edits made on the
-           machine — which is the one thing the clone goes out of its way to avoid"
-    (let [rendered (render-remote-playbook {:nix-packages ["babashka"]
-                                            :dotfiles-repo "git@github.com:me/dotfiles.git"
-                                            :dotfiles-profile "ubuntu"})
+                                            :dotfiles-checkout "~/code/getcolors/dotfiles"})
           at #(str/index-of rendered %)]
       (is (str/includes? rendered
-                         "creates: \"{{ ansible_env.HOME }}/.local/state/walter/dotfiles-ubuntu\"")
-          "the stamp carries the profile, so switching profile is what re-runs it")
+                         "creates: \"{{ ansible_env.HOME }}/.local/state/walter/dotfiles\""))
       (is (< (at "Ensure walter's state directory")
-             (at "cmd: bb install")
-             (at "Record that the dotfiles profile is installed"))
-          "the stamp is written after the install, so a failure retries next create"))))
-
-(deftest the-dotfiles-destination-and-profile-both-default
-  (testing "a repo with no destination is unambiguous intent, and \"default\" is
-           the installer's own answer when neither -p nor DOTFILES_PROFILE is given"
-    (let [data (tools/data-fn {:profile "p"})]
-      (is (= "~/.dotfiles" (:dotfiles-dest data)))
-      (is (= "default" (:dotfiles-profile data))))
-    (let [data (tools/data-fn {:profile "p"
-                               :dotfiles-dest "~/code/me/dotfiles"
-                               :dotfiles-profile "ubuntu"})]
-      (is (= "~/code/me/dotfiles" (:dotfiles-dest data)))
-      (is (= "ubuntu" (:dotfiles-profile data))))))
+             (at "cmd: ./green create")
+             (at "Record that the dotfiles checkout was applied"))
+          "a failed launcher run leaves no stamp, so the next create retries"))))
 
 ;; ---------------------------------------------------------------------------
 ;; atuin
@@ -446,17 +423,17 @@
                                                 :atuin-username "someone"})
                        "Ensure walter's state directory exists"))
     (is (str/includes? (render-remote-playbook {:nix-packages ["babashka"]
-                                                :dotfiles-repo "git@github.com:me/d.git"})
+                                                :dotfiles-checkout "~/code/getcolors/dotfiles"})
                        "Ensure walter's state directory exists"))
     (testing "and it is created before anything writes a stamp into it"
       (let [rendered (render-remote-playbook {:nix-packages ["atuin" "babashka"]
-                                              :dotfiles-repo "git@github.com:me/d.git"
+                                              :dotfiles-checkout "~/code/getcolors/dotfiles"
                                               :atuin-username "someone"})
             at #(str/index-of rendered %)]
         (is (= 1 (count (re-seq #"Ensure walter's state directory exists" rendered)))
             "one task, not one per feature")
         (is (< (at "Ensure walter's state directory")
-               (at "Record that the dotfiles profile is installed")))
+               (at "Record that the dotfiles checkout was applied")))
         (is (< (at "Ensure walter's state directory")
                (at "Record that atuin is logged in")))))))
 
@@ -465,10 +442,10 @@
            and that file can name a self-hosted sync_address — logging in first
            would authenticate against the wrong server"
     (let [rendered (render-remote-playbook {:nix-packages ["atuin" "babashka"]
-                                            :dotfiles-repo "git@github.com:me/dotfiles.git"
+                                            :dotfiles-checkout "~/code/getcolors/dotfiles"
                                             :atuin-username "someone"})
           at #(str/index-of rendered %)]
-      (is (< (at "Clone the dotfiles") (at "atuin login"))))))
+      (is (< (at "Apply the dotfiles checkout once") (at "atuin login"))))))
 
 (deftest asdf-tools-render-as-one-looped-task-each
   (testing "a JSON array is a valid YAML flow sequence, so the playbook keeps one
@@ -721,19 +698,17 @@
         (is (< (at "Report the agent credentials this workstation cannot supply")
                (at "- name: Seed the agent credentials")))))))
 
-(deftest credentials-are-seeded-after-dotfiles-and-before-atuin
-  (testing "the dotfiles installer copies rendered files over $HOME and could
-           otherwise land on top of these; atuin stays the last task in the play
-           for the reason given there"
+(deftest credentials-are-seeded-before-dotfiles-and-atuin
+  (testing "getcolors/dotfiles excludes credential files, so its later create
+           cannot overwrite these; atuin stays last for the reason given there"
     (let [rendered (render-remote-playbook {:nix-packages ["babashka" "atuin"]
-                                            :dotfiles-repo "git@github.com:me/dotfiles.git"
+                                            :dotfiles-checkout "~/code/getcolors/dotfiles"
                                             :seed-agent-credentials ["claude"]
                                             :atuin-username "someone"})
           at #(str/index-of rendered %)]
-      (is (< (at "Install the dotfiles profile")
-             (at "- name: Seed the agent credentials")))
       (is (< (at "- name: Seed the agent credentials")
-             (at "- name: Complete Claude onboarding")
+             (at "Apply the dotfiles checkout once")))
+      (is (< (at "Apply the dotfiles checkout once")
              (at "cmd: atuin sync"))))))
 
 ;; ---------------------------------------------------------------------------
@@ -809,19 +784,16 @@
       (is (str/includes? rendered "update: false"))
       (is (str/includes? rendered "accept_hostkey: true")))))
 
-(deftest the-org-clones-run-after-everything-that-writes-home
-  (testing "the dotfiles installer copies rendered files over $HOME and could
-           land on top of a checkout; the credential seeding is cheap, and this
-           is the longest network step in the play — a GitHub outage should not
-           fail a create before the machine is usable"
+(deftest the-org-clones-run-after-credentials-and-before-dotfiles
+  (testing "credentials are cheap, the checkout must exist before its launcher
+           runs, and atuin remains last"
     (let [rendered (render-remote-playbook {:nix-packages ["babashka" "atuin"]
-                                            :dotfiles-repo "git@github.com:me/dotfiles.git"
+                                            :dotfiles-checkout "~/code/getcolors/dotfiles"
                                             :seed-agent-credentials ["claude"]
                                             :clone-orgs ["getcolors"]
                                             :atuin-username "someone"})
           at #(str/index-of rendered %)]
-      (is (< (at "Install the dotfiles profile")
-             (at "- name: Seed the agent credentials")
-             (at "Clone the organisations' repositories")))
-      (is (< (at "Clone the organisations' repositories") (at "cmd: atuin sync"))
-          "atuin stays the last task in the play, for the reason given there"))))
+      (is (< (at "- name: Seed the agent credentials")
+             (at "Clone the organisations' repositories")
+             (at "Apply the dotfiles checkout once")
+             (at "cmd: atuin sync"))))))

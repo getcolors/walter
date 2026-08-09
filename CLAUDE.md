@@ -196,8 +196,14 @@ token would be a credential every create needs — so it sees public repositorie
 only, and it reads one page of 100 and *fails* rather than cloning a silent
 subset past that. Forks are dropped by the API's `type=sources`; archived
 repositories are skipped with an Ansible `when:`, so the run names what it passed
-over. Same `update: false` and ssh:// as the two clones above, for the same
+over. Same `update: false` and ssh:// as the Emacs clone above, for the same
 reasons.
+
+`dotfiles-checkout` runs that checkout's existing `./green create` after
+`clone-orgs`, using the checkout's own `colors.yml`. Walter supplies only
+`COLORS_PAR_DOTFILES_PREVENT_OVERWRITE=false`; it never overlays profile. A
+successful run is stamped under `~/.local/state/walter` and is not repeated by
+later creates.
 
 The Emacs half is gated in the **template**, with Selmer's `<% if %>`, not with
 an Ansible `when:`. A project that names no repository therefore renders a

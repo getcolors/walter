@@ -340,23 +340,11 @@
                             (when (seq orgs) (json/generate-string orgs)))
          :emacs-config-dest (or (not-empty (str (:emacs-config-dest opts)))
                                 "~/.config/emacs")
-         ;; Defaulted for the same reason as the Emacs destination: a repo with
-         ;; no destination is unambiguous intent, and the alternative is a
-         ;; playbook carrying `dest: ""` that only fails on the machine. There
-         ;; is no equivalent of Emacs' XDG path to defer to here, so this is a
-         ;; convention rather than a lookup — say so in colors.yml to override it.
-         :dotfiles-dest (or (not-empty (str (:dotfiles-dest opts)))
-                            "~/.dotfiles")
-         ;; "default" is the installer's own default when neither -p nor
-         ;; DOTFILES_PROFILE is given, so this defers to the tool rather than
-         ;; inventing a second answer.
-         :dotfiles-profile (or (not-empty (str/trim (str (:dotfiles-profile opts))))
-                               "default")
          ;; The union of the steps that stamp a once-only action. Computed here
          ;; rather than as an `or` in the template because Selmer's `<% if %>`
          ;; takes one value, and a second feature needing the directory should
          ;; extend this expression rather than duplicate the task.
-         :needs-state-dir (boolean (or (not-empty (str (:dotfiles-repo opts)))
+         :needs-state-dir (boolean (or (not-empty (str (:dotfiles-checkout opts)))
                                        (not-empty (str (:atuin-username opts)))))))
 
 (defn ansible-local-step
