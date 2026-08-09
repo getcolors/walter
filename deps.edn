@@ -9,7 +9,7 @@
  ;; scripts/golden.sh, which is what actually catches a breaking change here.
  :deps    {org.clojure/clojure       {:mvn/version "1.12.5"}
            io.github.getcolors/green {:git/url "https://github.com/getcolors/green.git"
-                                      :git/sha "1c1fb81563287c98aa1bcd0e12cd755296e6d98e"}
+                                      :git/sha "ceb4159a19ec281d60f10d11295c05c5de5f1c42"}
            io.github.getcolors/once  {:git/url "https://github.com/getcolors/once.git"
                                       :git/sha "d5981aa7a5e0124ef1384795fc3261eef67195fc"
                                       :deps/root "green"}}
