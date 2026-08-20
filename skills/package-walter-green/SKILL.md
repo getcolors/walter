@@ -13,10 +13,11 @@ directory. Walter provisions one machine, records it in `~/.ssh/config` so
 ## Requirements
 
 Babashka runs the launcher. `create` and `delete` also need OpenTofu and
-Ansible. `stop` and `start` need the `oci` CLI and a live session. Provider
-credentials use `COLORS_PAR_*` variables, except OCI, which uses the profile
-named in `~/.oci/config`, and S3, which uses OpenTofu's ambient AWS credential
-chain.
+Ansible. `stop` and `start` need the `oci` CLI and a live session. With
+`github-account` set, a real `create` also needs `gh` on the workstation — it
+runs GitHub's device flow as its first action. Provider credentials use
+`COLORS_PAR_*` variables, except OCI, which uses the profile named in
+`~/.oci/config`, and S3, which uses OpenTofu's ambient AWS credential chain.
 
 ## Non-negotiable safety rules
 
@@ -29,6 +30,13 @@ chain.
 - Public SSH keys are not secrets; private ones are. `oci-ssh-authorized-keys`
   holds the **path** to a public-key file that OpenTofu reads at plan time —
   record the path, never inline the contents, and never read a private key.
+  With `compute-keygen: true` walter generates and manages
+  `~/.ssh/walter_<profile>` itself; never read or move that file either.
+- With `github-account` set, a real `create` starts by printing a one-time
+  code and waiting — up to about fifteen minutes — for the user to approve it
+  at https://github.com/login/device. That is the design, not a hang: the
+  workflow is interactive at the beginning only. Relay the code and URL to the
+  user and wait; never try to acquire, read, or echo the token itself.
 - **Never set `COLORS_PAR_PROFILE`.** Walter refuses to run when it is set, and
   suggesting it as a workaround defeats the guard. The profile identifies the
   project, and the project is the directory. If the user wants a different
@@ -74,12 +82,22 @@ directory.
    name. It names the work directory, the OpenTofu state keys and the ssh alias.
    Two projects sharing a profile and a state bucket address the same state,
    which is how a development machine ends up managing a production server.
-4. Ask whether the user wants their Emacs configuration on the machine. If so,
-   set `emacs-config-repo` to its git URL and `emacs-config-dest` to where it
-   must live — the default is `~/.config/emacs`, and a configuration expecting
-   another path needs `--init-directory` to reach it. Leave both out otherwise;
-   the rendered playbook then does not mention Emacs.
-5. Run `./green build` and show the user what was rendered.
+4. Ask whether the machine should have the user's GitHub identity. If so, set
+   `github-account` to their login and `git-email` to their commit email, and
+   tell them a real `create` will start with a one-time device-flow code to
+   approve from a browser. This is required before offering
+   `emacs-config-repo`, `clone-orgs` or `dotfiles-checkout` — their clones
+   authenticate through it.
+5. Ask whether walter should generate the machine-access ssh keypair
+   (`compute-keygen: true`) or whether the user supplies a provider key as
+   before.
+6. Ask whether the user wants their Emacs configuration on the machine. If so,
+   set `emacs-config-repo` to its **https** git URL (`git@`/`ssh://` forms are
+   refused) and `emacs-config-dest` to where it must live — the default is
+   `~/.config/emacs`, and a configuration expecting another path needs
+   `--init-directory` to reach it. Leave both out otherwise; the rendered
+   playbook then does not mention Emacs.
+7. Run `./green build` and show the user what was rendered.
 
 ## What create puts on the machine
 
@@ -100,9 +118,16 @@ change `TERM`. For a terminal walter does not cover, the one-liner is:
 infocmp -x "$TERM" | ssh <alias> -- tic -x -
 ```
 
-With `emacs-config-repo` set, `create` also installs Emacs (a terminal build
-from a pinned nixpkgs) and clones the configuration over the SSH agent walter
-forwards — no private key is written to the machine, and the checkout can push
+With `github-account` set, `create` also logs the machine's own gh in with the
+token the device flow minted, makes it git's https credential helper, and
+configures the commit identity — every clone below authenticates through it,
+and nothing of the workstation's (no key, no agent) is involved. A machine
+already logged in skips the interactive step entirely, so re-creates stay
+unattended.
+
+With `emacs-config-repo` set, `create` also installs Emacs (a full build from a
+pinned nixpkgs) and clones the configuration over https with the machine's own
+token — no private key is written to the machine, and the checkout can push
 back. The clone happens **once**; a later `create` leaves an existing one alone,
 so work done on the machine is never discarded. Offer `git pull` on the machine
 rather than a re-run when the user wants the config refreshed.
@@ -144,5 +169,15 @@ Consequences worth telling the user about:
   output and desired state carries none. Either the machine was never created,
   or the state backend is unreachable. `oci-instance-id` in `colors.yml` is the
   documented escape hatch.
+- **`gh auth login failed`** — `gh` is missing on the workstation, or the
+  one-time code expired unapproved. Install gh or re-run `create` and approve
+  the code; there is no token to paste anywhere.
+- **A create failed after the code was approved** — just re-run it. The minted
+  token survives under `~/.local/state/walter/github-token-<profile>` for
+  exactly this, so the retry does not prompt again; it is removed once a
+  create seeds the machine.
+- **the login approved the code as X but colors.yml names github-account Y** —
+  the user approved from the wrong GitHub account. Re-run `create` and approve
+  from the account the machine is meant to act as, or fix `github-account`.
 - **A contract mismatch** — the pinned commit is older than this launcher.
   Re-copy `green` from an updated skill; nothing inside the project fixes it.

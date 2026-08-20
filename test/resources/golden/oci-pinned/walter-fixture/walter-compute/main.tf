@@ -40,7 +40,7 @@ resource "oci_core_instance" "ampere_vm" {
     boot_volume_vpus_per_gb = 30
   }
   metadata = {
-    ssh_authorized_keys = file("/home/fixture/.ssh/id_ed25519.pub")
+    ssh_authorized_keys = file("/home/build-placeholder/.ssh/walter_walter-fixture.pub")
   }
   connection {
     type = "ssh"

@@ -18,7 +18,10 @@
 ;; the graphs
 
 (deftest create-forks-into-the-two-ansible-stages
-  (is (= [:walter/compute] (steps-for :create :walter/start)))
+  (testing "the token step sits between start and compute — the one interactive
+           moment has to land before anything long-running begins"
+    (is (= [:walter/github-token] (steps-for :create :walter/start)))
+    (is (= [:walter/compute] (steps-for :create :walter/github-token))))
   (is (= [:walter/ansible-local :walter/ansible-remote]
          (steps-for :create :walter/compute)))
   (testing "neither joins — they are independent"
@@ -57,7 +60,8 @@
     (is (= [:walter/ansible-local] (steps-for :start :walter/power-on)))))
 
 (deftest every-side-effecting-step-is-dry-runnable
-  (doseq [step [:walter/compute :walter/ansible-local :walter/ansible-remote
+  (doseq [step [:walter/github-token
+                :walter/compute :walter/ansible-local :walter/ansible-remote
                 :walter/emacs-packages
                 :walter/ansible-cleanup :walter/power-off :walter/power-on]]
     (is (contains? (set workflow/side-effecting-steps) step)

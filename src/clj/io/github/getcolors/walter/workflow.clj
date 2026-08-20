@@ -1,8 +1,8 @@
 (ns io.github.getcolors.walter.workflow
   "The DAG the launcher runs, and the steps that are not a tool.
 
-      create / build   start ─ compute ─┬─ ansible-local
-                                        └─ ansible-remote ─ emacs-packages
+      create / build   start ─ github-token ─ compute ─┬─ ansible-local
+                                                       └─ ansible-remote ─ emacs-packages
 
       delete           start ─ ansible-cleanup ─ compute
 
@@ -12,6 +12,12 @@
 
   `wire-fn` returns a different graph per `:green/event`, which is how ONCE
   already handles `:delete` — the two power verbs need no engine change at all.
+
+  `github-token` sits between start and compute because it is the one
+  interactive step walter has: the device-flow prompt has to land in front of
+  the operator before anything long-running begins, so the workflow is
+  interactive at the beginning only and unattended after. On builds, deletes,
+  and projects with no `github-account` it passes through untouched.
 
   Create and build fork after compute: the two Ansible stages are independent
   and neither joins. Delete drops the managed ssh block before anything is
@@ -32,6 +38,7 @@
    [green.progress :as progress]
    [green.tofu :as tofu]
    [green.workflow :as wf]
+   [io.github.getcolors.walter.github :as github]
    [io.github.getcolors.walter.oci :as oci]
    [io.github.getcolors.walter.tools :as tools]
    [io.github.getcolors.walter.validate :as validate]))
@@ -197,7 +204,8 @@
 
     ;; :create and :build
     (case step
-      :walter/start          [start-step :walter/compute]
+      :walter/start          [start-step :walter/github-token]
+      :walter/github-token   [github/github-token-step :walter/compute]
       :walter/compute        [tools/compute-step :walter/ansible-local :walter/ansible-remote]
       :walter/ansible-local  [tools/ansible-local-step]
       :walter/ansible-remote [tools/ansible-remote-step :walter/emacs-packages]
@@ -217,7 +225,8 @@
     :key-fn #(str (or (:profile %) "walter") "/" tool ".tfstate")}))
 
 (def side-effecting-steps
-  [:walter/compute :walter/ansible-local :walter/ansible-remote
+  [:walter/github-token
+   :walter/compute :walter/ansible-local :walter/ansible-remote
    :walter/emacs-packages
    :walter/ansible-cleanup :walter/power-off :walter/power-on])
 

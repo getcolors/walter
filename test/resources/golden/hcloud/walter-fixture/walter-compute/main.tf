@@ -17,7 +17,7 @@ resource "hcloud_server" "node1" {
   image       = "ubuntu-24.04"
   server_type = "cx23"
   location    = "hel1"
-  ssh_keys    = ["fixture-key"]
+  ssh_keys    = ["${hcloud_ssh_key.walter.name}"]
   public_net {
     ipv4_enabled = true
     ipv6_enabled = false

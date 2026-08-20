@@ -4,6 +4,7 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
+   [green.ansible :as ansible]
    [green.tofu :as tofu]
    [io.github.getcolors.walter.tools :as tools]))
 
@@ -300,22 +301,24 @@
 (deftest a-named-repo-adds-emacs-and-the-clone-after-nix
   (testing "order matters: a config cloned for an Emacs that is not installed
            leaves a machine that looks provisioned and is not"
-    (let [rendered (render-remote-playbook {:emacs-config-repo "git@github.com:me/emacs.d.git"
+    (let [rendered (render-remote-playbook {:emacs-config-repo "https://github.com/me/emacs.d.git"
                                             :emacs-config-dest "~/.config/neoemacs"})
           at #(str/index-of rendered %)]
       (is (str/includes? rendered "nixpkgs-unstable#emacs")
           "from the same nixpkgs ref as everything else here")
-      (is (str/includes? rendered "repo: \"git@github.com:me/emacs.d.git\""))
+      (is (str/includes? rendered "repo: \"https://github.com/me/emacs.d.git\""))
       (is (str/includes? rendered "dest: \"~/.config/neoemacs\""))
       (is (str/includes? rendered "update: false")
           "a development machine's working copy is not a deployment")
       (is (< (at "install.determinate.systems") (at "#emacs") (at "repo:"))))))
 
-(deftest the-clone-never-writes-a-key-to-the-machine
-  (testing "ansible.cfg forwards the agent, so the clone speaks SSH and can push
-           back — accept_hostkey covers github.com being unknown on a fresh host"
-    (let [rendered (render-remote-playbook {:emacs-config-repo "git@github.com:me/emacs.d.git"})]
-      (is (str/includes? rendered "accept_hostkey: true"))
+(deftest the-clone-authenticates-with-the-machines-own-token
+  (testing "https through the gh credential helper, so nothing of the
+           workstation's — no key, no agent — is involved, and the clone can
+           still push back. accept_hostkey is gone with the ssh transport."
+    (let [rendered (render-remote-playbook {:emacs-config-repo "https://github.com/me/emacs.d.git"})]
+      (is (not (str/includes? rendered "accept_hostkey")))
+      (is (not (str/includes? rendered "ForwardAgent")))
       (is (str/includes? rendered "dest: \"~/.config/emacs\"")))))
 
 ;; ---------------------------------------------------------------------------
@@ -528,7 +531,7 @@
     (is (nil? (render-emacs-packages {:emacs-config-repo "   "}))))
   (testing "and a delete renders nothing either — the packages go with the boot
            volume, so there is no work to undo"
-    (is (nil? (render-emacs-packages {:emacs-config-repo "git@github.com:me/e.git"
+    (is (nil? (render-emacs-packages {:emacs-config-repo "https://github.com/me/e.git"
                                       :green/event :delete})))))
 
 (deftest the-batch-load-names-init-el-explicitly
@@ -537,7 +540,7 @@
            in under a tenth of a second having installed nothing — a silent
            no-op indistinguishable from an already-warm cache"
     (let [rendered (render-emacs-packages
-                    {:emacs-config-repo "git@github.com:me/e.git"
+                    {:emacs-config-repo "https://github.com/me/e.git"
                      :emacs-config-dest "~/.config/neoemacs"})]
       (is (str/includes? rendered "--batch"))
       (is (str/includes? rendered "-l {{ (walter_emacs_dest ~ '/init.el') | quote }}")
@@ -553,7 +556,7 @@
   (testing "a quoted ~ does not expand in bash, so the naive fix silently
            creates a directory literally named ~"
     (let [rendered (render-emacs-packages
-                    {:emacs-config-repo "git@github.com:me/e.git"
+                    {:emacs-config-repo "https://github.com/me/e.git"
                      :emacs-config-dest "~/.config/neoemacs"})]
       (is (str/includes? rendered "regex_replace('^~', ansible_env.HOME)"))
       (is (str/includes? rendered "'~/.config/neoemacs'"))
@@ -566,7 +569,7 @@
            warmed — so waiting would buy only the ability to fail a create on an
            ELPA outage, which the remote play already refused"
     (let [rendered (render-emacs-packages
-                    {:emacs-config-repo "git@github.com:me/e.git"})]
+                    {:emacs-config-repo "https://github.com/me/e.git"})]
       (is (str/includes? rendered "poll: 0")
           "fire-and-forget: Ansible's wrapper daemonizes the job so it outlives
            the play, the SSH connection and the create")
@@ -736,53 +739,47 @@
       (is (nil? (:clone-orgs-json (tools/data-fn {:profile "p"})))))))
 
 (deftest the-checkout-layout-is-code-org-repo
-  (testing "one flat loop carries both halves of the path, so the organisation
-           asked for and the repository answered with cannot drift apart"
+  (testing "full_name (\"org/repo\") carries both halves of the clone URL and
+           the checkout path in one string, so the two cannot drift apart"
     (let [rendered (render-remote-playbook {:clone-orgs ["getcolors"]})]
       (is (str/includes? rendered "loop: [\"getcolors\"]"))
       (is (str/includes? rendered
-                         "dest: \"{{ ansible_env.HOME }}/code/{{ item.0.item }}/{{ item.1.name }}\""))
-      (is (str/includes? rendered "subelements('json')")))))
+                         "dest: \"{{ ansible_env.HOME }}/code/{{ item.full_name }}\""))
+      (is (str/includes? rendered "flatten(levels=2)")))))
 
-(deftest the-org-listing-needs-no-credential
-  (testing "these repositories are public, and a token would be a credential
-           every create then needs — so build stays credential-free here too"
+(deftest the-org-listing-rides-the-machines-gh-login
+  (testing "authenticated through gh, so the listing sees what the account
+           sees — an anonymous call would clone a silent subset — and paginated
+           by gh itself, which retires the old one-page-of-100 refusal"
     (let [rendered (render-remote-playbook {:clone-orgs ["getcolors"]})]
-      (is (str/includes? rendered "https://api.github.com/orgs/{{ item }}/repos"))
-      (is (not (str/includes? rendered "Authorization")))
-      (is (not (str/includes? rendered "GITHUB_TOKEN")))
+      (is (str/includes? rendered "gh api --paginate --slurp"))
+      (is (str/includes? rendered "orgs/{{ item }}/repos"))
+      (testing "the token itself never reaches the rendered playbook"
+        (is (not (str/includes? rendered "Authorization")))
+        (is (not (str/includes? rendered "GITHUB_TOKEN"))))
+      (is (not (str/includes? rendered "Refuse to clone a partial page"))
+          "gh follows the Link header, so the partial-page refusal is retired")
       (is (str/includes? rendered "changed_when: false")
-          "a GET is `ok`, not `changed`, however many repositories it names"))))
+          "a read is `ok`, not `changed`, however many repositories it names"))))
 
 (deftest forks-and-archived-repositories-are-not-working-copies
   (testing "forks are dropped at the server, where the API has a filter, and
            archived ones at the clone, where it does not"
     (let [rendered (render-remote-playbook {:clone-orgs ["getcolors"]})]
       (is (str/includes? rendered "type=sources"))
-      (is (str/includes? rendered "when: not item.1.archived")
+      (is (str/includes? rendered "when: not item.archived")
           "`when` rather than a loop filter, so the run says what it passed over"))))
 
-(deftest a-partial-page-fails-rather-than-cloning-quietly
-  (testing "per_page tops out at 100 and this does not follow the Link header,
-           so an organisation past that boundary would clone a hundred
-           repositories and report success"
-    (let [rendered (render-remote-playbook {:clone-orgs ["getcolors"]})
-          at #(str/index-of rendered %)]
-      (is (str/includes? rendered "per_page=100"))
-      (is (str/includes? rendered "that: item.json | length < 100"))
-      (is (< (at "Refuse to clone a partial page")
-             (at "Clone the organisations' repositories"))
-          "the assertion runs before anything is cloned"))))
-
-(deftest the-org-clones-never-write-a-key-to-the-machine
-  (testing "git@github.com: rather than https://, so they ride the forwarded
-           agent and can push back — and update: false, so a later create does
-           not discard edits made on the machine"
+(deftest the-org-clones-authenticate-with-the-machines-own-token
+  (testing "https through the gh credential helper, like the Emacs clone and
+           for the same reason — the checkouts can push back with nothing of
+           the workstation's involved — and update: false, so a later create
+           does not discard edits made on the machine"
     (let [rendered (render-remote-playbook {:clone-orgs ["getcolors"]})]
-      (is (str/includes? rendered "repo: \"git@github.com:{{ item.0.item }}/{{ item.1.name }}.git\""))
-      (is (not (str/includes? rendered "https://github.com/")))
+      (is (str/includes? rendered "repo: \"https://github.com/{{ item.full_name }}.git\""))
+      (is (not (str/includes? rendered "git@github.com")))
       (is (str/includes? rendered "update: false"))
-      (is (str/includes? rendered "accept_hostkey: true")))))
+      (is (not (str/includes? rendered "accept_hostkey"))))))
 
 (deftest the-org-clones-run-after-credentials-and-before-dotfiles
   (testing "credentials are cheap, the checkout must exist before its launcher
@@ -797,3 +794,237 @@
              (at "Clone the organisations' repositories")
              (at "Apply the dotfiles checkout once")
              (at "cmd: atuin sync"))))))
+
+;; ---------------------------------------------------------------------------
+;; the github identity
+
+(deftest the-remote-playbook-omits-github-when-no-account-is-named
+  (testing "gated in the template, so a project with no GitHub identity renders
+           a playbook that never mentions gh or a token at all"
+    (let [rendered (render-remote-playbook {})]
+      (is (not (str/includes? rendered "gh auth")))
+      (is (not (str/includes? rendered "github_token_file")))
+      (is (not (str/includes? rendered "git config"))))))
+
+(deftest a-named-account-logs-gh-in-and-configures-git
+  (let [rendered (render-remote-playbook {:github-account "someone"
+                                          :git-email "someone@example.com"})
+        at #(str/index-of rendered %)]
+    (testing "gh is installed inline, the Emacs precedent — it is what the
+             block is, not a package the project chose"
+      (is (str/includes? rendered "nixpkgs-unstable#gh")))
+    (testing "the machine's own login is the evidence, checked before seeding —
+             a login made on the machine directly is never clobbered"
+      (is (str/includes? rendered "gh auth status --hostname github.com"))
+      (is (str/includes? rendered "when: walter_gh_auth.rc != 0")))
+    (testing "the token travels over stdin from a controller-side file, never
+             argv and never a rendered value"
+      (is (str/includes? rendered "gh auth login --hostname github.com --with-token"))
+      (is (str/includes? rendered "stdin: \"{{ lookup('file', github_token_file) }}\""))
+      (is (str/includes? rendered "no_log: true")))
+    (testing "gh becomes git's credential helper — the whole https story"
+      (is (str/includes? rendered "gh auth setup-git --hostname github.com")))
+    (testing "the commit identity is the account plus the email, nothing more"
+      (is (str/includes? rendered "{key: user.name, value: \"someone\"}"))
+      (is (str/includes? rendered "{key: user.email, value: \"someone@example.com\"}")))
+    (testing "ordered: install, check, login, helper, identity"
+      (is (< (at "Install the GitHub CLI")
+             (at "Check whether gh already holds a login")
+             (at "Log gh in with the acquired token")
+             (at "Make gh git's credential helper")
+             (at "Configure the git identity"))))))
+
+(deftest the-github-login-precedes-every-clone
+  (testing "every clone authenticates through the helper the block configures,
+           so the block has to come first — and it does, right after the
+           ungated baseline"
+    (let [rendered (render-remote-playbook {:github-account "someone"
+                                            :git-email "someone@example.com"
+                                            :nix-packages ["babashka"]
+                                            :emacs-config-repo "https://github.com/me/emacs.d.git"
+                                            :clone-orgs ["getcolors"]
+                                            :dotfiles-checkout "~/code/getcolors/dotfiles"})
+          at #(str/index-of rendered %)]
+      (is (< (at "Make gh git's credential helper")
+             (at "Clone the Emacs configuration")))
+      (is (< (at "Make gh git's credential helper")
+             (at "Clone the organisations' repositories"))))))
+
+(deftest the-sandbox-outlives-a-failed-play-and-not-a-successful-one
+  (testing "deleting on success is what keeps the controller token-free; NOT
+           deleting on failure is what spares the retry a second device-code
+           approval"
+    (let [dir (str (fs/create-temp-dir))
+          sandbox (str (fs/create-temp-dir))
+          _ (spit (str sandbox "/token") "tok")
+          base {:profile "p" :workdir dir :provider-compute "oci"
+                :green/event :create
+                :github-account "someone" :git-email "someone@example.com"
+                :walter/github-token-dir sandbox
+                :walter/github-token-file (str sandbox "/token")}]
+      (with-redefs [ansible/ansible-step (fn [opts _]
+                                           (assoc opts :green/exit 1
+                                                  :green/err "play failed"))]
+        (let [result (tools/ansible-remote-step base)]
+          (is (= 1 (:green/exit result)))
+          (is (fs/exists? sandbox) "a failed play keeps the sandbox")))
+      (with-redefs [ansible/ansible-step (fn [opts _] (assoc opts :green/exit 0))]
+        (let [result (tools/ansible-remote-step base)]
+          (is (= 0 (:green/exit result)))
+          (is (not (fs/exists? sandbox)) "a seeded machine ends the sandbox")
+          (is (nil? (:walter/github-token-file result))))))))
+
+(deftest the-apply-runs-under-an-agent-holding-the-generated-key
+  (testing "ONCE's remote-exec provisioner authenticates through whatever agent
+           SSH_AUTH_SOCK names, and only walter's own short-lived agent holds
+           the generated key — observed as \"attempted methods [none]\" before
+           this existed"
+    (let [killed (atom nil)
+          run-fn (fn [args & _]
+                   (cond
+                     (= ["ssh-agent" "-s"] args)
+                     {:exit 0 :err ""
+                      :out "SSH_AUTH_SOCK=/tmp/agent.sock; export SSH_AUTH_SOCK;\nSSH_AGENT_PID=424242; export SSH_AGENT_PID;\n"}
+                     (= "ssh-add" (first args)) {:exit 0 :out "" :err ""}
+                     (= "kill" (first args)) (do (reset! killed (second args))
+                                                 {:exit 0 :out "" :err ""})))
+          result (tools/with-machine-key-agent "/k" (fn [env] env) run-fn)]
+      (is (= {"SSH_AUTH_SOCK" "/tmp/agent.sock"} result)
+          "the socket reaches the wrapped apply as an env addition")
+      (is (= "424242" @killed) "the agent dies with the apply")))
+  (testing "an agent that cannot start or load the key fails deterministically,
+           before any provider call"
+    (let [result (tools/with-machine-key-agent
+                  "/k" (fn [_] (throw (ex-info "applied" {})))
+                  (fn [args & _] (if (= ["ssh-agent" "-s"] args)
+                                   {:exit 1 :out "" :err "no agent"}
+                                   {:exit 0 :out "" :err ""})))]
+      (is (str/includes? (:walter/agent-error result) "ssh-agent failed")))
+    (let [result (tools/with-machine-key-agent
+                  "/k" (fn [_] (throw (ex-info "applied" {})))
+                  (fn [args & _]
+                    (cond
+                      (= ["ssh-agent" "-s"] args)
+                      {:exit 0 :out "SSH_AUTH_SOCK=/s; export SSH_AUTH_SOCK;\nSSH_AGENT_PID=1; export SSH_AGENT_PID;\n" :err ""}
+                      (= "ssh-add" (first args)) {:exit 1 :out "" :err "bad key"}
+                      :else {:exit 0 :out "" :err ""})))]
+      (is (str/includes? (:walter/agent-error result) "ssh-add failed")))))
+
+(deftest the-token-path-arrives-as-an-extra-var-not-a-rendered-value
+  (testing "the playbook names the variable; the path — let alone the token —
+           never lands in a rendered file, which is what the goldens hold still"
+    (let [captured (atom nil)]
+      (with-redefs [ansible/ansible-step (fn [opts config]
+                                           (reset! captured config)
+                                           (assoc opts :green/exit 0))]
+        (let [dir (str (fs/create-temp-dir))]
+          (tools/ansible-remote-step {:profile "p"
+                                      :workdir dir
+                                      :provider-compute "oci"
+                                      :green/event :create
+                                      :github-account "someone"
+                                      :git-email "someone@example.com"
+                                      :walter/github-token-file "/tmp/x/token"})))
+      (is (= "/tmp/x/token" (get-in @captured [:extra-vars :github_token_file]))))))
+
+;; ---------------------------------------------------------------------------
+;; the machine-access keypair
+
+(deftest keygen-adds-the-key-resource-only-where-keys-are-registered-by-name
+  (testing "hcloud and DigitalOcean take a key already registered with the
+           provider, so walter renders its own ssh-key.tf beside ONCE's
+           main.tf — the outputs.tf merge trick again"
+    (doseq [provider ["hcloud" "digitalocean"]]
+      (let [specs (tools/compute-specs {:provider-compute provider
+                                        :compute-keygen true} "/w")]
+        (is (= 2 (count specs)) (str provider " should add ssh-key.tf"))
+        (is (= (keyword (str "io.github.getcolors.walter.tools.tofu." provider) "ssh-key.tf")
+               (:template (second specs))))
+        (is (= "/w/ssh-key.tf" (:target (second specs)))))))
+  (testing "OCI reads a pubkey path and Yandex the content, so neither needs an
+           extra file — and no-infra has no compute resource at all"
+    (is (= 2 (count (tools/compute-specs {:provider-compute "oci"
+                                          :compute-keygen true} "/w")))
+        "main.tf plus the instance-id output, exactly as without keygen")
+    (doseq [provider ["yandex" "no-infra"]]
+      (is (= 1 (count (tools/compute-specs {:provider-compute provider
+                                            :compute-keygen true} "/w")))))))
+
+(deftest a-build-derives-placeholders-never-key-material
+  (testing "generation is a create-time side effect, so a build renders stable
+           placeholders — a fresh key every build would break the goldens"
+    (let [derived (tools/derive-machine-key {:compute-keygen true
+                                             :profile "p"
+                                             :green/event :build})]
+      (is (= "/home/build-placeholder/.ssh/walter_p.pub"
+             (:oci-ssh-authorized-keys derived)))
+      (is (str/starts-with? (:compute-pubkey derived) "ssh-ed25519 "))
+      (is (str/includes? (:compute-pubkey derived) "BUILDPLACEHOLDER"))
+      (testing "the hcloud and DigitalOcean values are HCL references to the
+               rendered resource, which double as the dependency edge"
+        (is (= "${hcloud_ssh_key.walter.name}" (:hcloud-ssh-keys derived)))
+        (is (= "${digitalocean_ssh_key.walter.fingerprint}"
+               (:digitalocean-ssh-keys derived))))))
+  (testing "with keygen off nothing is derived"
+    (is (= {:profile "p"} (tools/derive-machine-key {:profile "p"})))))
+
+(deftest the-managed-block-names-the-key-only-when-walter-generated-one
+  (testing "the rendered ssh-config block carries IdentityFile in the literal ~
+           form — ssh_config expands it, and the playbook stays byte-identical
+           across workstations"
+    (is (= "~/.ssh/walter_p"
+           (:machine-key-path (tools/data-fn {:profile "p" :compute-keygen true}))))
+    (is (nil? (:machine-key-path (tools/data-fn {:profile "p"}))))))
+
+(defn- render-local-playbook
+  [opts]
+  (let [dir (str (fs/create-temp-dir))
+        merged (merge {:profile "p"
+                       :workdir dir
+                       :provider-compute "oci"
+                       :green/event :build}
+                      opts)]
+    (tools/ansible-local-step merged)
+    (slurp (str (tools/tool-dir merged tools/ansible-local-tool) "/main.yml"))))
+
+(deftest the-local-playbook-writes-identityfile-only-with-keygen
+  (testing "with keygen on, ssh <profile> uses the generated key and nothing
+           else — IdentitiesOnly stops the agent offering the operator's own"
+    (let [rendered (render-local-playbook {:compute-keygen true})]
+      (is (str/includes? rendered "IdentityFile ~/.ssh/walter_p"))
+      (is (str/includes? rendered "IdentitiesOnly yes"))))
+  (testing "without it the block is what it always was — matched on the config
+           line, since the header commentary mentions the word"
+    (let [rendered (render-local-playbook {})]
+      (is (not (str/includes? rendered "IdentityFile ~")))))
+  (testing "no ForwardAgent line either way — nothing on the machine
+           authenticates with the workstation's keys any more"
+    (is (not (str/includes? (render-local-playbook {:compute-keygen true})
+                            "ForwardAgent yes")))
+    (is (not (str/includes? (render-local-playbook {}) "ForwardAgent yes")))))
+
+(deftest the-ansible-steps-connect-with-the-generated-key
+  (testing "green's runner already supports --private-key; walter passes it
+           exactly when it generated the key"
+    (let [captured (atom nil)]
+      (with-redefs [ansible/ansible-step (fn [opts config]
+                                           (reset! captured config)
+                                           (assoc opts :green/exit 0))]
+        (let [dir (str (fs/create-temp-dir))]
+          (tools/ansible-remote-step {:profile "p"
+                                      :workdir dir
+                                      :provider-compute "oci"
+                                      :green/event :create
+                                      :compute-keygen true})))
+      (is (str/ends-with? (str (:private-key @captured)) "/.ssh/walter_p")))
+    (let [captured (atom nil)]
+      (with-redefs [ansible/ansible-step (fn [opts config]
+                                           (reset! captured config)
+                                           (assoc opts :green/exit 0))]
+        (let [dir (str (fs/create-temp-dir))]
+          (tools/ansible-remote-step {:profile "p"
+                                      :workdir dir
+                                      :provider-compute "oci"
+                                      :green/event :create})))
+      (is (nil? (:private-key @captured))
+          "without keygen, ssh picks its identity as it always did"))))

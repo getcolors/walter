@@ -23,6 +23,13 @@
    :oci-boot-volume-vpus-per-gb 30
    :oci-ssh-authorized-keys "/home/example/.ssh/id_ed25519.pub"})
 
+(def github-identity
+  "The two keys the clone-bearing features now depend on: every clone in the
+  remote play authenticates over https with the token `github-account`
+  acquires, so tests exercising those features carry the identity."
+  {:github-account "walter-test"
+   :git-email "walter@example.com"})
+
 (defn- errors-matching
   [opts re]
   (filter #(re-find re %) (validate/state-errors opts)))
@@ -162,9 +169,9 @@
                               #":dotfiles-checkout"))))
   (testing "naming babashka satisfies it"
     (is (= [] (validate/state-errors
-               (assoc base
-                      :nix-packages ["babashka"]
-                      :dotfiles-checkout "~/code/getcolors/dotfiles")))))
+               (merge base github-identity
+                      {:nix-packages ["babashka"]
+                       :dotfiles-checkout "~/code/getcolors/dotfiles"})))))
   (testing "no checkout named is the common case and never an error"
     (is (= [] (validate/state-errors (assoc base :nix-packages ["ripgrep"]))))))
 
@@ -253,10 +260,13 @@
         (is (str/includes? (first errs) (pr-str bad))
             "the message names the entry, not just the key"))))
   (testing "a plain organisation name is accepted"
-    (is (= [] (validate/state-errors (assoc base :clone-orgs ["getcolors"]))))
-    (is (= [] (validate/state-errors (assoc base :clone-orgs ["getcolors" "amiorin"])))))
+    (is (= [] (validate/state-errors (merge base github-identity
+                                            {:clone-orgs ["getcolors"]}))))
+    (is (= [] (validate/state-errors (merge base github-identity
+                                            {:clone-orgs ["getcolors" "amiorin"]})))))
   (testing "a COLORS_PAR_* overlay arrives as one string, like every other list key"
-    (is (= [] (validate/state-errors (assoc base :clone-orgs "getcolors amiorin"))))
+    (is (= [] (validate/state-errors (merge base github-identity
+                                            {:clone-orgs "getcolors amiorin"}))))
     (is (seq (errors-matching (assoc base :clone-orgs "getcolors bad/name")
                               #":clone-orgs"))))
   (testing "REPLACE_ME is refused as a gated key rather than sent to GitHub"
@@ -264,4 +274,79 @@
                               #"REPLACE_ME"))))
   (testing "there is no companion :nix-packages rule — Ubuntu ships git, which
            the Emacs and dotfiles clones have always relied on"
-    (is (= [] (validate/state-errors (assoc base :clone-orgs ["getcolors"]))))))
+    (is (= [] (validate/state-errors (merge base github-identity
+                                            {:clone-orgs ["getcolors"]}))))))
+
+(deftest the-github-identity-is-two-keys-that-mean-anything-only-together
+  (testing "both present and well-shaped is renderable"
+    (is (= [] (validate/state-errors (merge base github-identity)))))
+  (testing "one without the other is a half-configured machine"
+    (is (seq (errors-matching (assoc base :github-account "walter-test")
+                              #":github-account needs :git-email")))
+    (is (seq (errors-matching (assoc base :git-email "walter@example.com")
+                              #":git-email needs :github-account"))))
+  (testing "the account is a login name, not a URL and not an email"
+    (doseq [bad ["getcolors/walter" "https://github.com/getcolors"
+                 "walter@example.com" "-walter" "walter-"]]
+      (is (seq (errors-matching (merge base github-identity
+                                       {:github-account bad})
+                                #":github-account"))
+          (str bad " should be refused"))))
+  (testing "the email is checked for plausibility, not RFC bravado"
+    (doseq [bad ["walter-test" "walter@" "@example.com" "walter@nodot"]]
+      (is (seq (errors-matching (merge base github-identity {:git-email bad})
+                                #":git-email"))
+          (str bad " should be refused"))))
+  (testing "REPLACE_ME is refused as a gated key"
+    (is (seq (errors-matching (merge base github-identity
+                                     {:github-account "REPLACE_ME"})
+                              #"REPLACE_ME")))))
+
+(deftest clone-features-need-the-github-identity
+  (testing "every clone authenticates over https with the acquired token, so a
+           clone-bearing key without an identity fails the build rather than
+           the machine"
+    (doseq [[k v] {:emacs-config-repo "https://github.com/me/emacs.d.git"
+                   :clone-orgs ["getcolors"]
+                   :dotfiles-checkout "~/code/getcolors/dotfiles"}]
+      (is (seq (errors-matching (assoc base k v) #"needs :github-account"))
+          (str k " should demand the identity")))))
+
+(deftest an-ssh-emacs-repo-is-refused
+  (testing "the machine holds no ssh key for GitHub and no forwarded agent, so
+           an ssh URL fails here with the reason rather than on the machine
+           with a bare permission-denied"
+    (doseq [bad ["git@github.com:me/emacs.d.git" "ssh://git@github.com/me/e.git"]]
+      (is (seq (errors-matching (merge base github-identity
+                                       {:emacs-config-repo bad})
+                                #":emacs-config-repo"))
+          (str bad " should be refused"))))
+  (testing "the https form is the expected shape"
+    (is (= [] (validate/state-errors
+               (merge base github-identity
+                      {:emacs-config-repo "https://github.com/me/emacs.d.git"}))))))
+
+(deftest compute-keygen-must-be-boolean-and-on-a-supported-provider
+  (is (seq (errors-matching (assoc base :compute-keygen "true")
+                            #":compute-keygen")))
+  (testing "the providers walter can feed a generated key to"
+    (doseq [provider ["oci" "hcloud" "digitalocean" "yandex" "no-infra"]]
+      (is (= [] (errors-matching (-> base
+                                     (dissoc :oci-ssh-authorized-keys)
+                                     (assoc :provider-compute provider
+                                            :compute-keygen true))
+                                 #"not supported"))
+          (str provider " should accept compute-keygen")))))
+
+(deftest keygen-derives-the-ssh-keys-so-setting-both-is-refused
+  (testing "the derived value would silently win, and the machine would come up
+           authorized for a key the file never mentions"
+    (is (seq (errors-matching (assoc base :compute-keygen true)
+                              #":oci-ssh-authorized-keys is set"))))
+  (testing "with the hand-set key removed, keygen waives the requirement"
+    (is (= [] (validate/state-errors (-> base
+                                         (dissoc :oci-ssh-authorized-keys)
+                                         (assoc :compute-keygen true))))))
+  (testing "without keygen the provider key is required, as it always was"
+    (is (seq (errors-matching (dissoc base :oci-ssh-authorized-keys)
+                              #":oci-ssh-authorized-keys is required")))))

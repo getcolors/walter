@@ -56,7 +56,7 @@ resource "yandex_compute_instance" "node1" {
   # Yandex has no account-level SSH key registry: the user and its key are
   # created by cloud-init from instance metadata.
   metadata = {
-    ssh-keys = "ubuntu:ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureKeyForGoldenBuildsOnly"
+    ssh-keys = "ubuntu:ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBUILDPLACEHOLDER0000000000000000000000"
   }
 
   # Wait for ssh before starting Ansible

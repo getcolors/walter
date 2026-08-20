@@ -99,8 +99,8 @@ apply:
 uses for `:delete`, which is why the two new verbs needed no engine change.
 
 ```text
-create / build   start ─ compute ─┬─ ansible-local
-                                  └─ ansible-remote
+create / build   start ─ github-token ─ compute ─┬─ ansible-local
+                                                 └─ ansible-remote
 
 delete           start ─ ansible-cleanup ─ compute
 
@@ -108,6 +108,20 @@ stop             start ─ power-off
 
 start            start ─ power-on ─ ansible-local
 ```
+
+`github-token` is the one interactive step walter has, and it is first on
+purpose: **the workflow is interactive at the beginning only**. On a real
+create with `github-account` set and no logged-in machine (probed over the
+managed alias), it runs GitHub's device flow on the controller — `gh` owns the
+terminal, sandboxed into a per-profile `GH_CONFIG_DIR` under
+`~/.local/state/walter/github-token-<profile>` so the operator's own gh login
+is untouched — verifies the token belongs to the named account, and stashes it
+as a *file path* in opts, never the token itself (ONCE's deploy-key rule).
+`ansible-remote` feeds the file to the machine over stdin and deletes the
+sandbox **only once the machine is seeded**: a create that fails part-way
+keeps it, deliberately, and the retry reuses the surviving token — after
+re-verifying the account — instead of asking for a second code. On build,
+delete, dry-run, and projects without the key it passes through untouched.
 
 Create and build fork after compute; the Ansible stages are independent and
 neither joins. Delete drops the managed ssh block before destroying, so a
@@ -139,10 +153,54 @@ transition completes.
 
 | Step | Directory | Does |
 |---|---|---|
-| `:walter/compute` | `walter-compute` | ONCE's provider template + walter's `outputs.tf`; outputs ip/user/sudoer/name |
-| `:walter/ansible-local` | `walter-ansible-local` | the managed `Host <profile>` block in `~/.ssh/config` |
-| `:walter/ansible-remote` | `walter-ansible-remote` | ping, unprivileged cloudflared sysctls, nix, terminfo, and — when the gating key is set — packages, shell, runtimes, Emacs, dotfiles, agent credentials, atuin |
+| `:walter/github-token` | — | the device-flow token acquisition above; no directory, nothing rendered |
+| `:walter/compute` | `walter-compute` | ONCE's provider template + walter's `outputs.tf` (and, with `compute-keygen` on hcloud/DO, walter's `ssh-key.tf`); outputs ip/user/sudoer/name |
+| `:walter/ansible-local` | `walter-ansible-local` | the managed `Host <profile>` block in `~/.ssh/config`, with `IdentityFile`/`IdentitiesOnly` when `compute-keygen` is on |
+| `:walter/ansible-remote` | `walter-ansible-remote` | ping, unprivileged cloudflared sysctls, nix, terminfo, and — when the gating key is set — the gh login and git identity, packages, shell, runtimes, Emacs, dotfiles, agent credentials, atuin |
 | `:walter/emacs-packages` | `walter-emacs-packages` | starts the ELPA/MELPA bootstrap and does **not** wait for it |
+
+### The GitHub identity and the machine keypair
+
+Two opt-in features changed walter's credential story; both invariants below
+are deliberate reversals of v1's.
+
+**`github-account` + `git-email`** put the machine's own GitHub identity on
+it: gh logged in with the device-flow token, `gh auth setup-git` making that
+token git's https credential, `user.name`/`user.email` configured. Every
+clone in the remote play — Emacs config, `clone-orgs`, the dotfiles checkout
+it feeds — rides this over https, and validate.clj refuses those keys without
+the identity, and refuses an ssh:// or git@ `emacs-config-repo` outright. The
+`clone-orgs` listing is authenticated too (`gh api --paginate --slurp`), so it
+sees private repositories and complete organisations; the old anonymous
+one-page-of-100 refusal is retired. **There is no ssh key for GitHub and no
+agent forwarding anywhere** — both ansible.cfg files and the managed
+ssh-config block dropped `ForwardAgent`. The machine holds its own token and
+nothing of the workstation's; deleting the machine does not revoke the token
+(GitHub Settings → Applications → GitHub CLI does).
+
+**`compute-keygen: true`** makes walter generate the machine-access keypair
+per deployment — `~/.ssh/walter_<profile>` on the workstation, its own write
+into `~/.ssh` beyond the blockinfile — and derive the per-provider key values
+from it: OCI gets the pubkey *path* (its template reads `file()`), Yandex the
+*content*, hcloud/DigitalOcean an HCL reference to the `hcloud_ssh_key` /
+`digitalocean_ssh_key` resource walter renders in `ssh-key.tf` beside ONCE's
+template — the `outputs.tf` merge trick again, and the reference doubles as
+the dependency edge. Hand-setting those keys alongside the flag is refused;
+`scripts/golden.sh` asserts the resource renders exactly where it should. On
+`:build` the derived values are stable placeholders (ONCE's deploy-key rule),
+so goldens stay byte-identical across workstations. Delete leaves the key
+files alone — a keypair is not provider state.
+
+One consumer of the key is invisible in walter's own templates: ONCE's
+compute templates carry a `remote-exec` "wait for ssh" provisioner whose
+connection block names no key, so OpenTofu authenticates it through whatever
+agent `SSH_AUTH_SOCK` points at — and nothing holds a key walter just
+generated. `compute-step` therefore runs a real create's apply under its own
+short-lived ssh-agent loaded with exactly that key
+(`with-machine-key-agent`), killed when the apply returns. Without it the
+provisioner dies with "attempted methods [none]" against a machine that is
+otherwise fine — observed on the first live create, which is why this
+exists.
 
 `nix profile add` runs with `NIXPKGS_ALLOW_UNFREE=1` and `--impure` so unfree
 attributes (`claude-code`) install beside free ones in the one invocation that
@@ -191,13 +249,12 @@ or false — rather than overriding a choice made on the machine.
 one's source repositories out under `~/code/<org>/<repo>`. The list is read from
 GitHub's API **on the machine at create time** rather than rendered, which is the
 point of the key: a repository added upstream arrives on the next create with
-nothing in desired state to keep in step. It is unauthenticated on purpose — a
-token would be a credential every create needs — so it sees public repositories
-only, and it reads one page of 100 and *fails* rather than cloning a silent
-subset past that. Forks are dropped by the API's `type=sources`; archived
-repositories are skipped with an Ansible `when:`, so the run names what it passed
-over. Same `update: false` and ssh:// as the Emacs clone above, for the same
-reasons.
+nothing in desired state to keep in step. The listing rides the machine's gh
+login (`gh api --paginate --slurp`), so it sees what the account sees —
+private repositories included — and complete organisations of any size. Forks
+are dropped by the API's `type=sources`; archived repositories are skipped
+with an Ansible `when:`, so the run names what it passed over. Same
+`update: false` and https as the Emacs clone above, for the same reasons.
 
 `dotfiles-checkout` runs that checkout's existing `./green create` after
 `clone-orgs`, using the checkout's own `colors.yml`. Walter supplies only
@@ -238,8 +295,9 @@ outputs.
 ## Code conventions
 
 - **Namespaces**: `io.github.getcolors.walter.*` — `utils` (contract, alias),
-  `validate` (rules over ONCE's registry), `oci` (the CLI), `tools` (the steps),
-  `workflow` (the graph). Adding a sixth needs a genuinely new concern.
+  `validate` (rules over ONCE's registry), `oci` (the CLI), `github` (the
+  device-flow token), `tools` (the steps), `workflow` (the graph). Adding a
+  seventh needs a genuinely new concern.
 - **Keys**: plain kebab-case keywords for desired state (they match template
   variable names); namespaced for engine state (`:green/…`, `:walter/…`).
 - **Steps** take `opts` and return `opts`, reporting failure through

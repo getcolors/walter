@@ -12,7 +12,14 @@ provider-backend: local
 compute-prevent-destroy: true
 power-wait-seconds: 300
 
-compute-pubkey: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureKeyForGoldenBuildsOnly
+# Set so every golden renders the derived key values and, on hcloud and
+# digitalocean, the ssh-key.tf resource beside ONCE's main.tf. A build derives
+# stable placeholders (generation is a create-time side effect), so the goldens
+# stay byte-identical across workstations. With this on, the per-provider ssh
+# key values below must be absent — walter derives them, and validate.clj
+# refuses the combination. The absent branch — hand-supplied keys, exactly as
+# before the feature — is covered once in tools_test and validate_test.
+compute-keygen: true
 
 oci-config-file-profile: DEFAULT
 oci-subnet-id: ocid1.subnet.oc1.eu-frankfurt-1.aaaaaaaafixturesubnet
@@ -24,20 +31,17 @@ oci-ocpus: 2
 oci-memory-in-gbs: 12
 oci-boot-volume-size-in-gbs: 100
 oci-boot-volume-vpus-per-gb: 30
-oci-ssh-authorized-keys: /home/fixture/.ssh/id_ed25519.pub
 
 hcloud-name: walter-fixture
 hcloud-image: ubuntu-24.04
 hcloud-server-type: cx23
 hcloud-location: hel1
-hcloud-ssh-keys: fixture-key
 
 digitalocean-name: walter-fixture
 digitalocean-region: ams3
 digitalocean-size: s-1vcpu-1gb-35gb-intel
 digitalocean-image: ubuntu-25-10-x64
 digitalocean-vpc-uuid: 00000000-0000-0000-0000-000000000000
-digitalocean-ssh-keys: fixture-key
 
 yandex-cloud-id: b1gfixturecloud
 yandex-folder-id: b1gfixturefolder
@@ -91,11 +95,23 @@ asdf-tools:
 corepack-packages:
   - pnpm
 
+# Set so every golden renders the github block: gh installed and logged in
+# with the token the create acquired, git authenticating through it, and the
+# commit identity configured. Every clone below rides this over https. Only
+# the identity is desired state — the token is minted by the device flow at
+# create time and never rendered, which is exactly what these goldens exist to
+# hold still. The absent branch is
+# `the-remote-playbook-omits-github-when-no-account-is-named` in tools_test.
+github-account: fixture-user
+git-email: fixture-user@example.com
+
 # Set so every golden renders the Emacs half of the remote playbook. The other
 # branch — no repository, no mention of Emacs — is not a golden: it is
 # `the-remote-playbook-omits-emacs-when-no-repo-is-named` in tools_test, because
-# eight identical copies of an absence prove nothing eight times.
-emacs-config-repo: git@github.com:fixture/emacs.d.git
+# eight identical copies of an absence prove nothing eight times. https, like
+# every clone here: the machine authenticates with its own gh token, and
+# validate.clj refuses the old ssh form.
+emacs-config-repo: https://github.com/fixture/emacs.d.git
 emacs-config-dest: ~/.config/fixture-emacs
 
 # Set so every golden renders the dotfiles half. clone-orgs creates this

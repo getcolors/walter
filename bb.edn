@@ -14,11 +14,13 @@
    :requires ([clojure.test :as t]
               [io.github.getcolors.walter.validate-test]
               [io.github.getcolors.walter.oci-test]
+              [io.github.getcolors.walter.github-test]
               [io.github.getcolors.walter.tools-test]
               [io.github.getcolors.walter.workflow-test])
    :task (let [{:keys [fail error]}
                (t/run-tests 'io.github.getcolors.walter.validate-test
                             'io.github.getcolors.walter.oci-test
+                            'io.github.getcolors.walter.github-test
                             'io.github.getcolors.walter.tools-test
                             'io.github.getcolors.walter.workflow-test)]
            (System/exit (if (pos? (+ fail error)) 1 0)))}

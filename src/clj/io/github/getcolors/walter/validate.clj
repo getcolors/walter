@@ -43,6 +43,34 @@
   [opts]
   (contains? stoppable (str (:provider-compute opts))))
 
+(def keygen-providers
+  "Compute providers `compute-keygen` can feed a generated key to.
+
+  Three shapes exist upstream and all three are coverable without touching
+  ONCE's templates: OCI reads a public-key *path* through `file()`, Yandex
+  interpolates the key *content*, and hcloud/DigitalOcean take a key already
+  registered with the provider — which walter satisfies by rendering its own
+  `ssh-key.tf` beside ONCE's `main.tf`, the same merge trick `outputs.tf`
+  uses. `no-infra` has no compute resource, so the key is generated and simply
+  not injected anywhere. The providers walter does not advertise (aws, google,
+  azure, vultr) are refused rather than half-supported."
+  #{"oci" "hcloud" "digitalocean" "yandex" "no-infra"})
+
+(def machine-key-keys
+  "The per-provider desired-state keys `compute-keygen` derives.
+
+  When the feature is on these are walter's to fill, and a hand-set value
+  would be silently overwritten — so validation waives them from `:required`
+  and refuses them when explicitly set, rather than letting the two sources
+  fight."
+  #{:oci-ssh-authorized-keys :hcloud-ssh-keys :digitalocean-ssh-keys
+    :compute-pubkey})
+
+(defn keygen?
+  "Whether walter generates and manages the machine-access keypair."
+  [opts]
+  (true? (:compute-keygen opts)))
+
 (def agent-credential-paths
   "Agent CLIs walter can carry a subscription login for, and the one file each
   keeps it in — relative to $HOME, because both sides read the same path under
@@ -112,6 +140,7 @@
    :atuin-username
    :seed-agent-credentials
    :clone-orgs
+   :github-account :git-email
    :oci-image-id])
 
 (defn- leftover-placeholders
@@ -165,6 +194,13 @@
   carry a character this rejects."
   #"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 
+(def ^:private email-re
+  "Plausibility, not RFC 5322: something before an @, something after it,
+  and a dot in the domain. This value only reaches `git config user.email`,
+  where the realistic mistake is pasting a username or leaving a REPLACE_ME —
+  both of which this rejects — not crafting an exotic-but-legal address."
+  #"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
 (defn clone-org-names
   "The `clone-orgs` entries as plain strings, with the same flat-key string
   tolerance every list key here has."
@@ -180,8 +216,13 @@
   [opts]
   (vec
    (concat
+    ;; With compute-keygen on, the per-provider ssh-key keys are walter's to
+    ;; derive from the generated keypair, so requiring them would demand values
+    ;; the operator must not set.
     (map #(str % " is required")
-         (missing-keys opts (concat [:profile :workdir] (slot-keys opts :required))))
+         (missing-keys opts (cond->> (concat [:profile :workdir]
+                                             (slot-keys opts :required))
+                              (keygen? opts) (remove machine-key-keys))))
     (leftover-placeholders opts)
     (for [slot slots
           :let [provider (get opts slot)]
@@ -189,6 +230,25 @@
       (str "unsupported " slot " " (pr-str provider)))
     (when-not (boolean? (:compute-prevent-destroy opts))
       [":compute-prevent-destroy must be true or false"])
+    ;; Boolean like compute-prevent-destroy, for the same reason: "false" the
+    ;; string is truthy, and a key that silently generates key material must
+    ;; not have a value that reads as off and acts as on.
+    (when-not (or (nil? (:compute-keygen opts))
+                  (boolean? (:compute-keygen opts)))
+      [":compute-keygen must be true or false"])
+    (when (and (keygen? opts)
+               (not (contains? keygen-providers (str (:provider-compute opts)))))
+      [(str ":compute-keygen is not supported on provider-compute "
+            (pr-str (:provider-compute opts)) " — walter can feed a generated "
+            "key to " (str/join ", " (sort keygen-providers)) " only")])
+    ;; The derived keys and a hand-set value cannot both win, and losing
+    ;; silently is worse than refusing loudly: the machine would come up
+    ;; authorized for a key the file never mentions.
+    (when (keygen? opts)
+      (for [k (sort machine-key-keys)
+            :when (not (placeholder? (get opts k)))]
+        (str k " is set, but :compute-keygen derives it from the generated "
+             "keypair — delete the key, or turn :compute-keygen off")))
     ;; Yandex requires :compute-pubkey; elsewhere it is optional. Either way a
     ;; value that is present must look like a public key.
     (when-not (or (nil? (:compute-pubkey opts))
@@ -270,7 +330,46 @@
        (when (and (not (placeholder? (:atuin-username opts)))
                   (not (contains? packages "atuin")))
          [(str ":atuin-username needs \"atuin\" in :nix-packages — "
-               "there is nothing to log in without it")]))))))
+               "there is nothing to log in without it")])))
+    ;; The GitHub identity is two keys that only mean anything together:
+    ;; `github-account` names whose token the create acquires, `git-email`
+    ;; completes the commit identity it configures. One without the other is a
+    ;; half-configured machine, caught here rather than discovered as an
+    ;; anonymous-looking commit or a login against the wrong expectation.
+    (let [account (not-empty (str (:github-account opts)))
+          email (not-empty (str (:git-email opts)))]
+      (concat
+       (when (and account (not (re-matches github-login-re account)))
+         [(str ":github-account " (pr-str account)
+               " is not a GitHub account name — this key takes the login "
+               "alone, as in \"getcolors\", not a URL and not an email")])
+       (when (and email (not (re-matches email-re (str email))))
+         [(str ":git-email " (pr-str email) " does not look like an email "
+               "address")])
+       (when (and account (not email))
+         [":github-account needs :git-email — the commit identity is both"])
+       (when (and email (not account))
+         [":git-email needs :github-account — the commit identity is both"])
+       ;; Every clone in the remote play now rides HTTPS with the token that
+       ;; `github-account` acquires — agent forwarding is gone, so without the
+       ;; identity these features render tasks that cannot authenticate. A
+       ;; build-time refusal beats a permission-denied half way through a
+       ;; create.
+       (when-not account
+         (for [k [:emacs-config-repo :clone-orgs :dotfiles-checkout]
+               :when (not (placeholder? (get opts k)))]
+           (str k " needs :github-account — its clone authenticates with the "
+                "GitHub token walter acquires at create time")))
+       ;; An ssh:// or git@ URL reaches for a key or an agent the machine no
+       ;; longer has. The clone would fail on the machine with a bare
+       ;; permission-denied; say what changed here instead.
+       (let [repo (str (:emacs-config-repo opts))]
+         (when (and (not (placeholder? (:emacs-config-repo opts)))
+                    (or (str/starts-with? repo "git@")
+                        (str/starts-with? repo "ssh://")))
+           [(str ":emacs-config-repo is an ssh URL, but the machine holds no "
+                 "ssh key for GitHub — clones authenticate over https with "
+                 "the acquired token, so name the https:// form")])))))))
 
 (defn secret-errors
   "Credentials the selected providers need that no `COLORS_PAR_*` variable

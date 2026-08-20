@@ -50,9 +50,72 @@ with a running machine they cannot stop.
 Only `oci` can be power cycled. Every other provider makes `stop` and `start` a
 reported no-op.
 
+## Machine access
+
+| Key | Meaning |
+|---|---|
+| `compute-keygen` | Optional, `true` or `false`. Walter generates the machine-access keypair per deployment and feeds it to the provider. |
+
+Set `true` and walter generates `~/.ssh/walter_<profile>` (ed25519, no
+passphrase) on the workstation at create time, if absent, and derives the
+per-provider key values from it: `oci-ssh-authorized-keys` becomes the
+generated public key's path, `compute-pubkey` its content, and on hcloud and
+DigitalOcean — whose instances take a key already registered with the
+provider — walter renders an `ssh-key.tf` resource beside the compute template
+and references it. The managed `~/.ssh/config` block then pins
+`ssh <profile>` to that key (`IdentityFile` + `IdentitiesOnly`), and Ansible
+connects with it. The apply itself runs under a short-lived ssh-agent walter
+starts with that key loaded, because the compute template's "wait for ssh"
+provisioner authenticates through an agent and nothing else would hold a key
+this new; the agent dies with the apply.
+
+**Leave the per-provider ssh key values out when this is on** — they are
+walter's to derive, and the build refuses the combination. An existing key
+file is never regenerated, and `delete` leaves the files in `~/.ssh` alone: a
+keypair is not provider state, and the next create of the same profile adopts
+it.
+
+Left unset, you supply a key per provider exactly as documented below.
+
+## GitHub identity
+
+| Key | Meaning |
+|---|---|
+| `github-account` | Optional. The GitHub login the machine acts as. Gates the whole feature. |
+| `git-email` | Required with `github-account`. Becomes `git config user.email`; `user.name` is the account. |
+
+Set both and the machine comes up with gh logged in as that account, git
+cloning and pushing over **https** through it (`gh auth setup-git`), and the
+commit identity configured. The clone-bearing features below —
+`emacs-config-repo`, `clone-orgs`, `dotfiles-checkout` — authenticate through
+this and refuse to build without it.
+
+**No token lives anywhere in desired state, and none is asked of you.** The
+create *mints* one: its first action, before any provider is touched, is
+GitHub's device flow — a one-time code and
+`https://github.com/login/device`, approved from any browser, bounded by the
+code's own ~15-minute life. Once approved, the rest of the run is unattended;
+that is the design — the workflow is interactive at the beginning only. The
+token carries gh's default scopes plus `workflow`, is verified to belong to
+`github-account` before anything uses it, is seeded into the machine's own
+`~/.config/gh/hosts.yml` over stdin, and the temporary controller-side copy is
+deleted before the create returns. The operator's own gh login on the
+workstation is never touched — the flow runs in a sandboxed `GH_CONFIG_DIR`.
+`gh` must be installed on the workstation running `create`.
+
+A machine that already holds a gh login is detected over the managed ssh alias
+and left exactly as it is, so re-creates stay non-interactive — including a
+login made on the machine directly. A create that fails *part-way* keeps the
+minted token in its sandbox (`~/.local/state/walter/github-token-<profile>`,
+0700), so the retry reuses it — re-verified against the account — instead of
+prompting again; the sandbox is deleted the moment a create seeds the
+machine. Deleting the machine does **not** revoke the token; do that under
+GitHub Settings → Applications → GitHub CLI.
+
 ## Compute providers
 
-Only the selected provider's keys are required.
+Only the selected provider's keys are required — except under
+`compute-keygen`, which derives the ssh key values (and only those) itself.
 
 **oci** — authenticates from `~/.oci/config`, no `COLORS_PAR_*` of its own.
 
@@ -113,10 +176,12 @@ configuration that lives anywhere else needs `--init-directory` to reach it, so
 set this key to say where — `~/.config/neoemacs`, say — and launch with
 `emacs --init-directory ~/.config/neoemacs`.
 
-Prefer an `ssh://`-style URL (`git@github.com:you/emacs.d.git`). The clone runs
-over the agent walter already forwards, so no private key is written to the
-machine and the working copy can push back. An HTTPS URL clones fine and is
-read-only.
+Name the **https** form (`https://github.com/you/emacs.d.git`). The clone
+authenticates through the machine's own gh login — `github-account` above is
+required — so a private repository works and the working copy can push back,
+with nothing of the workstation's involved. The old `ssh://`/`git@` form is
+refused at build time: the machine holds no ssh key for GitHub and no agent is
+forwarded to it.
 
 It is cloned **once**. A later `create` leaves an existing checkout alone, so
 edits made on the machine are never discarded — pulling is the user's call.
@@ -189,7 +254,8 @@ not expose until told to look again; the playbook reshims. Skip that and
 | `dotfiles-checkout` | Optional. A checkout of `getcolors/dotfiles` whose existing `./green` launcher Walter runs. |
 
 Needs `babashka` in `nix-packages`, because the Green launcher is a Babashka
-script. The checkout owns its `colors.yml`: that file selects the packaged
+script, and `github-account` above, because `clone-orgs` is what creates the
+checkout. The checkout owns its `colors.yml`: that file selects the packaged
 profile and target, and Walter does not duplicate those keys. Walter invokes
 `./green create` from the checkout with
 `COLORS_PAR_DOTFILES_PREVENT_OVERWRITE=false`; it never sets
@@ -213,11 +279,10 @@ step. That is the whole reason the key takes an org — a rendered list would be
 list gone stale. A value carrying a `/` or a scheme is refused at build time,
 because the realistic mistake is pasting `org/repo` or a full URL into it.
 
-The call is **unauthenticated**, deliberately: a token would be a credential
-every `create` then needs and every operator then holds. The costs are real and
-stated rather than discovered — private repositories are invisible to it, and the
-anonymous rate limit is 60 requests an hour per address, against one request per
-organisation.
+The listing is **authenticated** through the machine's gh login —
+`github-account` above is required — so it sees what the account sees, private
+repositories included, and gh paginates it itself: organisations of any size
+clone completely.
 
 Two filters, applied in different places because the API only offers one.
 `type=sources` drops forks at the server; archived repositories are skipped at
@@ -225,16 +290,12 @@ the clone with an Ansible `when:`, so the run names what it passed over instead
 of quietly producing a shorter list. Both are the same judgement: neither is a
 working copy.
 
-One page of 100 is read, and the `Link:` header is not followed. An organisation
-at or past that boundary **fails the create** rather than cloning its first
-hundred and reporting success — a silently partial checkout is found weeks later,
-on the one repository that was missing.
-
-The clones use `git@github.com:` and `update: false`, like the editor clone:
-they ride the agent `ansible.cfg` forwards, so no private key is written to the
-machine and each checkout can push back, and a later create leaves an existing
-one alone. `git pull` on the machine is how one moves. They run after credential
-seeding and before the dotfiles launcher, whose checkout they may create.
+The clones use `https://github.com/` and `update: false`, like the editor
+clone: they authenticate with the machine's own token, so each checkout can
+push back with nothing of the workstation's involved, and a later create
+leaves an existing one alone. `git pull` on the machine is how one moves. They
+run after credential seeding and before the dotfiles launcher, whose checkout
+they may create.
 
 ## Shell history
 
@@ -333,16 +394,18 @@ anything you would be annoyed to lose.
 
 ```
 <workdir>/<profile>/
-├── walter-compute/          backend.tf.json  main.tf  [outputs.tf]
+├── walter-compute/          backend.tf.json  main.tf  [outputs.tf]  [ssh-key.tf]
 ├── walter-ansible-local/    ansible.cfg  inventory.ini  main.yml
 ├── walter-ansible-remote/   ansible.cfg  inventory.json  main.yml
 └── walter-emacs-packages/   ansible.cfg  inventory.json  main.yml
 ```
 
 `outputs.tf` appears only for providers walter can power cycle; it publishes the
-instance id the power verbs act on. `walter-emacs-packages/` appears only when
-`emacs-config-repo` is set — it is a whole stage rather than a task, so with no
-Emacs there is no directory at all.
+instance id the power verbs act on. `ssh-key.tf` appears only under
+`compute-keygen` on hcloud and DigitalOcean, where keys are registered with the
+provider rather than passed as material. `walter-emacs-packages/` appears only
+when `emacs-config-repo` is set — it is a whole stage rather than a task, so
+with no Emacs there is no directory at all.
 
 Never edit any of it. It is regenerated on every run.
 
@@ -377,11 +440,12 @@ renders a playbook that does not mention them at all:
 
 | Key | Adds |
 |---|---|
+| `github-account` + `git-email` | gh, logged in with the token the create minted; git authenticating through it; the commit identity |
 | `nix-packages` | one `nix profile add` for the whole list |
 | `login-shell` | `/etc/shells` plus a passwd change, guarded by a check on the machine |
 | `asdf-tools` | plugin add, install, and `asdf set --home` |
 | `corepack-packages` | `corepack enable`, then `asdf reshim nodejs` |
-| `emacs-config-repo` | Emacs, then the configuration cloned over the forwarded agent |
+| `emacs-config-repo` | Emacs, then the configuration cloned over https with the machine's token |
 | `dotfiles-checkout` | that checkout's `./green create`, once, with its own `colors.yml` |
 | `seed-agent-credentials` | one credential file per named agent, copied from the controller; Claude also gets a missing onboarding flag |
 | `clone-orgs` | every source repository of each org, cloned to `~/code/<org>/<repo>` |
@@ -436,9 +500,12 @@ Host <profile>
     HostName <ip>
     User <user>
     Port 22
-    ForwardAgent yes
+    IdentityFile ~/.ssh/walter_<profile>   # only under compute-keygen
+    IdentitiesOnly yes                     # only under compute-keygen
 ```
 
-Agent forwarding is on so the user can push to git from the machine without
-copying a private key onto it. The block's marker carries `walter`, so it cannot
-collide with a block another package manages.
+There is no `ForwardAgent`. Nothing on the machine authenticates with the
+workstation's keys: GitHub work rides the machine's own gh token over https,
+and the only private key involved in reaching the machine is the one
+`compute-keygen` generated for exactly that. The block's marker carries
+`walter`, so it cannot collide with a block another package manages.

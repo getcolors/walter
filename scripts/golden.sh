@@ -118,6 +118,40 @@ echo "  ok — compute stage is walter-compute"
 }
 echo "  ok — non-stoppable providers render no instance-id output"
 
+# --------------------------------------------------------------------------
+# The other half of the compute-keygen coupling: providers that register keys
+# by name get walter's ssh-key.tf beside ONCE's main.tf, and the value walter
+# feeds into ONCE's ssh_keys line must reference that resource — the reference
+# is also the dependency edge, and a break in either half surfaces as an
+# opaque tofu failure during a real apply.
+
+for v in hcloud digitalocean; do
+  [ -f "$tmp/$v/walter-fixture/walter-compute/ssh-key.tf" ] || {
+    echo "golden: FAIL — $v registers keys by name but rendered no ssh-key.tf" >&2
+    exit 1
+  }
+done
+grep -q 'hcloud_ssh_key.walter.name' \
+  "$tmp/hcloud/walter-fixture/walter-compute/main.tf" || {
+  echo "golden: FAIL — hcloud's ssh_keys no longer references walter's key resource" >&2
+  exit 1
+}
+grep -q 'digitalocean_ssh_key.walter.fingerprint' \
+  "$tmp/digitalocean/walter-fixture/walter-compute/main.tf" || {
+  echo "golden: FAIL — digitalocean's ssh_keys no longer references walter's key resource" >&2
+  exit 1
+}
+echo "  ok — name-registering providers render walter's key resource and reference it"
+
+# Providers that take key material directly must render none of it as a file.
+for v in oci yandex no-infra; do
+  [ -f "$tmp/$v/walter-fixture/walter-compute/ssh-key.tf" ] && {
+    echo "golden: FAIL — $v takes key material directly but rendered ssh-key.tf" >&2
+    exit 1
+  }
+done
+echo "  ok — material-taking providers render no key resource"
+
 if [ "$accept" = 1 ]; then
   echo "goldens regenerated"
 else

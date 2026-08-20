@@ -63,6 +63,27 @@ compute-prevent-destroy: true
 # before the instance has finished stopping or starting, so walter always waits.
 power-wait-seconds: 300
 
+# --- machine access ---------------------------------------------------------
+#
+# Optional. Set true and walter generates the machine-access keypair itself —
+# ed25519, no passphrase, ~/.ssh/walter_<profile> on this workstation — and
+# feeds the public half to the selected provider: OCI and Yandex take the
+# material directly, hcloud and DigitalOcean get a key resource rendered
+# beside the compute template. The managed ~/.ssh/config block then pins
+# `ssh <profile>` to that key with IdentityFile + IdentitiesOnly, and Ansible
+# connects with it too.
+#
+# With this on, oci-ssh-authorized-keys, hcloud-ssh-keys,
+# digitalocean-ssh-keys and compute-pubkey below are walter's to derive:
+# leave them out, or the build refuses. An existing key file is never
+# touched — it may be authorized on a live machine — and delete leaves the
+# files in ~/.ssh alone: a keypair is not provider state, and the next create
+# of this profile adopts it.
+#
+# Left unset, you supply a key per provider exactly as before.
+#
+# compute-keygen: true
+
 # --- oci --------------------------------------------------------------------
 oci-config-file-profile: REPLACE_ME
 oci-subnet-id: REPLACE_ME
@@ -193,16 +214,43 @@ r2-endpoint: REPLACE_ME
 # corepack-packages:
 #   - pnpm
 
+# --- github -----------------------------------------------------------------
+#
+# The machine's GitHub identity: gh logged in as this account, git cloning and
+# pushing over https through it, and user.name/user.email configured. Both
+# keys travel together, and the clone-bearing features below (editor,
+# organisation checkouts, dotfiles) refuse to build without them — their
+# clones authenticate through this.
+#
+# No token lives anywhere in desired state. The create *mints* one: its first
+# action, before any provider is touched, is GitHub's device flow — a one-time
+# code and a URL to approve it from any browser, and once approved everything
+# after runs unattended. The token carries gh's default scopes plus
+# `workflow`, is seeded straight into the machine's own gh
+# (~/.config/gh/hosts.yml), and the temporary copy on this workstation is
+# deleted before the create returns. Your own gh login here is never touched.
+#
+# A machine that already holds a login is left exactly as it is — re-creates
+# stay non-interactive — and a create that fails part-way keeps the minted
+# token under ~/.local/state/walter/github-token-<profile>, so the retry
+# reuses it instead of asking for a second code; it is deleted the moment a
+# create seeds the machine. Deleting the machine does not revoke the token:
+# do that under GitHub Settings → Applications → GitHub CLI when you want it
+# gone.
+#
+# github-account: you
+# git-email: you@example.com
+
 # --- editor -----------------------------------------------------------------
 #
 # Adds Emacs on top of nix and clones a configuration for it. Ordering is
 # handled for you: cloning a config for an Emacs that is not installed leaves a
 # machine that looks provisioned and is not.
 #
-# An ssh:// URL rather than https:// rides the agent ~/.ssh/config forwards, so
-# no private key is written to the machine and the checkout can push back —
-# which is the point of a development machine, and needs your local agent to be
-# holding the key when create runs.
+# An https:// URL, cloned through the machine's own gh login above — so
+# nothing of this workstation's is involved, a private repository works, and
+# the checkout can push back. The old ssh:// form is refused: the machine
+# holds no ssh key for GitHub and no agent is forwarded to it.
 #
 # The clone happens once. A later create leaves an existing checkout alone, so
 # uncommitted work on the machine survives; `git pull` there is how it moves.
@@ -211,7 +259,7 @@ r2-endpoint: REPLACE_ME
 # ELPA/MELPA and native-compiles, which takes minutes and is not a provisioning
 # failure.
 #
-# emacs-config-repo: git@github.com:you/emacs.d.git
+# emacs-config-repo: https://github.com/you/emacs.d.git
 #
 # Defaults to ~/.config/emacs, the XDG path Emacs 29+ reads on its own. Name
 # another and you must launch with `emacs --init-directory <path>`.
@@ -225,8 +273,9 @@ r2-endpoint: REPLACE_ME
 # authorized create. It never overrides profile — COLORS_PAR_PROFILE remains
 # forbidden.
 #
-# Normally clone-orgs below creates the checkout first. The launcher is a
-# Babashka script, so "babashka" has to be in nix-packages. Walter stamps a
+# Normally clone-orgs below creates the checkout first, which is why this
+# needs github-account above like every clone-bearing feature. The launcher is
+# a Babashka script, so "babashka" has to be in nix-packages. Walter stamps a
 # successful run under ~/.local/state/walter and does not reapply it on later
 # creates, preserving edits made in $HOME.
 #
@@ -243,15 +292,16 @@ r2-endpoint: REPLACE_ME
 # the next create with nothing here to keep in step — which is the whole reason
 # this key names an org rather than repositories.
 #
-# Unauthenticated, so it sees public repositories only and no token is needed;
-# `type=sources` skips forks and archived repositories are skipped at the clone.
-# A single page of 100 is read, and an organisation past that fails the create
-# rather than cloning a silent subset.
+# Authenticated through the machine's gh login (github-account above is
+# required), so the listing sees what the account sees — private repositories
+# included — and gh paginates it itself, so an organisation past 100
+# repositories clones completely. `type=sources` skips forks and archived
+# repositories are skipped at the clone.
 #
-# Same ssh:// reasoning as the editor and dotfiles above, and the same
-# clone-once rule: the checkouts ride the forwarded agent so they can push back,
-# and a later create leaves an existing one alone. `git pull` on the machine is
-# how one moves.
+# Same https reasoning as the editor above, and the same clone-once rule: the
+# checkouts authenticate with the machine's own token so they can push back,
+# and a later create leaves an existing one alone. `git pull` on the machine
+# is how one moves.
 #
 # clone-orgs:
 #   - your-org

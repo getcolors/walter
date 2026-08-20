@@ -15,10 +15,12 @@
    [clojure.walk :as walk]
    [green.ansible :as ansible]
    [green.cli :as green-cli]
+   [green.process :as process]
    [green.providers :as provider-ops]
    [green.scaffold :as sc]
    [green.tofu :as tofu]
    [green.workflow :as wf]
+   [io.github.getcolors.walter.github :as github]
    [io.github.getcolors.walter.utils :as utils]
    [io.github.getcolors.walter.validate :as validate]))
 
@@ -96,15 +98,108 @@
                    (:no-infra-compute-uid opts) (assoc :uid (:no-infra-compute-uid opts)))
       {:ip "192.168.0.1" :sudoer "root" :name name :user "root"})))
 
+;; ---------------------------------------------------------------------------
+;; the machine-access keypair
+
+(def ^:private keygen-timeout-ms 30000)
+
+(def ^:private placeholder-pubkey
+  "The public key a build renders. Generation is a create-time side effect, so
+  build and dry-run need a value that never changes — a fresh key every build
+  would make the rendered artifact nondeterministic and break the goldens.
+  The same string ONCE's deploy keys use, for the same reason."
+  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBUILDPLACEHOLDER0000000000000000000000")
+
+(defn machine-key-file
+  "The private half of the generated machine-access keypair, as an absolute
+  path on the operator's workstation — or nil when `compute-keygen` is off.
+
+  Named by profile so two walter deployments cannot share a key by accident,
+  and kept under ~/.ssh where the operator's own tooling already looks. This
+  is walter's one write into that directory beyond the managed config block;
+  the file survives delete, deliberately — a keypair is not provider state,
+  and the next create of the same profile adopts it rather than minting churn
+  into the provider's key registry."
+  [opts]
+  (when (validate/keygen? opts)
+    (str (System/getProperty "user.home")
+         "/.ssh/walter_" (or (:profile opts) "walter"))))
+
+(defn machine-key-ssh-path
+  "The same private key as `~/.ssh/…`, for the rendered ssh-config block —
+  ssh_config expands the tilde itself, and the literal form keeps the rendered
+  playbook byte-identical across workstations."
+  [opts]
+  (when (validate/keygen? opts)
+    (str "~/.ssh/walter_" (or (:profile opts) "walter"))))
+
+(defn ensure-machine-key!
+  "Generate the keypair when `compute-keygen` is on and the file is absent.
+  Returns nil, or an error message.
+
+  The private file is its own idempotency evidence — the nix-receipt pattern —
+  and an existing key is never touched: it may be authorized on a live
+  machine. ed25519, no passphrase, because every consumer here is unattended
+  (`tofu apply` reads the public half, Ansible the private one). Runs on
+  delete too: the compute templates interpolate the public key, so destroying
+  needs the same renderable values creating did, and regenerating an absent
+  key for a delete is harmless — the authorized key dies with the boot volume."
+  ([opts] (ensure-machine-key! opts process/run-with-timeout))
+  ([opts run-fn]
+   (when-let [private-key (machine-key-file opts)]
+     (let [pub (java.io.File. (str private-key ".pub"))]
+       (when-not (.exists pub)
+         (.mkdirs (.getParentFile pub))
+         (let [profile (or (:profile opts) "walter")
+               result (run-fn ["ssh-keygen" "-t" "ed25519" "-N" "" "-q"
+                               "-C" (str "walter-" profile)
+                               "-f" private-key]
+                              {} keygen-timeout-ms)]
+           (when-not (:ok? result)
+             (str "ssh-keygen failed for " private-key ": "
+                  (str/trim (str (:err result)))))))))))
+
+(defn derive-machine-key
+  "Fill the per-provider ssh-key keys from the generated keypair.
+
+  Three shapes, none needing a change to ONCE's templates: OCI reads a public
+  key *path* through `file()`, Yandex interpolates the *content*, and
+  hcloud/DigitalOcean get an HCL reference to the `ssh-key.tf` resource walter
+  renders beside `main.tf` — the reference doubles as the dependency edge, so
+  the key exists before the instance asks for it.
+
+  On :build the content and the path are stable placeholders (ONCE's
+  deploy-key rule): generation is a create-time side effect, and a build must
+  render the same bytes on every workstation."
+  [opts]
+  (if-not (validate/keygen? opts)
+    opts
+    (let [build? (= :build (:green/event opts))
+          profile (or (:profile opts) "walter")
+          private-key (machine-key-file opts)]
+      (assoc opts
+             :oci-ssh-authorized-keys
+             (if build?
+               (str "/home/build-placeholder/.ssh/walter_" profile ".pub")
+               (str private-key ".pub"))
+             :compute-pubkey
+             (if build?
+               placeholder-pubkey
+               (str/trim (slurp (str private-key ".pub"))))
+             :hcloud-ssh-keys "${hcloud_ssh_key.walter.name}"
+             :digitalocean-ssh-keys "${digitalocean_ssh_key.walter.fingerprint}"))))
+
 (defn compute-specs
   "ONCE's provider template, plus — on a provider walter can power cycle — one
-  extra file publishing the instance id.
+  extra file publishing the instance id, plus — with `compute-keygen` on a
+  provider that registers keys by name — one more declaring the key resource.
 
-  OpenTofu merges every .tf in a directory, so that output needs no change to
-  ONCE's template and no fork of it. The address it names,
+  OpenTofu merges every .tf in a directory, so neither extra needs a change to
+  ONCE's template or a fork of it. The address the output names,
   `oci_core_instance.ampere_vm`, is one ONCE's own comments call out as a state
   address that must not be renamed, which makes it the most durable handle
-  available. `scripts/golden.sh` asserts it is still there."
+  available. `scripts/golden.sh` asserts it is still there — and asserts the
+  key resource renders exactly where it should."
   [opts dir]
   (let [provider (or (:provider-compute opts) "oci")]
     (cond-> [(template-spec (once-template "tofu" provider "main.tf")
@@ -113,32 +208,91 @@
       (validate/stoppable? opts)
       (conj (template-spec (walter-template (str "tofu." provider) "outputs.tf")
                            (str dir "/outputs.tf")
+                           opts))
+      (and (validate/keygen? opts)
+           (contains? #{"hcloud" "digitalocean"} provider))
+      (conj (template-spec (walter-template (str "tofu." provider) "ssh-key.tf")
+                           (str dir "/ssh-key.tf")
                            opts)))))
 
 (defn- output-params
   [opts]
   (some-> (get-in opts [:tofu/outputs :params]) walk/keywordize-keys))
 
+(defn with-machine-key-agent
+  "Run `f` with env additions naming an ssh-agent that holds the generated
+  machine key, killing the agent afterwards.
+
+  ONCE's compute templates carry a `remote-exec` \"wait for ssh\" provisioner
+  whose connection block names no key: OpenTofu authenticates it through
+  whatever agent SSH_AUTH_SOCK points at. Before compute-keygen that was the
+  operator's own agent holding the very key they had authorized; with walter
+  generating the key, nothing holds it — the observed failure is the
+  provisioner dying with \"attempted methods [none]\" against a machine that
+  is otherwise fine. So walter runs the apply under its own short-lived agent,
+  loaded with exactly the one key the instance authorizes. Spawned even when
+  an operator agent exists: that agent holds their keys, not this one.
+
+  A failure to start or load the agent is exit 2 here — deterministic, and
+  before any provider call — rather than the provisioner's timeout half way
+  through a create."
+  ([key-file f] (with-machine-key-agent key-file f process/run))
+  ([key-file f run-fn]
+   (let [started (run-fn ["ssh-agent" "-s"])
+         sock (second (re-find #"SSH_AUTH_SOCK=([^;]+);" (str (:out started))))
+         pid (second (re-find #"SSH_AGENT_PID=(\d+)" (str (:out started))))]
+     (if-not (and (zero? (:exit started -1)) sock)
+       {:walter/agent-error (str "ssh-agent failed to start: "
+                                 (str/trim (str (:err started))))}
+       (try
+         (let [added (run-fn ["ssh-add" key-file]
+                             {:extra-env {"SSH_AUTH_SOCK" sock}})]
+           (if-not (zero? (:exit added -1))
+             {:walter/agent-error (str "ssh-add failed for " key-file ": "
+                                       (str/trim (str (:err added))))}
+             (f {"SSH_AUTH_SOCK" sock})))
+         (finally
+           (when pid (run-fn ["kill" pid]))))))))
+
 (defn compute-step
   "Render the compute stage and apply it, adopting the machine's address.
+
+  With `compute-keygen` on, the keypair is generated first — on delete too,
+  because the templates interpolate the public key and a destroy has to render
+  the same values a create did — and the per-provider key values are derived
+  rather than read from the file. A real create then runs the apply under a
+  short-lived ssh-agent holding that key (see `with-machine-key-agent`).
 
   The adopted params are merged flat into opts as well as kept under
   `:walter/compute-params`, because both Ansible stages read `ip` and `user`
   directly."
   [opts]
-  (let [dir (tool-dir opts compute-tool)
-        specs (compute-specs opts dir)
-        fallback (fallback-compute-params opts)
-        result (tofu/tofu-with-spec opts specs
-                                    {:dir dir
-                                     :env (credential-env opts :provider-compute)})]
-    (cond
-      (wf/failed? result) result
-      (= :build (:green/event opts)) (merge result fallback {:walter/compute-params fallback})
-      ;; A destroy has run; there are no outputs left to adopt.
-      (= :delete (:green/event opts)) result
-      :else (let [params (merge fallback (output-params result))]
-              (merge result params {:walter/compute-params params})))))
+  (if-let [err (and (not= :build (:green/event opts))
+                    (ensure-machine-key! opts))]
+    (assoc opts :green/exit 2 :green/err err)
+    (let [opts (derive-machine-key opts)
+          dir (tool-dir opts compute-tool)
+          specs (compute-specs opts dir)
+          fallback (fallback-compute-params opts)
+          apply-fn (fn [extra-env]
+                     (tofu/tofu-with-spec opts specs
+                                          {:dir dir
+                                           :env (merge (credential-env opts :provider-compute)
+                                                       extra-env)}))
+          result (if (and (validate/keygen? opts)
+                          (= :create (:green/event opts)))
+                   (let [r (with-machine-key-agent (machine-key-file opts) apply-fn)]
+                     (if-let [err (:walter/agent-error r)]
+                       (assoc opts :green/exit 2 :green/err err)
+                       r))
+                   (apply-fn {}))]
+      (cond
+        (wf/failed? result) result
+        (= :build (:green/event opts)) (merge result fallback {:walter/compute-params fallback})
+        ;; A destroy has run; there are no outputs left to adopt.
+        (= :delete (:green/event opts)) result
+        :else (let [params (merge fallback (output-params result))]
+                (merge result params {:walter/compute-params params}))))))
 
 (defn instance-id
   "The OCID the power verbs act on.
@@ -328,6 +482,11 @@
                             (when (seq orgs) (json/generate-string orgs)))
          :emacs-config-dest (or (not-empty (str (:emacs-config-dest opts)))
                                 "~/.config/emacs")
+         ;; The rendered ssh-config block names the generated key by its
+         ;; literal ~ form, so the playbook stays byte-identical across
+         ;; workstations; ssh_config expands the tilde itself. nil when
+         ;; compute-keygen is off, which is what gates the IdentityFile lines.
+         :machine-key-path (machine-key-ssh-path opts)
          ;; The union of the steps that stamp a once-only action. Computed here
          ;; rather than as an `or` in the template because Selmer's `<% if %>`
          ;; takes one value, and a second feature needing the directory should
@@ -372,7 +531,15 @@
 
   The Emacs half is gated in the *template*, not at runtime, so a project that
   names no repository renders a playbook that does not mention Emacs at all —
-  which is what `scripts/golden.sh` then holds still."
+  which is what `scripts/golden.sh` then holds still.
+
+  The GitHub token travels as an extra-var holding a *path* on the controller;
+  the playbook reads the file with `lookup('file', …)` at play time, so the
+  token itself never reaches a rendered file. Once the play has seeded the
+  machine, the sandbox directory holding the token is deleted — from then on
+  the machine's own login is the token's home. A *failed* play keeps it,
+  deliberately: the sandbox surviving is what spares the retry a second
+  device-code approval."
   [opts]
   (let [dir (tool-dir opts ansible-remote-tool)
         data (data-fn opts)
@@ -385,10 +552,19 @@
     (if (or (= :build (:green/event opts))
             (= :delete (:green/event opts)))
       rendered
-      (ansible/ansible-step rendered {:dir dir
-                                      :inventory "inventory.json"
-                                      :playbooks {:create "main.yml"}
-                                      :host-key-checking false}))))
+      (let [result (ansible/ansible-step
+                    rendered
+                    (cond-> {:dir dir
+                             :inventory "inventory.json"
+                             :playbooks {:create "main.yml"}
+                             :host-key-checking false
+                             :extra-vars {:github_token_file
+                                          (str (:walter/github-token-file opts))}}
+                      (machine-key-file opts)
+                      (assoc :private-key (machine-key-file opts))))]
+        (if (wf/failed? result)
+          result
+          (github/delete-token-dir! result))))))
 
 (defn emacs-packages-step
   "Start the Emacs package bootstrap on the machine and return without waiting.
@@ -424,7 +600,10 @@
           rendered (sc/scaffold opts specs)]
       (if (= :build (:green/event opts))
         rendered
-        (ansible/ansible-step rendered {:dir dir
-                                        :inventory "inventory.json"
-                                        :playbooks {:create "main.yml"}
-                                        :host-key-checking false})))))
+        (ansible/ansible-step rendered
+                              (cond-> {:dir dir
+                                       :inventory "inventory.json"
+                                       :playbooks {:create "main.yml"}
+                                       :host-key-checking false}
+                                (machine-key-file opts)
+                                (assoc :private-key (machine-key-file opts))))))))

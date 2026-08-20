@@ -10,7 +10,16 @@
 # rather than merely unlikely: both packages derive their alias from `profile`,
 # and nothing enforces that two projects chose different ones.
 #
-# Variables here are Ansible's, not Selmer's — they arrive as extra-vars.
+# Variables here are Ansible's, not Selmer's — they arrive as extra-vars. The
+# one exception is the IdentityFile pair below, gated and filled by Selmer:
+# whether the block names a key is desired state (compute-keygen), not
+# something the play discovers, and a project without the feature should
+# render a block that never mentions it.
+#
+# No ForwardAgent. Nothing on the machine authenticates with the
+# workstation's keys any more — GitHub work rides the machine's own gh token
+# over https — and forwarding an agent to a host that does not need it only
+# widens what a compromise of that host can sign.
 - name: Managed local configuration
   hosts: local
   tasks:
@@ -26,4 +35,6 @@
               HostName {{ ip }}
               User {{ user }}
               Port 22
-              ForwardAgent yes
+              IdentityFile ~/.ssh/walter_walter-fixture
+              IdentitiesOnly yes
+

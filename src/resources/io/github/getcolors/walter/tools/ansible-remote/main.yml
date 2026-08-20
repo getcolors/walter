@@ -119,6 +119,94 @@
       loop:
         - {dir: x, name: xterm-ghostty}
         - {dir: g, name: ghostty}
+<% if github-account|not-empty %>
+    # The machine's GitHub identity: gh logged in as <{ github-account }>, git
+    # authenticating through it, and the commit identity configured. Every
+    # clone below rides this over https — there is no ssh key for GitHub on
+    # this machine and no forwarded agent, so this block has to precede them.
+    #
+    # The token was minted by the device flow at the start of the create — the
+    # one interactive moment walter has — and arrives here as a *path* on the
+    # controller, read at play time. Nothing token-shaped is rendered, and the
+    # controller deletes the file the moment this play returns.
+    #
+    # Inline install, like Emacs below, rather than a nix-packages companion
+    # rule: gh is what this block *is*, not a package the project chose.
+    - name: Install the GitHub CLI
+      ansible.builtin.command:
+        cmd: nix profile install github:NixOS/nixpkgs/nixpkgs-unstable#gh
+        creates: "{{ ansible_env.HOME }}/.nix-profile/bin/gh"
+      environment:
+        PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+
+    # The machine's own login is the evidence — gh keeps it in
+    # ~/.config/gh/hosts.yml and refreshes it in place — so this checks the
+    # machine rather than stamping a state file, the seed-agent-credentials
+    # judgement for the same reason: a login made on the machine directly must
+    # not be clobbered by a later create.
+    - name: Check whether gh already holds a login
+      ansible.builtin.command:
+        cmd: gh auth status --hostname github.com
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+      register: walter_gh_auth
+      failed_when: false
+      changed_when: false
+
+    # Only reachable when the controller's probe wrongly concluded the machine
+    # was logged in and skipped the device flow — say what happened rather
+    # than failing on an empty file lookup two lines later.
+    - name: Refuse to log in without an acquired token
+      ansible.builtin.assert:
+        that: walter_gh_auth.rc == 0 or github_token_file | default('') | length > 0
+        fail_msg: >-
+          The machine holds no gh login and this create acquired no token —
+          the pre-flight probe answered "logged in" for a machine that is not.
+          Run create again so the device flow runs.
+        success_msg: "gh login present, or a token is on hand to seed one"
+
+    # The token travels over stdin, never argv — an argument would sit in the
+    # process table for the length of the command. no_log because a failed
+    # login echoes the task's data, and the data is a bearer token.
+    - name: Log gh in with the acquired token
+      ansible.builtin.command:
+        cmd: gh auth login --hostname github.com --with-token
+        stdin: "{{ lookup('file', github_token_file) }}"
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+      when: walter_gh_auth.rc != 0
+      no_log: true
+
+    # gh becomes git's credential helper, which is the entire https story: the
+    # one token gh holds is what git clones and pushes with, and rotating it
+    # is one re-login rather than a hunt through credential stores. Written
+    # with the helper's absolute path, so the play's PATH never matters to a
+    # later shell.
+    - name: Make gh git's credential helper
+      ansible.builtin.command:
+        cmd: gh auth setup-git --hostname github.com
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+      changed_when: false
+
+    # user.name is the GitHub login rather than a separate display-name key:
+    # one identity, stated once in colors.yml. Re-runs rewrite the same value,
+    # so this reports ok rather than pretending convergence changed something.
+    - name: Configure the git identity
+      ansible.builtin.command:
+        argv:
+          - git
+          - config
+          - --global
+          - "{{ item.key }}"
+          - "{{ item.value }}"
+      loop:
+        - {key: user.name, value: "<{ github-account }>"}
+        - {key: user.email, value: "<{ git-email }>"}
+      loop_control:
+        label: "{{ item.key }}"
+      changed_when: false
+<% endif %>
 <% if nix-package-flakerefs|not-empty %>
     # The project's own toolchain, named as nixpkgs attribute paths in
     # colors.yml. Gated on the key, so a project that names nothing renders a
@@ -379,9 +467,10 @@
       environment:
         PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
 
-    # Over SSH, using the agent forwarded by ansible.cfg's ForwardAgent=yes —
-    # so no private key is ever written to the machine, and the clone can push
-    # back. accept_hostkey covers github.com being unknown on a fresh host.
+    # Over https, authenticated by the gh credential helper configured above —
+    # the machine's own token is what clones and can push back, so nothing of
+    # the workstation's is involved and no agent is forwarded. validate.clj
+    # refuses an ssh:// or git@ form for exactly this reason.
     #
     # `update: false` clones once and then leaves it alone. This is a working
     # copy on a development machine, not a deployment: a later create must not
@@ -390,7 +479,6 @@
       ansible.builtin.git:
         repo: "<{ emacs-config-repo }>"
         dest: "<{ emacs-config-dest }>"
-        accept_hostkey: true
         update: false
 
     # Packages are deliberately not pre-fetched. The first interactive launch
@@ -575,57 +663,41 @@
     # network-dependent step in the play, and a GitHub outage should not be able
     # to fail a create before the things that make the machine usable are done.
     #
-    # Unauthenticated on purpose. These repositories are public, and a token
-    # would be a credential every create then needs and every operator then has
-    # to hold. The costs, stated rather than discovered: private repositories are
-    # invisible to this, and the anonymous rate limit is 60 requests an hour per
-    # address — one request per organisation, which no create comes near.
+    # Authenticated, through the gh login above. This used to be an anonymous
+    # `uri` call on purpose — public repositories, no credential to hold — but
+    # once the machine carries a token, listing anonymously means cloning a
+    # silent subset of what the account can see. `--paginate` also retires the
+    # old one-page-of-100 refusal: gh follows the Link header itself, and
+    # `--slurp` collects the pages into one JSON document per organisation.
     #
     # `type=sources` drops forks at the server, and archived repositories are
     # dropped at the clone below, where the API offers no filter. Both are the
     # same judgement: a fork or an archived repository is not a working copy.
     - name: List the source repositories in each organisation
-      ansible.builtin.uri:
-        url: "https://api.github.com/orgs/{{ item }}/repos?per_page=100&type=sources&sort=full_name"
-        headers:
-          Accept: application/vnd.github+json
+      ansible.builtin.command:
+        cmd: gh api --paginate --slurp "orgs/{{ item }}/repos?per_page=100&type=sources&sort=full_name"
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
       loop: <{ clone-orgs-json|safe }>
       register: walter_org_repos
-      # A GET, so it is `ok` rather than `changed` however many repositories it
-      # names. `json` is populated from the response's content type; asking for
-      # return_content as well would only carry the raw body into the register.
+      # A read, so it is `ok` rather than `changed` however many repositories
+      # it names.
       changed_when: false
 
-    # per_page tops out at 100 and this step does not follow the `Link:` header,
-    # so an organisation past that boundary would clone its first hundred
-    # repositories and report success. Fail instead — a silently partial
-    # checkout is the kind of thing found weeks later, on the one repository
-    # that was missing.
-    - name: Refuse to clone a partial page
-      ansible.builtin.assert:
-        that: item.json | length < 100
-        fail_msg: >-
-          {{ item.item }} has 100 or more source repositories, which is one full
-          page. Walter reads a single page and would omit the rest without
-          saying so. Paginate this step before relying on it.
-        success_msg: "{{ item.item }}: {{ item.json | length }} source repositories"
-      loop: "{{ walter_org_repos.results }}"
-      loop_control:
-        label: "{{ item.item }}"
-
-    # `subelements` pairs each organisation with its own repositories, so one
-    # flat loop carries both halves of the path and the two cannot drift apart:
-    # item.0.item is the organisation that was asked, item.1 the repository it
-    # answered with.
+    # One flat loop over every repository of every organisation: `--slurp`
+    # produced a list of pages per org, so two flatten levels turn the
+    # registered results into plain repository objects, and `full_name`
+    # ("org/repo") carries both halves of the clone URL and the checkout path
+    # in one string that cannot drift apart.
     #
     # Archived repositories are skipped with `when` rather than filtered out of
     # the loop, so the run says which ones it passed over instead of silently
     # producing a shorter list.
     #
-    # git@github.com: rather than https://, like the Emacs clone above and for
-    # the same reason — the clone rides the agent ansible.cfg
-    # forwards, so no private key is written to the machine and the checkouts can
-    # push back. They are only writable while your local agent holds the key.
+    # https rather than git@, like the Emacs clone above and for the same
+    # reason — the machine's own token authenticates through the gh credential
+    # helper, so the checkouts can push back with nothing of the workstation's
+    # involved.
     #
     # Same `update: false`, also for the same reason: these are working copies on
     # a development machine, and a later create must not discard edits made
@@ -633,14 +705,13 @@
     # the organisation later arrives on the next create.
     - name: Clone the organisations' repositories
       ansible.builtin.git:
-        repo: "git@github.com:{{ item.0.item }}/{{ item.1.name }}.git"
-        dest: "{{ ansible_env.HOME }}/code/{{ item.0.item }}/{{ item.1.name }}"
-        accept_hostkey: true
+        repo: "https://github.com/{{ item.full_name }}.git"
+        dest: "{{ ansible_env.HOME }}/code/{{ item.full_name }}"
         update: false
-      loop: "{{ walter_org_repos.results | subelements('json') }}"
+      loop: "{{ walter_org_repos.results | map(attribute='stdout') | map('from_json') | list | flatten(levels=2) }}"
       loop_control:
-        label: "{{ item.0.item }}/{{ item.1.name }}"
-      when: not item.1.archived
+        label: "{{ item.full_name }}"
+      when: not item.archived
 <% endif %>
 <% if dotfiles-checkout|not-empty %>
     # Apply getcolors/dotfiles from the checkout clone-orgs made above. Walter

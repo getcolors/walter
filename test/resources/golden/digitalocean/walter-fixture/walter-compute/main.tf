@@ -19,7 +19,7 @@ resource "digitalocean_droplet" "node1" {
   vpc_uuid = "00000000-0000-0000-0000-000000000000"
 
   # SSH Keys are passed as a list of IDs or Fingerprints
-  ssh_keys = ["fixture-key"]
+  ssh_keys = ["${digitalocean_ssh_key.walter.fingerprint}"]
   # Wait for ssh before starting Ansible
   connection {
     type = "ssh"
