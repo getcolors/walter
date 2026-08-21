@@ -956,7 +956,7 @@
     (let [derived (tools/derive-machine-key {:compute-keygen true
                                              :profile "p"
                                              :green/event :build})]
-      (is (= "/home/build-placeholder/.ssh/walter_p.pub"
+      (is (= "/home/build-placeholder/.ssh/p.pub"
              (:oci-ssh-authorized-keys derived)))
       (is (str/starts-with? (:compute-pubkey derived) "ssh-ed25519 "))
       (is (str/includes? (:compute-pubkey derived) "BUILDPLACEHOLDER"))
@@ -972,7 +972,7 @@
   (testing "the rendered ssh-config block carries IdentityFile in the literal ~
            form — ssh_config expands it, and the playbook stays byte-identical
            across workstations"
-    (is (= "~/.ssh/walter_p"
+    (is (= "~/.ssh/p"
            (:machine-key-path (tools/data-fn {:profile "p" :compute-keygen true}))))
     (is (nil? (:machine-key-path (tools/data-fn {:profile "p"}))))))
 
@@ -991,7 +991,7 @@
   (testing "with keygen on, ssh <profile> uses the generated key and nothing
            else — IdentitiesOnly stops the agent offering the operator's own"
     (let [rendered (render-local-playbook {:compute-keygen true})]
-      (is (str/includes? rendered "IdentityFile ~/.ssh/walter_p"))
+      (is (str/includes? rendered "IdentityFile ~/.ssh/p"))
       (is (str/includes? rendered "IdentitiesOnly yes"))))
   (testing "without it the block is what it always was — matched on the config
            line, since the header commentary mentions the word"
@@ -1016,7 +1016,7 @@
                                       :provider-compute "oci"
                                       :green/event :create
                                       :compute-keygen true})))
-      (is (str/ends-with? (str (:private-key @captured)) "/.ssh/walter_p")))
+      (is (str/ends-with? (str (:private-key @captured)) "/.ssh/p")))
     (let [captured (atom nil)]
       (with-redefs [ansible/ansible-step (fn [opts config]
                                            (reset! captured config)

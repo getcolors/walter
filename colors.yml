@@ -66,12 +66,18 @@ power-wait-seconds: 300
 # --- machine access ---------------------------------------------------------
 #
 # Optional. Set true and walter generates the machine-access keypair itself —
-# ed25519, no passphrase, ~/.ssh/walter_<profile> on this workstation — and
+# ed25519, no passphrase, ~/.ssh/<profile> on this workstation — and
 # feeds the public half to the selected provider: OCI and Yandex take the
 # material directly, hcloud and DigitalOcean get a key resource rendered
 # beside the compute template. The managed ~/.ssh/config block then pins
 # `ssh <profile>` to that key with IdentityFile + IdentitiesOnly, and Ansible
 # connects with it too.
+#
+# The file is named by the profile and nothing else, so the profile is what
+# keeps it clear of your own keys. An existing file is never overwritten, so a
+# profile that collides with a key you already have — `id_ed25519` — silently
+# adopts it and authorizes your personal key on the machine instead. Name the
+# profile for the deployment (`walter-liliana`) and that cannot happen.
 #
 # With this on, oci-ssh-authorized-keys, hcloud-ssh-keys,
 # digitalocean-ssh-keys and compute-pubkey below are walter's to derive:

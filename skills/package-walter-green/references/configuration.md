@@ -56,7 +56,7 @@ reported no-op.
 |---|---|
 | `compute-keygen` | Optional, `true` or `false`. Walter generates the machine-access keypair per deployment and feeds it to the provider. |
 
-Set `true` and walter generates `~/.ssh/walter_<profile>` (ed25519, no
+Set `true` and walter generates `~/.ssh/<profile>` (ed25519, no
 passphrase) on the workstation at create time, if absent, and derives the
 per-provider key values from it: `oci-ssh-authorized-keys` becomes the
 generated public key's path, `compute-pubkey` its content, and on hcloud and
@@ -74,6 +74,12 @@ walter's to derive, and the build refuses the combination. An existing key
 file is never regenerated, and `delete` leaves the files in `~/.ssh` alone: a
 keypair is not provider state, and the next create of the same profile adopts
 it.
+
+The file carries no prefix, so the profile is the whole name and the whole
+namespace. "Adopts it" is the trap: a profile that happens to match a key the
+operator already has authorizes *that* key on the machine rather than minting a
+new one, with no warning. A profile named for the deployment
+(`walter-liliana` → `~/.ssh/walter-liliana`) cannot collide.
 
 Left unset, you supply a key per provider exactly as documented below.
 
@@ -500,7 +506,7 @@ Host <profile>
     HostName <ip>
     User <user>
     Port 22
-    IdentityFile ~/.ssh/walter_<profile>   # only under compute-keygen
+    IdentityFile ~/.ssh/<profile>   # only under compute-keygen
     IdentitiesOnly yes                     # only under compute-keygen
 ```
 

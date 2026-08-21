@@ -114,16 +114,19 @@
   "The private half of the generated machine-access keypair, as an absolute
   path on the operator's workstation — or nil when `compute-keygen` is off.
 
-  Named by profile so two walter deployments cannot share a key by accident,
-  and kept under ~/.ssh where the operator's own tooling already looks. This
-  is walter's one write into that directory beyond the managed config block;
-  the file survives delete, deliberately — a keypair is not provider state,
-  and the next create of the same profile adopts it rather than minting churn
-  into the provider's key registry."
+  Named *exactly* by profile so two walter deployments cannot share a key by
+  accident, and kept under ~/.ssh where the operator's own tooling already
+  looks. The profile carries whatever namespacing there is — a deployment
+  called `walter-liliana` gets `~/.ssh/walter-liliana`, and a profile short
+  enough to collide with a hand-made key is the operator's choice to make.
+  This is walter's one write into that directory beyond the managed config
+  block; the file survives delete, deliberately — a keypair is not provider
+  state, and the next create of the same profile adopts it rather than minting
+  churn into the provider's key registry."
   [opts]
   (when (validate/keygen? opts)
     (str (System/getProperty "user.home")
-         "/.ssh/walter_" (or (:profile opts) "walter"))))
+         "/.ssh/" (or (:profile opts) "walter"))))
 
 (defn machine-key-ssh-path
   "The same private key as `~/.ssh/…`, for the rendered ssh-config block —
@@ -131,7 +134,7 @@
   playbook byte-identical across workstations."
   [opts]
   (when (validate/keygen? opts)
-    (str "~/.ssh/walter_" (or (:profile opts) "walter"))))
+    (str "~/.ssh/" (or (:profile opts) "walter"))))
 
 (defn ensure-machine-key!
   "Generate the keypair when `compute-keygen` is on and the file is absent.
@@ -180,7 +183,7 @@
       (assoc opts
              :oci-ssh-authorized-keys
              (if build?
-               (str "/home/build-placeholder/.ssh/walter_" profile ".pub")
+               (str "/home/build-placeholder/.ssh/" profile ".pub")
                (str private-key ".pub"))
              :compute-pubkey
              (if build?

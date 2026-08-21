@@ -179,7 +179,7 @@ nothing of the workstation's; deleting the machine does not revoke the token
 (GitHub Settings → Applications → GitHub CLI does).
 
 **`compute-keygen: true`** makes walter generate the machine-access keypair
-per deployment — `~/.ssh/walter_<profile>` on the workstation, its own write
+per deployment — `~/.ssh/<profile>` on the workstation, its own write
 into `~/.ssh` beyond the blockinfile — and derive the per-provider key values
 from it: OCI gets the pubkey *path* (its template reads `file()`), Yandex the
 *content*, hcloud/DigitalOcean an HCL reference to the `hcloud_ssh_key` /

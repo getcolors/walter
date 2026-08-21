@@ -51,7 +51,7 @@ re-creates stay non-interactive. The clone-bearing features
 this identity and refuse to build without it.
 
 Set `compute-keygen: true` and walter also generates the machine-access
-keypair per deployment — `~/.ssh/walter_<profile>` on your workstation —
+keypair per deployment — `~/.ssh/<profile>` on your workstation —
 feeds the public half to the provider, and pins `ssh <profile>` and Ansible
 to it. Leave it out and you supply a key per provider, exactly as before.
 
