@@ -170,8 +170,9 @@ Walter registers the dedicated generated public key as a Terraform-managed
 deletion; the account registration follows provider state.
 
 Vultr's image initially exposes only root, so create has one provider-specific
-bootstrap stage. It enters as root, creates `ubuntu` with UID/GID 1000, the
-dedicated key, and passwordless sudo, then sets `PermitRootLogin no` and
+bootstrap stage. It enters as root, adopts the image's UID/GID 1000 stock account as `ubuntu`
+(or creates it when absent), installs the dedicated key and passwordless sudo,
+then sets `PermitRootLogin no` and
 `PasswordAuthentication no` and reloads SSH. Every normal Ansible stage and the
 managed `ssh <profile>` alias use `ubuntu`. A later create probes that final
 login first and never depends on the root access it already closed.

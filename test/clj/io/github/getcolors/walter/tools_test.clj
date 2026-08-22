@@ -117,6 +117,8 @@
     (is (= 0 (:green/exit result)))
     (is (= "ubuntu" (:user result)))
     (is (str/includes? inventory "root"))
+    (is (str/includes? playbook "groupmod"))
+    (is (str/includes? playbook "usermod"))
     (is (str/includes? playbook "PermitRootLogin no"))
     (is (str/includes? playbook "PasswordAuthentication no"))
     (is (str/includes? playbook "NOPASSWD: ALL"))

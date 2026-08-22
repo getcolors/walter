@@ -127,8 +127,9 @@ delete, dry-run, and projects without the key it passes through untouched.
 
 Create and build fork after bootstrap; the two normal Ansible stages are
 independent and neither joins. Bootstrap is a no-op except on Vultr. There it is
-the sole root SSH connection: a fresh image exposes root, so Walter creates
-`ubuntu` (UID/GID 1000) with its dedicated key and passwordless sudo, validates
+the sole root SSH connection: a fresh image exposes root, so Walter renames the
+stock UID/GID 1000 account to `ubuntu` (or creates it when absent), installs its
+dedicated key and passwordless sudo, validates
 an sshd drop-in disabling root and password login, then reloads SSH. All normal
 stages run as ubuntu. A later create probes ubuntu first, so convergence does
 not depend on root access Walter already closed. Delete drops the managed ssh block before destroying, so a

@@ -7,6 +7,50 @@
   gather_facts: false
   become: true
   tasks:
+    # Vultr's current Ubuntu image reserves UID/GID 1000 for `linuxuser` even
+    # though the provider template enters as root. Adopt those numeric IDs by
+    # renaming that stock account rather than colliding with it or choosing a
+    # different UID. The empty branches keep this valid if a future image has
+    # no pre-created account, and the final modules converge both shapes.
+    - name: Inspect the existing primary group at GID 1000
+      ansible.builtin.command:
+        argv: [getent, group, "1000"]
+      register: walter_gid_1000
+      changed_when: false
+      failed_when: walter_gid_1000.rc not in [0, 2]
+
+    - name: Rename the stock primary group to Ubuntu
+      ansible.builtin.command:
+        argv:
+          - groupmod
+          - --new-name
+          - ubuntu
+          - "{{ walter_gid_1000.stdout.split(':')[0] }}"
+      when:
+        - walter_gid_1000.rc == 0
+        - walter_gid_1000.stdout.split(':')[0] != 'ubuntu'
+
+    - name: Inspect the existing login at UID 1000
+      ansible.builtin.command:
+        argv: [getent, passwd, "1000"]
+      register: walter_uid_1000
+      changed_when: false
+      failed_when: walter_uid_1000.rc not in [0, 2]
+
+    - name: Rename the stock login and move its home to Ubuntu
+      ansible.builtin.command:
+        argv:
+          - usermod
+          - --login
+          - ubuntu
+          - --home
+          - /home/ubuntu
+          - --move-home
+          - "{{ walter_uid_1000.stdout.split(':')[0] }}"
+      when:
+        - walter_uid_1000.rc == 0
+        - walter_uid_1000.stdout.split(':')[0] != 'ubuntu'
+
     - name: Create the Ubuntu primary group
       ansible.builtin.group:
         name: ubuntu
