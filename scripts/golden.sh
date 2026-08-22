@@ -72,6 +72,7 @@ build_variant oci-pinned \
   COLORS_PAR_OCI_IMAGE_ID=ocid1.image.oc1.eu-frankfurt-1.aaaaaaaafixtureimage
 build_variant hcloud COLORS_PAR_PROVIDER_COMPUTE=hcloud
 build_variant digitalocean COLORS_PAR_PROVIDER_COMPUTE=digitalocean
+build_variant vultr COLORS_PAR_PROVIDER_COMPUTE=vultr
 build_variant yandex COLORS_PAR_PROVIDER_COMPUTE=yandex
 build_variant no-infra COLORS_PAR_PROVIDER_COMPUTE=no-infra
 build_variant s3 COLORS_PAR_PROVIDER_BACKEND=s3
@@ -102,6 +103,15 @@ grep -q 'oci_core_instance.ampere_vm.id' "$compute_outputs" || {
 }
 echo "  ok — walter publishes instance_id from it"
 
+vultr_main="$tmp/vultr/walter-fixture/walter-compute/main.tf"
+grep -q 'resource "vultr_instance" "node1"' "$vultr_main" || {
+  echo "golden: FAIL — ONCE's Vultr template no longer declares" >&2
+  echo '  resource "vultr_instance" "node1"' >&2
+  echo "which walter's outputs.tf references. Update the pin deliberately." >&2
+  exit 1
+}
+echo "  ok — ONCE still declares vultr_instance.node1"
+
 # The stage name is load-bearing: remote state is keyed <profile>/<tool>, and a
 # walter-specific stage is what stops a colliding profile addressing another
 # package's state. Catch a rename here rather than on a shared bucket.
@@ -112,6 +122,15 @@ echo "  ok — walter publishes instance_id from it"
 echo "  ok — compute stage is walter-compute"
 
 # Only providers walter can power cycle get the extra output.
+[ -f "$tmp/vultr/walter-fixture/walter-compute/outputs.tf" ] || {
+  echo "golden: FAIL — vultr is stoppable but rendered no outputs.tf" >&2
+  exit 1
+}
+grep -q 'vultr_instance.node1.id' \
+  "$tmp/vultr/walter-fixture/walter-compute/outputs.tf" || {
+  echo "golden: FAIL — walter's Vultr output no longer publishes the instance id" >&2
+  exit 1
+}
 [ -f "$tmp/hcloud/walter-fixture/walter-compute/outputs.tf" ] && {
   echo "golden: FAIL — hcloud is not stoppable but rendered outputs.tf" >&2
   exit 1
@@ -125,7 +144,7 @@ echo "  ok — non-stoppable providers render no instance-id output"
 # is also the dependency edge, and a break in either half surfaces as an
 # opaque tofu failure during a real apply.
 
-for v in hcloud digitalocean; do
+for v in hcloud digitalocean vultr; do
   [ -f "$tmp/$v/walter-fixture/walter-compute/ssh-key.tf" ] || {
     echo "golden: FAIL — $v registers keys by name but rendered no ssh-key.tf" >&2
     exit 1
@@ -139,6 +158,11 @@ grep -q 'hcloud_ssh_key.walter.name' \
 grep -q 'digitalocean_ssh_key.walter.fingerprint' \
   "$tmp/digitalocean/walter-fixture/walter-compute/main.tf" || {
   echo "golden: FAIL — digitalocean's ssh_keys no longer references walter's key resource" >&2
+  exit 1
+}
+grep -q 'vultr_ssh_key.walter.id' \
+  "$tmp/vultr/walter-fixture/walter-compute/main.tf" || {
+  echo "golden: FAIL — vultr's ssh_key_ids no longer references walter's key resource" >&2
   exit 1
 }
 echo "  ok — name-registering providers render walter's key resource and reference it"

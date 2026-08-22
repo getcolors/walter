@@ -167,8 +167,8 @@
 
   Three shapes, none needing a change to ONCE's templates: OCI reads a public
   key *path* through `file()`, Yandex interpolates the *content*, and
-  hcloud/DigitalOcean get an HCL reference to the `ssh-key.tf` resource walter
-  renders beside `main.tf` — the reference doubles as the dependency edge, so
+  hcloud/DigitalOcean/Vultr get an HCL reference to the `ssh-key.tf` resource
+  walter renders beside `main.tf` — the reference doubles as the dependency edge, so
   the key exists before the instance asks for it.
 
   On :build the content and the path are stable placeholders (ONCE's
@@ -190,19 +190,20 @@
                placeholder-pubkey
                (str/trim (slurp (str private-key ".pub"))))
              :hcloud-ssh-keys "${hcloud_ssh_key.walter.name}"
-             :digitalocean-ssh-keys "${digitalocean_ssh_key.walter.fingerprint}"))))
+             :digitalocean-ssh-keys "${digitalocean_ssh_key.walter.fingerprint}"
+             :vultr-ssh-keys "${vultr_ssh_key.walter.id}"))))
 
 (defn compute-specs
   "ONCE's provider template, plus — on a provider walter can power cycle — one
   extra file publishing the instance id, plus — with `compute-keygen` on a
-  provider that registers keys by name — one more declaring the key resource.
+  provider that registers keys in the account — one more declaring the key
+  resource.
 
   OpenTofu merges every .tf in a directory, so neither extra needs a change to
-  ONCE's template or a fork of it. The address the output names,
-  `oci_core_instance.ampere_vm`, is one ONCE's own comments call out as a state
-  address that must not be renamed, which makes it the most durable handle
-  available. `scripts/golden.sh` asserts it is still there — and asserts the
-  key resource renders exactly where it should."
+  ONCE's template or a fork of it. The output addresses
+  `oci_core_instance.ampere_vm` or `vultr_instance.node1`; `scripts/golden.sh`
+  asserts both still exist and that each key resource renders exactly where it
+  should."
   [opts dir]
   (let [provider (or (:provider-compute opts) "oci")]
     (cond-> [(template-spec (once-template "tofu" provider "main.tf")
@@ -213,7 +214,7 @@
                            (str dir "/outputs.tf")
                            opts))
       (and (validate/keygen? opts)
-           (contains? #{"hcloud" "digitalocean"} provider))
+           (contains? #{"hcloud" "digitalocean" "vultr"} provider))
       (conj (template-spec (walter-template (str "tofu." provider) "ssh-key.tf")
                            (str dir "/ssh-key.tf")
                            opts)))))
@@ -298,15 +299,17 @@
                 (merge result params {:walter/compute-params params}))))))
 
 (defn instance-id
-  "The OCID the power verbs act on.
+  "The provider instance id the power verbs act on.
 
-  Desired state wins when it carries one, so `stop` and `start` keep working
-  with no access to OpenTofu state at all — a broken backend should not strand
-  you with a running machine you cannot stop. Otherwise it comes from the
-  compute stage's `instance_id` output, which is why walter renders that extra
-  .tf file at all."
+  Desired state wins when it carries the provider-specific escape hatch, so
+  `stop` and `start` keep working with no access to OpenTofu state at all — a
+  broken backend should not strand a running machine. Otherwise the id comes
+  from the compute stage's `instance_id` output."
   [opts]
-  (or (not-empty (str (:oci-instance-id opts)))
+  (or (case (str (:provider-compute opts))
+        "oci" (not-empty (str (:oci-instance-id opts)))
+        "vultr" (not-empty (str (:vultr-instance-id opts)))
+        nil)
       (try
         (not-empty (str (:instance_id (tofu/outputs (tool-dir opts compute-tool)
                                                     (backend-credential-env opts)))))

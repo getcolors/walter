@@ -38,7 +38,7 @@ the code before acting on it.
 ```bash
 ./green build                         # render the work directory only
 ./green create --dry-run              # print the graph, touch nothing
-./green stop | start                  # power cycle (OCI only)
+./green stop | start                  # power cycle (OCI and Vultr)
 bb test                              # the unit suite, under babashka
 bb golden                            # every provider variant vs committed output
 bb golden:accept                     # regenerate after an intended change
@@ -79,9 +79,11 @@ apply:
   because walter's `outputs.tf` references that address. A rename upstream would
   otherwise surface as an opaque `tofu validate` failure during a real apply,
   against live infrastructure, half way through a create.
-- Walter's `outputs.tf` still publishes `oci_core_instance.ampere_vm.id` from
-  it. Losing this end breaks `stop` and `start`, which read the OCID rather than
-  matching a display name.
+- Walter's OCI `outputs.tf` still publishes `oci_core_instance.ampere_vm.id`
+  from it. Losing this end breaks `stop` and `start`, which read the OCID rather
+  than matching a display name.
+- ONCE's Vultr template still declares `vultr_instance.node1`, and Walter's
+  Vultr `outputs.tf` publishes its immutable id for the same reason.
 - The compute stage is still named `walter-compute`.
 - Providers walter cannot power cycle render **no** `outputs.tf` at all —
   checked against hcloud. The output only makes sense where the power verbs
@@ -139,22 +141,22 @@ never sets produces no diff on refresh, so stopping the machine out of band
 causes **no drift**: there is nothing to reconcile because power was never
 managed. `prevent_destroy` stays irrelevant to `stop`.
 
-The instance is found by **OCID, never by display name**. Walter renders one
-extra `outputs.tf` beside ONCE's `main.tf` — OpenTofu merges every `.tf` in a
-directory — publishing `oci_core_instance.ampere_vm.id`. Finding it by display
-name would target whatever matches a human-typed string in a compartment that is
-often a tenancy root, so a name copied from another project would power off that
+The instance is found by an **immutable provider id, never by display name**.
+Walter renders one extra `outputs.tf` beside ONCE's `main.tf` — OpenTofu merges
+every `.tf` in a directory — publishing `oci_core_instance.ampere_vm.id` or
+`vultr_instance.node1.id`. Finding by a human-typed name could power off another
 project's server.
 
-`--wait-for-state` is not optional in any power call. The CLI returns before the
-transition completes.
+Every power call waits for the terminal state. OCI delegates that wait to the
+CLI; Vultr polls the live HTTP API. A successful start then reads the live public
+address and refreshes the managed SSH alias.
 
 ### Stages
 
 | Step | Directory | Does |
 |---|---|---|
 | `:walter/github-token` | — | the device-flow token acquisition above; no directory, nothing rendered |
-| `:walter/compute` | `walter-compute` | ONCE's provider template + walter's `outputs.tf` (and, with `compute-keygen` on hcloud/DO, walter's `ssh-key.tf`); outputs ip/user/sudoer/name |
+| `:walter/compute` | `walter-compute` | ONCE's provider template + walter's `outputs.tf` for OCI/Vultr (and, with `compute-keygen` on hcloud/DO/Vultr, walter's `ssh-key.tf`); outputs ip/user/sudoer/name |
 | `:walter/ansible-local` | `walter-ansible-local` | the managed `Host <profile>` block in `~/.ssh/config`, with `IdentityFile`/`IdentitiesOnly` when `compute-keygen` is on |
 | `:walter/ansible-remote` | `walter-ansible-remote` | ping, unprivileged cloudflared sysctls, nix, terminfo, and — when the gating key is set — the gh login and git identity, packages, shell, runtimes, Emacs, dotfiles, agent credentials, atuin |
 | `:walter/emacs-packages` | `walter-emacs-packages` | starts the ELPA/MELPA bootstrap and does **not** wait for it |
@@ -182,9 +184,8 @@ nothing of the workstation's; deleting the machine does not revoke the token
 per deployment — `~/.ssh/<profile>` on the workstation, its own write
 into `~/.ssh` beyond the blockinfile — and derive the per-provider key values
 from it: OCI gets the pubkey *path* (its template reads `file()`), Yandex the
-*content*, hcloud/DigitalOcean an HCL reference to the `hcloud_ssh_key` /
-`digitalocean_ssh_key` resource walter renders in `ssh-key.tf` beside ONCE's
-template — the `outputs.tf` merge trick again, and the reference doubles as
+*content*, and hcloud/DigitalOcean/Vultr an HCL reference to the provider key
+resource walter renders in `ssh-key.tf` beside ONCE's template — the `outputs.tf` merge trick again, and the reference doubles as
 the dependency edge. Hand-setting those keys alongside the flag is refused;
 `scripts/golden.sh` asserts the resource renders exactly where it should. On
 `:build` the derived values are stable placeholders (ONCE's deploy-key rule),
@@ -295,9 +296,9 @@ outputs.
 ## Code conventions
 
 - **Namespaces**: `io.github.getcolors.walter.*` — `utils` (contract, alias),
-  `validate` (rules over ONCE's registry), `oci` (the CLI), `github` (the
-  device-flow token), `tools` (the steps), `workflow` (the graph). Adding a
-  seventh needs a genuinely new concern.
+  `validate` (rules over ONCE's registry), `oci` (the OCI CLI), `vultr` (the
+  Vultr HTTP API), `github` (the device-flow token), `tools` (the steps), and
+  `workflow` (the graph). A new namespace needs a genuinely new concern.
 - **Keys**: plain kebab-case keywords for desired state (they match template
   variable names); namespaced for engine state (`:green/…`, `:walter/…`).
 - **Steps** take `opts` and return `opts`, reporting failure through

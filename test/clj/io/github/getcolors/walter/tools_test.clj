@@ -108,7 +108,15 @@
            broken bucket should not strand you with a machine you cannot stop"
     (with-redefs [tofu/outputs (fn [& _] (throw (ex-info "backend unreachable" {})))]
       (is (= "ocid1.instance.oc1..fromfile"
-             (tools/instance-id {:oci-instance-id "ocid1.instance.oc1..fromfile"}))))))
+             (tools/instance-id {:provider-compute "oci"
+                                 :oci-instance-id "ocid1.instance.oc1..fromfile"}))))))
+
+(deftest vultr-desired-state-id-wins-over-opentofu-state
+  (with-redefs [tofu/outputs (fn [& _] (throw (ex-info "backend unreachable" {})))]
+    (is (= "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+           (tools/instance-id
+            {:provider-compute "vultr"
+             :vultr-instance-id "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"})))))
 
 (deftest otherwise-it-comes-from-the-compute-stages-output
   (with-redefs [tofu/outputs (fn [& _] {:instance_id "ocid1.instance.oc1..fromstate"
@@ -931,16 +939,18 @@
 ;; the machine-access keypair
 
 (deftest keygen-adds-the-key-resource-only-where-keys-are-registered-by-name
-  (testing "hcloud and DigitalOcean take a key already registered with the
-           provider, so walter renders its own ssh-key.tf beside ONCE's
+  (testing "hcloud, DigitalOcean and Vultr take a key already registered with
+           the provider, so walter renders its own ssh-key.tf beside ONCE's
            main.tf — the outputs.tf merge trick again"
-    (doseq [provider ["hcloud" "digitalocean"]]
+    (doseq [provider ["hcloud" "digitalocean" "vultr"]]
       (let [specs (tools/compute-specs {:provider-compute provider
-                                        :compute-keygen true} "/w")]
-        (is (= 2 (count specs)) (str provider " should add ssh-key.tf"))
+                                        :compute-keygen true} "/w")
+            key-spec (last specs)]
+        (is (= (if (= provider "vultr") 3 2) (count specs))
+            (str provider " should add ssh-key.tf"))
         (is (= (keyword (str "io.github.getcolors.walter.tools.tofu." provider) "ssh-key.tf")
-               (:template (second specs))))
-        (is (= "/w/ssh-key.tf" (:target (second specs)))))))
+               (:template key-spec)))
+        (is (= "/w/ssh-key.tf" (:target key-spec))))))
   (testing "OCI reads a pubkey path and Yandex the content, so neither needs an
            extra file — and no-infra has no compute resource at all"
     (is (= 2 (count (tools/compute-specs {:provider-compute "oci"
@@ -960,11 +970,12 @@
              (:oci-ssh-authorized-keys derived)))
       (is (str/starts-with? (:compute-pubkey derived) "ssh-ed25519 "))
       (is (str/includes? (:compute-pubkey derived) "BUILDPLACEHOLDER"))
-      (testing "the hcloud and DigitalOcean values are HCL references to the
-               rendered resource, which double as the dependency edge"
+      (testing "the hcloud, DigitalOcean and Vultr values are HCL references to
+               rendered resources, which double as dependency edges"
         (is (= "${hcloud_ssh_key.walter.name}" (:hcloud-ssh-keys derived)))
         (is (= "${digitalocean_ssh_key.walter.fingerprint}"
-               (:digitalocean-ssh-keys derived))))))
+               (:digitalocean-ssh-keys derived)))
+        (is (= "${vultr_ssh_key.walter.id}" (:vultr-ssh-keys derived))))))
   (testing "with keygen off nothing is derived"
     (is (= {:profile "p"} (tools/derive-machine-key {:profile "p"})))))
 

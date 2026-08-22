@@ -165,7 +165,7 @@
        "  build    render the work directory only — no provider is contacted\n"
        "  create   provision the machine and record it in ~/.ssh/config\n"
        "  delete   destroy it, dropping the ssh block first\n"
-       "  stop     power it off  (OCI only; a no-op elsewhere)\n"
+       "  stop     power it off  (OCI/Vultr; a no-op elsewhere)\n"
        "  start    power it on and refresh its address"))
 
 (defn run

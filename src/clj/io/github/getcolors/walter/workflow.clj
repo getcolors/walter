@@ -22,7 +22,7 @@
   Create and build fork after compute: the two Ansible stages are independent
   and neither joins. Delete drops the managed ssh block before anything is
   destroyed, so a machine that is already gone still cleans up. Stop and start
-  never reach OpenTofu (see io.github.getcolors.walter.oci).
+  never reach OpenTofu; OCI uses its CLI and Vultr its HTTP API.
 
   `emacs-packages` hangs off `ansible-remote` rather than off `compute`, because
   it needs what that stage installs — Emacs and the cloned configuration. It is
@@ -41,7 +41,8 @@
    [io.github.getcolors.walter.github :as github]
    [io.github.getcolors.walter.oci :as oci]
    [io.github.getcolors.walter.tools :as tools]
-   [io.github.getcolors.walter.validate :as validate]))
+   [io.github.getcolors.walter.validate :as validate]
+   [io.github.getcolors.walter.vultr :as vultr]))
 
 (def ^:private lifecycle-events #{:create :delete})
 (def ^:private power-events #{:stop :start})
@@ -54,7 +55,7 @@
 
 (defn power-preflight
   "Everything a power verb needs before it touches the provider: a provider that
-  can be power cycled, a live CLI session, and an instance to act on.
+  can be power cycled, usable provider credentials, and an instance to act on.
 
   Not being stoppable is not an error. The verb reports it and exits 0 — the
   no-op is deliberate, and it is reported rather than silent, because a
@@ -67,15 +68,19 @@
      (assoc opts :green/exit 0 :walter/no-op true)
 
      :else
-     (if-let [err (oci/session-error opts runner)]
+     (if-let [err (case (str (:provider-compute opts))
+                   "oci" (oci/session-error opts runner)
+                   "vultr" (vultr/credential-error opts)
+                   nil)]
        (assoc opts :green/exit 2 :green/err err)
        (if-let [id (tools/instance-id opts)]
          (assoc opts :green/exit 0 :walter/instance-id id)
-         (assoc opts :green/exit 2
-                :green/err
-                (str "no instance id for profile " (:profile opts) ".\n"
-                     "Set oci-instance-id in colors.yml, or run create so the "
-                     "compute stage publishes it as an OpenTofu output.")))))))
+         (let [id-key (str (:provider-compute opts) "-instance-id")]
+           (assoc opts :green/exit 2
+                  :green/err
+                  (str "no instance id for profile " (:profile opts) ".\n"
+                       "Set " id-key " in colors.yml, or run create so the "
+                       "compute stage publishes it as an OpenTofu output."))))))))
 
 (defn start-step
   "Overlay `COLORS_PAR_*`, validate, and — for a real power verb — check the
@@ -127,18 +132,22 @@
     (if (:walter/no-op opts)
       (do (logln (no-op-message opts verb))
           (assoc opts :green/exit 0))
-      (let [{:keys [exit err out]} (oci/power! opts verb (:walter/instance-id opts))]
+      (let [provider (str (:provider-compute opts))
+            {:keys [exit err out]}
+            (case provider
+              "oci" (oci/power! opts verb (:walter/instance-id opts))
+              "vultr" (vultr/power! opts verb (:walter/instance-id opts)))]
         (if (zero? exit)
           (assoc opts :green/exit 0)
           (assoc opts
                  :green/exit (max 1 exit)
-                 :green/err (str "oci compute instance action failed: "
+                 :green/err (str provider " compute instance action failed: "
                                  (or (not-empty err) (not-empty out) "(no output)"))))))))
 
 (def power-off-step (power-step :stop))
 
 (defn power-on-step
-  "Start the machine, then read its address back from OCI.
+  "Start the machine, then read its address back from the provider.
 
   OpenTofu's stored `ip` output is not refreshed by an out-of-band power cycle,
   so it may be stale here — and rendering a stale address into `~/.ssh/config` is
@@ -154,12 +163,15 @@
     (cond
       (wf/failed? started) started
       (:walter/no-op started) started
-      :else (if-let [ip (oci/public-ip started (:walter/instance-id started))]
-              (assoc started :green/exit 0 :ip ip
-                     :user (:user (tools/fallback-compute-params started)))
-              (assoc started
-                     :green/exit 1
-                     :green/err "the instance reported no public address after starting")))))
+      :else (let [ip (case (str (:provider-compute started))
+                       "oci" (oci/public-ip started (:walter/instance-id started))
+                       "vultr" (vultr/public-ip started (:walter/instance-id started)))]
+              (if ip
+                (assoc started :green/exit 0 :ip ip
+                       :user (:user (tools/fallback-compute-params started)))
+                (assoc started
+                       :green/exit 1
+                       :green/err "the instance reported no public address after starting"))))))
 
 (defn ansible-local-after-start
   "ansible-local, unless the power verb was a no-op — there is no new address to

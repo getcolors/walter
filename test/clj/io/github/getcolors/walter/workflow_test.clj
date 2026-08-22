@@ -7,6 +7,7 @@
    [io.github.getcolors.walter.oci :as oci]
    [io.github.getcolors.walter.tools :as tools]
    [io.github.getcolors.walter.validate-test :as vt]
+   [io.github.getcolors.walter.vultr :as vultr]
    [io.github.getcolors.walter.workflow :as workflow]))
 
 (defn- steps-for
@@ -145,9 +146,20 @@
     (is (= 0 (:green/exit result)))
     (is (= "ocid1.instance.oc1..x" (:walter/instance-id result)))))
 
+(deftest vultr-power-preflight-needs-a-token-and-resolves-the-id
+  (with-redefs [tools/instance-id (fn [_] "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")]
+    (is (= 2 (:green/exit
+              (workflow/power-preflight {:provider-compute "vultr"}))))
+    (let [result (workflow/power-preflight
+                  {:provider-compute "vultr" :vultr-api-key "secret"})]
+      (is (= 0 (:green/exit result)))
+      (is (= "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+             (:walter/instance-id result))))))
+
 (deftest a-failed-power-call-reports-the-cli-output
   (with-redefs [oci/power! (fn [& _] {:exit 1 :out "" :err "ServiceError"})]
-    (let [result ((workflow/power-step :stop) {:walter/instance-id "x"})]
+    (let [result ((workflow/power-step :stop) {:provider-compute "oci"
+                                                :walter/instance-id "x"})]
       (is (= 1 (:green/exit result)))
       (is (str/includes? (:green/err result) "ServiceError")))))
 
@@ -157,7 +169,8 @@
            whole step exists to prevent"
     (with-redefs [oci/power! (fn [& _] {:exit 0})
                   oci/public-ip (fn [& _] "203.0.113.99")]
-      (let [result (workflow/power-on-step {:walter/instance-id "x" :ip "198.51.100.1"})]
+      (let [result (workflow/power-on-step {:provider-compute "oci"
+                                             :walter/instance-id "x" :ip "198.51.100.1"})]
         (is (= 0 (:green/exit result)))
         (is (= "203.0.113.99" (:ip result)))))))
 
@@ -174,7 +187,18 @@
 (deftest a-started-machine-with-no-address-is-a-failure
   (with-redefs [oci/power! (fn [& _] {:exit 0})
                 oci/public-ip (fn [& _] nil)]
-    (is (= 1 (:green/exit (workflow/power-on-step {:walter/instance-id "x"}))))))
+    (is (= 1 (:green/exit (workflow/power-on-step {:provider-compute "oci"
+                                                   :walter/instance-id "x"}))))))
+
+(deftest vultr-start-uses-the-live-api-address
+  (with-redefs [vultr/power! (fn [& _] {:exit 0})
+                vultr/public-ip (fn [& _] "203.0.113.77")]
+    (let [result (workflow/power-on-step
+                  {:provider-compute "vultr"
+                   :walter/instance-id "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"})]
+      (is (= 0 (:green/exit result)))
+      (is (= "203.0.113.77" (:ip result)))
+      (is (= "root" (:user result))))))
 
 (deftest a-no-op-start-writes-no-ssh-block
   (testing "there is no new address to record, and a placeholder one would break

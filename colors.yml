@@ -17,6 +17,7 @@
 #   digitalocean   COLORS_PAR_DO_TOKEN
 #   hcloud         COLORS_PAR_HCLOUD_TOKEN
 #   yandex         COLORS_PAR_YANDEX_TOKEN
+#   vultr          COLORS_PAR_VULTR_API_KEY
 #   oci            (none — uses oci-config-file-profile from ~/.oci/config)
 #   r2 backend     COLORS_PAR_R2_ACCESS_KEY_ID COLORS_PAR_R2_SECRET_ACCESS_KEY
 #   s3 backend     (none — OpenTofu uses the ambient AWS credential chain)
@@ -37,7 +38,7 @@
 profile: walter-example
 workdir: .colors
 
-provider-compute: oci # digitalocean | hcloud | oci | yandex | no-infra
+provider-compute: oci # digitalocean | hcloud | oci | vultr | yandex | no-infra
 provider-backend: local # local | s3 | r2
 
 # Renders lifecycle { prevent_destroy = true }. A real delete refuses to start
@@ -58,6 +59,7 @@ compute-prevent-destroy: true
 # Set it — `tofu output instance_id` in the stage directory, or the console —
 # and stop/start work with no state access at all.
 # oci-instance-id: ocid1.instance.oc1...
+# vultr-instance-id: 00000000-0000-0000-0000-000000000000
 #
 # How long to wait for a power transition to complete. The OCI CLI returns
 # before the instance has finished stopping or starting, so walter always waits.
@@ -68,8 +70,8 @@ power-wait-seconds: 300
 # Optional. Set true and walter generates the machine-access keypair itself —
 # ed25519, no passphrase, ~/.ssh/<profile> on this workstation — and
 # feeds the public half to the selected provider: OCI and Yandex take the
-# material directly, hcloud and DigitalOcean get a key resource rendered
-# beside the compute template. The managed ~/.ssh/config block then pins
+# material directly, while hcloud, DigitalOcean, and Vultr get a key resource
+# rendered beside the compute template. The managed ~/.ssh/config block then pins
 # `ssh <profile>` to that key with IdentityFile + IdentitiesOnly, and Ansible
 # connects with it too.
 #
@@ -127,6 +129,12 @@ digitalocean-size: s-1vcpu-1gb-35gb-intel
 digitalocean-image: ubuntu-25-10-x64
 digitalocean-vpc-uuid: REPLACE_ME
 digitalocean-ssh-keys: REPLACE_ME
+
+vultr-name: walter
+vultr-region: ams
+vultr-plan: vc2-2c-4gb
+vultr-os-id: 2284
+vultr-ssh-keys: REPLACE_ME
 
 yandex-cloud-id: REPLACE_ME
 yandex-folder-id: REPLACE_ME

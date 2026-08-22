@@ -17,7 +17,7 @@ did not want.
 |---|---|
 | `profile` | Names the work directory, the OpenTofu state keys and the `~/.ssh/config` Host alias. Must be unique across projects on the machine. |
 | `workdir` | Where walter renders, resolved next to `colors.yml`. Conventionally `.colors`. |
-| `provider-compute` | `oci` \| `hcloud` \| `digitalocean` \| `yandex` \| `no-infra` |
+| `provider-compute` | `oci` \| `hcloud` \| `digitalocean` \| `vultr` \| `yandex` \| `no-infra` |
 | `provider-backend` | `local` \| `s3` \| `r2` |
 | `compute-prevent-destroy` | `true` or `false`. Renders `lifecycle { prevent_destroy = … }`. |
 
@@ -38,17 +38,19 @@ point walter at state that belongs to something else.
 | Key | Meaning |
 |---|---|
 | `power-wait-seconds` | How long to wait for a power transition. Default 300. |
-| `oci-instance-id` | Optional. The OCID `stop`/`start` act on. |
+| `oci-instance-id` | Optional. The OCID OCI `stop`/`start` act on. |
+| `vultr-instance-id` | Optional. The UUID Vultr `stop`/`start` act on. |
 
-`oci-instance-id` is an escape hatch, not a normal setting. Left unset, walter
-reads the instance id from the compute stage's `instance_id` OpenTofu output,
+The provider-specific instance id is an escape hatch, not a normal setting.
+Left unset, walter reads `instance_id` from the compute stage's OpenTofu output,
 which needs the state backend to be reachable. Setting it — copy what `tofu
 output instance_id` reports in the stage directory — means power cycling keeps
-working when the backend does not, so a broken bucket cannot strand the user
-with a running machine they cannot stop.
+working when the backend does not, so a broken bucket cannot strand a running
+machine.
 
-Only `oci` can be power cycled. Every other provider makes `stop` and `start` a
-reported no-op.
+OCI and Vultr can be power cycled. Every other provider makes `stop` and `start`
+a reported no-op. Vultr power operations use `COLORS_PAR_VULTR_API_KEY`; OCI
+uses its configured CLI session.
 
 ## Machine access
 
@@ -59,9 +61,9 @@ reported no-op.
 Set `true` and walter generates `~/.ssh/<profile>` (ed25519, no
 passphrase) on the workstation at create time, if absent, and derives the
 per-provider key values from it: `oci-ssh-authorized-keys` becomes the
-generated public key's path, `compute-pubkey` its content, and on hcloud and
-DigitalOcean — whose instances take a key already registered with the
-provider — walter renders an `ssh-key.tf` resource beside the compute template
+generated public key's path, `compute-pubkey` its content, and on hcloud,
+DigitalOcean, and Vultr — whose instances take a key already registered with
+the provider — walter renders an `ssh-key.tf` resource beside the compute template
 and references it. The managed `~/.ssh/config` block then pins
 `ssh <profile>` to that key (`IdentityFile` + `IdentitiesOnly`), and Ansible
 connects with it. The apply itself runs under a short-lived ssh-agent walter
@@ -153,6 +155,17 @@ hcloud-name  hcloud-image  hcloud-server-type  hcloud-location  hcloud-ssh-keys
 digitalocean-name  digitalocean-region  digitalocean-size
 digitalocean-image digitalocean-ssh-keys
 ```
+
+**vultr** — `COLORS_PAR_VULTR_API_KEY`
+
+```
+vultr-name  vultr-region  vultr-plan  vultr-os-id  vultr-ssh-keys
+```
+
+`vultr-ssh-keys` is an existing Vultr SSH-key UUID when `compute-keygen` is off.
+With keygen on, walter registers the dedicated generated public key as a
+Terraform-managed `vultr_ssh_key` and derives this value itself. The local
+keypair survives deletion; the account registration follows provider state.
 
 **yandex** — `COLORS_PAR_YANDEX_TOKEN`, and `compute-pubkey` holding the public
 key content.
@@ -408,8 +421,8 @@ anything you would be annoyed to lose.
 
 `outputs.tf` appears only for providers walter can power cycle; it publishes the
 instance id the power verbs act on. `ssh-key.tf` appears only under
-`compute-keygen` on hcloud and DigitalOcean, where keys are registered with the
-provider rather than passed as material. `walter-emacs-packages/` appears only
+`compute-keygen` on hcloud, DigitalOcean, and Vultr, where keys are registered
+with the provider rather than passed as material. `walter-emacs-packages/` appears only
 when `emacs-config-repo` is set — it is a whole stage rather than a task, so
 with no Emacs there is no directory at all.
 

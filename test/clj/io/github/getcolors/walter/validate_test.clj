@@ -74,6 +74,12 @@
     (is (seq (errors-matching (assoc base :oci-instance-id "ocid1.image.oc1..aaaa")
                               #":oci-instance-id")))))
 
+(deftest vultr-instance-id-must-be-a-uuid
+  (is (= [] (validate/state-errors
+             (assoc base :vultr-instance-id "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"))))
+  (is (seq (errors-matching (assoc base :vultr-instance-id "instance-name")
+                            #":vultr-instance-id"))))
+
 (deftest power-wait-must-be-a-positive-integer
   (is (= [] (validate/state-errors (assoc base :power-wait-seconds 60))))
   (is (seq (errors-matching (assoc base :power-wait-seconds 0) #":power-wait-seconds")))
@@ -97,6 +103,7 @@
   (is (validate/stoppable? {:provider-compute "oci"}))
   (is (not (validate/stoppable? {:provider-compute "hcloud"})))
   (is (not (validate/stoppable? {:provider-compute "digitalocean"})))
+  (is (validate/stoppable? {:provider-compute "vultr"}))
   (is (not (validate/stoppable? {:provider-compute "yandex"})))
   (is (not (validate/stoppable? {:provider-compute "no-infra"})))
   (is (not (validate/stoppable? {}))))
@@ -330,7 +337,7 @@
   (is (seq (errors-matching (assoc base :compute-keygen "true")
                             #":compute-keygen")))
   (testing "the providers walter can feed a generated key to"
-    (doseq [provider ["oci" "hcloud" "digitalocean" "yandex" "no-infra"]]
+    (doseq [provider ["oci" "hcloud" "digitalocean" "vultr" "yandex" "no-infra"]]
       (is (= [] (errors-matching (-> base
                                      (dissoc :oci-ssh-authorized-keys)
                                      (assoc :provider-compute provider

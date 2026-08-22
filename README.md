@@ -68,9 +68,10 @@ exactly that.
 Nothing else is installed. Other toolchains are the user's `nix profile
 install`, not a walter feature.
 
-`stop` and `start` work on OCI. Everywhere else they report that the provider
-has no power API walter can drive and exit 0. That is deliberate: no provider
-should need a special case in the graph.
+`stop` and `start` work on OCI and Vultr. Everywhere else they report that the
+provider has no power API walter can drive and exit 0. Both implementations act
+on immutable provider instance IDs and refresh the SSH alias from the live API
+after start; power state remains outside OpenTofu.
 
 ## Development
 

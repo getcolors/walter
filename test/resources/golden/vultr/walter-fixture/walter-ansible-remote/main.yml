@@ -1,0 +1,847 @@
+---
+# The remote stage does two things: it proves walter's own plumbing works, and
+# it puts a toolchain on the machine.
+#
+# Facts are gathered here even though ansible.cfg says `gathering = explicit`,
+# because every task below needs `ansible_env.HOME` — nix installs into a
+# per-user profile and there is no other honest way to name it. The ping stage
+# this grew out of needed one round trip and no facts; provisioning is not that
+# stage any more.
+#
+# What is here is only what a machine cannot be useful without. Everything the
+# user's own work needs, they install themselves — with nix already present,
+# that is one `nix profile install` away and needs no change to walter.
+- name: Provision the development machine
+  hosts: all
+  gather_facts: true
+  tasks:
+    # Kept from v1. It costs nothing and it is still the task that fails first
+    # and most legibly when the inventory, the login or the key is wrong — the
+    # things most likely to be wrong in a new project. It does not prove the
+    # machine is up: the compute template's remote-exec provisioner sits behind
+    # an SSH connection block, so `tofu apply` has already blocked on that.
+    - name: Ping
+      ansible.builtin.ping:
+
+    # cloudflared's HTTP tunnel does not need root, but by default Ubuntu's
+    # disabled ping_group_range makes its optional ICMP proxy log a permissions
+    # warning, and the distro's small socket-buffer ceilings make quic-go warn
+    # that it cannot allocate the buffers QUIC asks for. Grant ping sockets only
+    # to the login user's primary group rather than running cloudflared as root,
+    # and use quic-go's recommended ceiling for both receive and send buffers.
+    - name: Configure kernel networking for cloudflared
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/90-cloudflared.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          net.ipv4.ping_group_range = {{ ansible_user_gid }} {{ ansible_user_gid }}
+          net.core.rmem_max = 7500000
+          net.core.wmem_max = 7500000
+
+    # Apply on every create, not only when the file changes: /proc can drift
+    # independently of its persistent configuration. Writing an already-current
+    # sysctl is a no-op, so only the copy task reports a desired-state change.
+    - name: Apply cloudflared kernel networking
+      become: true
+      ansible.builtin.command:
+        cmd: sysctl --load /etc/sysctl.d/90-cloudflared.conf
+      changed_when: false
+
+    # The Determinate Systems installer rather than the upstream shell script:
+    # it is non-interactive with --no-confirm, it detects systemd by itself, and
+    # it leaves /nix/receipt.json behind — which makes `creates` an accurate
+    # idempotency check instead of a guess.
+    #
+    # This runs on every machine, gated on nothing. It is the one piece of
+    # tooling walter treats as part of what a development machine *is*: with nix
+    # present, anything else is one `nix profile install` away and needs no
+    # change here.
+    #
+    # `become` so the installer is already root. Left to escalate on its own it
+    # shells out to sudo, which wants a TTY that Ansible has not given it.
+    #
+    # pipefail, under bash rather than dash, is not decoration: without it a
+    # failed curl still feeds `sh` an empty script, which exits 0 — so the task
+    # reports success, nix is absent, and the failure surfaces two tasks later
+    # as an unexplained missing binary.
+    - name: Install nix
+      become: true
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          curl -fsSL https://install.determinate.systems/nix
+          | sh -s -- install --no-confirm
+        creates: /nix/receipt.json
+        executable: /bin/bash
+
+    # A machine you cannot run a full-screen program on is not finished being
+    # provisioned, which is why this is not gated on anything. Terminals now
+    # ship their own terminfo — Ghostty, WezTerm, kitty — and a distro from
+    # before that terminal existed has never heard of it, so `vim`, `top` and
+    # `less` all die with "Terminal type ... is not defined" over an SSH session
+    # that is otherwise perfect. TERM travels; the database does not.
+    #
+    # Taken from nixpkgs rather than copied from the controller with
+    # infocmp, because walter cannot assume the machine running it has an
+    # interactive TERM at all — a create from CI or from an agent would then
+    # install nothing, or garbage.
+    - name: Install the Ghostty terminfo
+      ansible.builtin.command:
+        cmd: nix profile install github:NixOS/nixpkgs/nixpkgs-unstable#ghostty.terminfo
+        creates: "{{ ansible_env.HOME }}/.nix-profile/share/terminfo/x/xterm-ghostty"
+      environment:
+        PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+
+    - name: Ensure the user terminfo database exists
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/.terminfo/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - x
+        - g
+
+    # The system ncurses searches ~/.terminfo and /usr/share/terminfo, and knows
+    # nothing about a nix profile. TERMINFO_DIRS would tell it, but only in a
+    # login shell — and `ssh host vim …` is not one. Two symlinks into the
+    # directory it already reads need no environment at all.
+    #
+    # Both names ship: TERM is `xterm-ghostty`, and `ghostty` is its alias.
+    - name: Link the terminfo where ncurses already looks
+      ansible.builtin.file:
+        src: "{{ ansible_env.HOME }}/.nix-profile/share/terminfo/{{ item.dir }}/{{ item.name }}"
+        dest: "{{ ansible_env.HOME }}/.terminfo/{{ item.dir }}/{{ item.name }}"
+        state: link
+        force: true
+      loop:
+        - {dir: x, name: xterm-ghostty}
+        - {dir: g, name: ghostty}
+
+    # The machine's GitHub identity: gh logged in as fixture-user, git
+    # authenticating through it, and the commit identity configured. Every
+    # clone below rides this over https — there is no ssh key for GitHub on
+    # this machine and no forwarded agent, so this block has to precede them.
+    #
+    # The token was minted by the device flow at the start of the create — the
+    # one interactive moment walter has — and arrives here as a *path* on the
+    # controller, read at play time. Nothing token-shaped is rendered, and the
+    # controller deletes the file the moment this play returns.
+    #
+    # Inline install, like Emacs below, rather than a nix-packages companion
+    # rule: gh is what this block *is*, not a package the project chose.
+    - name: Install the GitHub CLI
+      ansible.builtin.command:
+        cmd: nix profile install github:NixOS/nixpkgs/nixpkgs-unstable#gh
+        creates: "{{ ansible_env.HOME }}/.nix-profile/bin/gh"
+      environment:
+        PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+
+    # The machine's own login is the evidence — gh keeps it in
+    # ~/.config/gh/hosts.yml and refreshes it in place — so this checks the
+    # machine rather than stamping a state file, the seed-agent-credentials
+    # judgement for the same reason: a login made on the machine directly must
+    # not be clobbered by a later create.
+    - name: Check whether gh already holds a login
+      ansible.builtin.command:
+        cmd: gh auth status --hostname github.com
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+      register: walter_gh_auth
+      failed_when: false
+      changed_when: false
+
+    # Only reachable when the controller's probe wrongly concluded the machine
+    # was logged in and skipped the device flow — say what happened rather
+    # than failing on an empty file lookup two lines later.
+    - name: Refuse to log in without an acquired token
+      ansible.builtin.assert:
+        that: walter_gh_auth.rc == 0 or github_token_file | default('') | length > 0
+        fail_msg: >-
+          The machine holds no gh login and this create acquired no token —
+          the pre-flight probe answered "logged in" for a machine that is not.
+          Run create again so the device flow runs.
+        success_msg: "gh login present, or a token is on hand to seed one"
+
+    # The token travels over stdin, never argv — an argument would sit in the
+    # process table for the length of the command. no_log because a failed
+    # login echoes the task's data, and the data is a bearer token.
+    - name: Log gh in with the acquired token
+      ansible.builtin.command:
+        cmd: gh auth login --hostname github.com --with-token
+        stdin: "{{ lookup('file', github_token_file) }}"
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+      when: walter_gh_auth.rc != 0
+      no_log: true
+
+    # gh becomes git's credential helper, which is the entire https story: the
+    # one token gh holds is what git clones and pushes with, and rotating it
+    # is one re-login rather than a hunt through credential stores. Written
+    # with the helper's absolute path, so the play's PATH never matters to a
+    # later shell.
+    - name: Make gh git's credential helper
+      ansible.builtin.command:
+        cmd: gh auth setup-git --hostname github.com
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+      changed_when: false
+
+    # user.name is the GitHub login rather than a separate display-name key:
+    # one identity, stated once in colors.yml. Re-runs rewrite the same value,
+    # so this reports ok rather than pretending convergence changed something.
+    - name: Configure the git identity
+      ansible.builtin.command:
+        argv:
+          - git
+          - config
+          - --global
+          - "{{ item.key }}"
+          - "{{ item.value }}"
+      loop:
+        - {key: user.name, value: "fixture-user"}
+        - {key: user.email, value: "fixture-user@example.com"}
+      loop_control:
+        label: "{{ item.key }}"
+      changed_when: false
+
+
+    # The project's own toolchain, named as nixpkgs attribute paths in
+    # colors.yml. Gated on the key, so a project that names nothing renders a
+    # playbook that does not mention this at all.
+    #
+    # The same nixpkgs ref as the terminfo and Emacs steps above — a channel
+    # branch, so these track upstream rather than being reproducible. Stated in
+    # tools/nixpkgs-ref, where the trade is made.
+    #
+    # Not `become`, for the same reason Emacs is not — the profile has to be the
+    # login user's or the binaries land in root's and `ssh <alias>` cannot see
+    # them.
+    #
+    # `add` rather than the older `install` spelling, and no `creates` guard:
+    # re-adding a flakeref already in the profile warns and exits 0 instead of
+    # adding a second element, so the task is safely re-runnable and `create`
+    # is re-run routinely. A `creates` check could not have been written anyway —
+    # it would have to name a binary, and the attribute rarely matches it
+    # (asdf-vm ships `asdf`, ripgrep ships `rg`).
+    #
+    # All of them in one invocation, so nix resolves the set together and the
+    # profile takes a single generation.
+    #
+    # nix reports each no-op on stderr as "warning: '<name>' is already added",
+    # so one warning per package means nothing was installed. Counting them is
+    # what keeps a converged machine reporting ok rather than a change it did
+    # not make.
+    #
+    # NIXPKGS_ALLOW_UNFREE and --impure travel together and are needed by each
+    # other: the variable is what opens the licence gate, and flake evaluation
+    # is pure by default and does not read the environment at all, so without
+    # --impure the variable is silently ignored and the add still fails.
+    #
+    # They are here because some of what a development machine wants is unfree —
+    # `claude-code` is, where `codex` and `pi-coding-agent` are not. One shared
+    # invocation is what makes nix resolve the set together, so the alternative
+    # was a second, --impure task and a second list in colors.yml to feed it.
+    #
+    # The cost, stated rather than hidden: this relaxes the licence check for
+    # every name in nix-packages, not only the ones that need it, so an unfree
+    # package added later installs without ever announcing itself. --impure is
+    # the narrower of the two — it lets evaluation read the environment, and
+    # changes nothing about what is fetched, since the flakeref is still pinned
+    # to the same nixpkgs ref.
+    - name: Install the project's nix packages
+      ansible.builtin.command:
+        cmd: nix profile add --impure github:NixOS/nixpkgs/nixpkgs-unstable#asdf-vm github:NixOS/nixpkgs/nixpkgs-unstable#ripgrep github:NixOS/nixpkgs/nixpkgs-unstable#fish github:NixOS/nixpkgs/nixpkgs-unstable#babashka github:NixOS/nixpkgs/nixpkgs-unstable#atuin
+      environment:
+        PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+        NIXPKGS_ALLOW_UNFREE: "1"
+      register: walter_nix_packages
+      changed_when: >-
+        walter_nix_packages.stderr_lines
+        | select('search', 'is already added') | list | length < 5
+
+
+    # Changing the login shell is the one task here that can lock a machine out
+    # of its own toolchain, so it is guarded before it is applied.
+    #
+    # The shell comes from the nix profile, which is why validate.clj refuses a
+    # `login-shell` that is not also in `nix-packages`. That check is on the
+    # desired state; this one is on the machine, and catches the case the file
+    # cannot know about — a profile that did not end up with what it declared.
+    - name: Locate the login shell in the nix profile
+      ansible.builtin.stat:
+        path: "{{ ansible_env.HOME }}/.nix-profile/bin/fish"
+      register: walter_login_shell
+
+    - name: Refuse to set a login shell that is not installed
+      ansible.builtin.assert:
+        that: walter_login_shell.stat.exists
+        fail_msg: >-
+          fish is not in {{ ansible_env.HOME }}/.nix-profile/bin.
+          Setting it as the login shell would leave an account that cannot start
+          a session.
+        success_msg: "fish is installed and can be made the login shell"
+
+    # This has to happen BEFORE the shell is switched, or the first login is the
+    # broken one.
+    #
+    # nix reaches a login shell through /etc/profile.d/nix.sh, which is a POSIX
+    # shell mechanism — fish does not read it, and a nix-built fish does not read
+    # /etc/fish/conf.d either, since its sysconfdir is inside the store. A clean
+    # login fish therefore starts with PATH=/run/current-system/sw/bin:/bin:/usr/bin
+    # and cannot find `nix` itself, which makes the breakage unrecoverable from
+    # inside that shell.
+    #
+    # nix ships the fish half of its own integration next to the sh one, so this
+    # sources that rather than reimplementing the PATH arithmetic. ~/.config is
+    # read by any fish regardless of how it was built.
+    # `copy` does not create the path to its destination, and on a fresh machine
+    # nothing else has made this — fish only creates it once it has run.
+    - name: Ensure fish's conf.d exists
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/.config/fish/conf.d"
+        state: directory
+        mode: "0755"
+
+    - name: Make nix visible to fish before it becomes the login shell
+      ansible.builtin.copy:
+        dest: "{{ ansible_env.HOME }}/.config/fish/conf.d/nix.fish"
+        mode: "0644"
+        content: |
+          # Managed by walter. nix's own fish integration: /etc/profile.d/nix.sh
+          # is sh-only, so without this a login fish cannot find nix or anything
+          # installed with it.
+          if test -e /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.fish
+              source /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.fish
+          end
+
+    # chsh insists the shell appear in /etc/shells. The `user` module shells out
+    # to usermod, which does not — but a shell missing from the file is still
+    # wrong, and it is what stops the user changing it back by hand later.
+    - name: Allow the shell in /etc/shells
+      become: true
+      ansible.builtin.lineinfile:
+        path: /etc/shells
+        line: "{{ walter_login_shell.stat.path }}"
+        state: present
+        create: true
+        mode: "0644"
+
+    # `become`, because changing a login shell is a passwd(5) write. The user is
+    # the one Ansible connected as, not a name from colors.yml: walter has no
+    # other account, and naming one here would let a typo point this at root.
+    - name: Set the login shell
+      become: true
+      ansible.builtin.user:
+        name: "{{ ansible_user_id }}"
+        shell: "{{ walter_login_shell.stat.path }}"
+
+
+    # Language runtimes through asdf, which is itself just another entry in
+    # nix-packages — so this block assumes nothing that colors.yml did not ask
+    # for, and validate.clj refuses the combination that would fail here.
+    #
+    # `asdf set --home` is 0.16+ syntax. 0.16 rewrote asdf in Go and removed
+    # `asdf global` outright — it does not warn, it answers "invalid command
+    # provided" — so this block only works on the Go asdf, which is why the
+    # nixpkgs ref above is a channel branch rather than a release one. If that
+    # ref is ever moved back to a branch carrying 0.15, this line has to become
+    # `asdf global` in the same commit.
+    #
+    # Every one of these is safely re-runnable on its own terms: `plugin add`
+    # exits 0 with "already added", `install` exits 0 with "already installed"
+    # (0.15 and 0.20 word it differently, so the check matches the fragment they
+    # share), and `set --home` rewrites a file whose content is already what it
+    # would write.
+    - name: Add the asdf plugins
+      ansible.builtin.command:
+        cmd: asdf plugin add {{ item.name }} {{ item.plugin | default('', true) }}
+      loop: [{"name":"nodejs","version":"24.18.1","plugin":"https://github.com/asdf-vm/asdf-nodejs.git"}]
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+      register: walter_asdf_plugins
+      # Both streams: 0.20 writes "already added" to stderr, and checking stdout
+      # alone reported a change on every converged run.
+      changed_when: "'already added' not in walter_asdf_plugins.stdout + walter_asdf_plugins.stderr"
+
+    - name: Install the asdf versions
+      ansible.builtin.command:
+        cmd: asdf install {{ item.name }} {{ item.version }}
+      loop: [{"name":"nodejs","version":"24.18.1","plugin":"https://github.com/asdf-vm/asdf-nodejs.git"}]
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+      register: walter_asdf_installs
+      # Likewise on stderr. The two versions word it differently — 0.15 says
+      # "nodejs 24.18.1 is already installed", 0.20 "version 24.18.1 of nodejs
+      # is already installed" — so the match is on the fragment they share.
+      changed_when: "'already installed' not in walter_asdf_installs.stdout + walter_asdf_installs.stderr"
+
+    - name: Set the home asdf versions
+      ansible.builtin.command:
+        cmd: asdf set --home {{ item.name }} {{ item.version }}
+      loop: [{"name":"nodejs","version":"24.18.1","plugin":"https://github.com/asdf-vm/asdf-nodejs.git"}]
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+      changed_when: false
+
+    # What asdf installs is reached through its shims directory, and nothing puts
+    # that on PATH by itself. Without these two files `node` exists on disk and
+    # no shell can see it.
+    #
+    # The Go asdf ships no asdf.sh or asdf.fish to source — that was the bash
+    # implementation, and 0.16 dropped the whole share/asdf-vm directory. There
+    # is nothing left to source, and a `source` of it would be a silent no-op:
+    # PATH is now the entire integration.
+
+    - name: Put asdf on PATH for fish
+      ansible.builtin.copy:
+        dest: "{{ ansible_env.HOME }}/.config/fish/conf.d/asdf.fish"
+        mode: "0644"
+        content: |
+          # Managed by walter. The Go asdf is reached through its shims alone.
+          # fish_add_path rather than `set -gx PATH`, so a shell started inside a
+          # shell does not accumulate copies of the entry.
+          fish_add_path --prepend {{ ansible_env.HOME }}/.asdf/shims
+
+    - name: Put asdf on PATH for POSIX shells
+      ansible.builtin.blockinfile:
+        path: "{{ ansible_env.HOME }}/.profile"
+        create: true
+        mode: "0644"
+        marker: "# {mark} walter asdf"
+        block: |
+          case ":$PATH:" in
+            *":$HOME/.asdf/shims:"*) ;;
+            *) PATH="$HOME/.asdf/shims:$PATH"; export PATH ;;
+          esac
+
+
+    # corepack ships inside Node and installs its shims into that Node's own bin
+    # directory — which asdf does not expose until it is told to look again. Skip
+    # the reshim and `corepack enable pnpm` reports success while `pnpm` stays
+    # "command not found", which is a genuinely confusing way to fail.
+    #
+    # corepack itself downloads the package manager on first use, so the first
+    # `pnpm` is slower than the rest and needs a network. That is corepack's
+    # design, not a provisioning failure.
+    - name: Enable the corepack package managers
+      ansible.builtin.command:
+        cmd: corepack enable {{ item }}
+      loop: ["pnpm"]
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.asdf/shims:{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+      changed_when: false
+
+    - name: Reshim so the corepack binaries are reachable
+      ansible.builtin.command:
+        cmd: asdf reshim nodejs
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+      changed_when: false
+
+
+    # Ordering below is deliberate: Emacs from nix, then the configuration.
+    # Cloning a config for an Emacs that is not installed leaves a machine that
+    # looks provisioned and is not.
+    #
+    # nix is on disk but not on PATH: the installer wires ~/.nix-profile and
+    # /etc/profile.d/nix.sh for *login* shells, and Ansible's is not one. The
+    # daemon profile path is stable, so name it rather than sourcing anything.
+    #
+    # Not `become` — the profile has to be the login user's, or Emacs lands in
+    # root's and `ssh walter-oci` cannot see it.
+    # The full `emacs`, not `emacs-nox`. The nox build drops X and with it the
+    # image and SVG support some configurations assume, and the larger closure
+    # costs download time on a machine that is rebuilt rather than rebooted.
+    #
+    # `creates` cannot tell the two apart — both put `emacs` in bin — so a
+    # machine that already has one keeps it. Changing this attribute converges a
+    # new machine, not an existing one; that needs `nix profile remove` first,
+    # or a delete and create.
+    - name: Install Emacs
+      ansible.builtin.command:
+        cmd: nix profile install github:NixOS/nixpkgs/nixpkgs-unstable#emacs
+        creates: "{{ ansible_env.HOME }}/.nix-profile/bin/emacs"
+      environment:
+        PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+
+    # Over https, authenticated by the gh credential helper configured above —
+    # the machine's own token is what clones and can push back, so nothing of
+    # the workstation's is involved and no agent is forwarded. validate.clj
+    # refuses an ssh:// or git@ form for exactly this reason.
+    #
+    # `update: false` clones once and then leaves it alone. This is a working
+    # copy on a development machine, not a deployment: a later create must not
+    # discard edits made on the machine, and pulling is the user's call.
+    - name: Clone the Emacs configuration
+      ansible.builtin.git:
+        repo: "https://github.com/fixture/emacs.d.git"
+        dest: "~/.config/fixture-emacs"
+        update: false
+
+    # Packages are deliberately not pre-fetched. The first interactive launch
+    # pulls from ELPA/MELPA, native-compiles and clones tree-sitter grammars on
+    # its own; doing that here would add minutes to every create and turn a
+    # transient MELPA failure into a failed provision.
+
+
+    # Where the steps below record that a once-only action has been done.
+    #
+    # ~/.local/state is the XDG home for exactly this: data that survives
+    # reboots, means nothing to the user, and belongs to the tool that wrote it.
+    #
+    # Hoisted out of the blocks that use it rather than repeated inside each,
+    # and gated on their union rather than left ungated — a machine that asked
+    # for neither should not carry an empty directory it never explains.
+    - name: Ensure walter's state directory exists
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/.local/state/walter"
+        state: directory
+        mode: "0755"
+
+
+    # Subscription logins for the agent CLIs, carried from the workstation that
+    # runs create so the machine is usable without a browser on it.
+    #
+    # One file per agent and never the directory around it. ~/.claude, ~/.codex
+    # and ~/.pi are mostly session transcripts — 279 MB of them on the
+    # workstation this was written against, against 9 KB of actual tokens — and
+    # a development machine has no business holding another machine's history.
+    # validate/agent-credential-paths is where the one path per agent is named.
+    #
+    # Placed before the organisation clones and dotfiles launcher: credential
+    # files are deliberately excluded from getcolors/dotfiles, so that later
+    # create cannot overwrite them. Atuin stays last for the reason given there.
+    #
+    # Nothing here is rendered. The files are read from the controller at play
+    # time, so `build` stays credential-free and no token ever reaches .colors/.
+    - name: Look for the agent credentials on this workstation
+      ansible.builtin.stat:
+        path: "{{ lookup('env', 'HOME') }}/{{ item.path }}"
+      loop: [{"agent":"claude","path":".claude/.credentials.json"},{"agent":"codex","path":".codex/auth.json"},{"agent":"pi","path":".pi/agent/auth.json"}]
+      loop_control:
+        label: "{{ item.agent }}"
+      delegate_to: localhost
+      # Explicit rather than inherited: this reads the operator's home
+      # directory, and it should keep doing that if the play ever grows a
+      # play-level become.
+      become: false
+      changed_when: false
+      register: walter_agent_credentials
+
+    # Named, not counted. "2 of 3 seeded" does not tell you which CLI is about
+    # to ask you to log in.
+    #
+    # A create from CI, or from a colleague's laptop, has none of these files
+    # and is not a broken create — it is the machine's pre-existing behaviour,
+    # where every agent CLI starts logged out. So this reports and continues.
+    - name: Report the agent credentials this workstation cannot supply
+      ansible.builtin.debug:
+        msg: >-
+          Not seeded, because the machine running create has no such file:
+          {{ walter_agent_missing | join(', ') }}.
+          Those CLIs start logged out. Log in on the machine itself, or log in
+          here and run create again.
+      vars:
+        walter_agent_missing: >-
+          {{ walter_agent_credentials.results
+             | rejectattr('stat.exists')
+             | map(attribute='item.agent') | list }}
+      when: walter_agent_missing | length > 0
+
+    # 0700 because the only things in these directories are credentials and
+    # per-tool state. The CLI would create them itself on first run; doing it
+    # here is what lets the copy below name a destination that exists.
+    - name: Ensure the agent configuration directories exist
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/{{ item.item.path | dirname }}"
+        state: directory
+        mode: "0700"
+      loop: "{{ walter_agent_credentials.results | selectattr('stat.exists') | list }}"
+      loop_control:
+        label: "{{ item.item.agent }}"
+
+    # `force: false` is the entire idempotency guard, and it is deliberately not
+    # a ~/.local/state/walter stamp like the atuin login and the dotfiles
+    # install above. Those need a stamp because neither leaves a file to watch —
+    # atuin keeps its session inside meta.db, and the dotfiles installer writes
+    # files indistinguishable from hand-edited ones. Here the credential file
+    # *is* the evidence, and watching it answers the question a stamp cannot:
+    # whether this machine has a login, rather than whether walter once wrote
+    # one.
+    #
+    # That difference is the whole point, because these are OAuth refresh tokens
+    # the CLI rotates in place. Two overwrites have to be prevented, and a stamp
+    # only prevents the first: a token the machine refreshed for itself, and a
+    # login made on the machine directly — which a stamp would clobber the first
+    # time it ran, potentially rotating the workstation's own session out.
+    #
+    # The accepted cost is that this seeds an empty machine once and never
+    # repairs one. When a machine's tokens expire, log in there, or delete the
+    # file there and run create again.
+    #
+    # no_log because `ansible-playbook --diff` prints a copy module's file
+    # content, and that content is a bearer token. The stat task above is what
+    # keeps this debuggable in spite of it: it already named every file found.
+    - name: Seed the agent credentials
+      ansible.builtin.copy:
+        src: "{{ lookup('env', 'HOME') }}/{{ item.item.path }}"
+        dest: "{{ ansible_env.HOME }}/{{ item.item.path }}"
+        mode: "0600"
+        force: false
+      loop: "{{ walter_agent_credentials.results | selectattr('stat.exists') | list }}"
+      loop_control:
+        label: "{{ item.item.agent }}"
+      no_log: true
+
+
+    # Claude Code keeps its bearer tokens in ~/.claude/.credentials.json, but
+    # interactive startup has a second gate in ~/.claude.json. A credential-only
+    # seed therefore makes `claude auth status` report logged in while `claude`
+    # still presents first-run login methods.
+    #
+    # Do not copy the workstation's ~/.claude.json: it holds machine-local
+    # project and usage state, and is much larger than this one required bit.
+    # Merge the bit only when absent, so a value already chosen on the machine —
+    # including false — is preserved. The write is atomic and 0600; malformed
+    # existing JSON fails rather than being overwritten.
+    - name: Complete Claude onboarding for the seeded login
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+              import json
+              import os
+              import sys
+              import tempfile
+              from pathlib import Path
+
+              path = Path(sys.argv[1])
+              try:
+                  data = json.loads(path.read_text())
+              except FileNotFoundError:
+                  data = {}
+              if "hasCompletedOnboarding" not in data:
+                  data["hasCompletedOnboarding"] = True
+                  with tempfile.NamedTemporaryFile(
+                      "w", dir=path.parent, prefix=f".{path.name}.", delete=False
+                  ) as stream:
+                      json.dump(data, stream, separators=(",", ":"))
+                  temporary = Path(stream.name)
+                  try:
+                      os.chmod(temporary, 0o600)
+                      os.replace(temporary, path)
+                  finally:
+                      temporary.unlink(missing_ok=True)
+                  print("added")
+          - "{{ ansible_env.HOME }}/.claude.json"
+      loop: "{{ walter_agent_credentials.results }}"
+      loop_control:
+        label: "{{ item.item.agent }}"
+      when:
+        - item.item.agent == "claude"
+        - item.stat.exists
+      register: walter_claude_onboarding
+      changed_when: walter_claude_onboarding.stdout == "added"
+
+
+
+    # Every source repository in the named organisations, checked out under
+    # ~/code/<org>/<repo>.
+    #
+    # Only the organisation is desired state. The repository list is read from
+    # GitHub here, on the machine, rather than written into colors.yml — so a
+    # repository added upstream arrives on the next create and nothing has to be
+    # kept in step by hand. That is the entire reason this key names an org.
+    #
+    # Placed after the dotfiles installer, which copies rendered files over
+    # $HOME and could otherwise land on top of a checkout, and after the
+    # credential seeding, which is cheap: this is the longest and most
+    # network-dependent step in the play, and a GitHub outage should not be able
+    # to fail a create before the things that make the machine usable are done.
+    #
+    # Authenticated, through the gh login above. This used to be an anonymous
+    # `uri` call on purpose — public repositories, no credential to hold — but
+    # once the machine carries a token, listing anonymously means cloning a
+    # silent subset of what the account can see. `--paginate` also retires the
+    # old one-page-of-100 refusal: gh follows the Link header itself, and
+    # `--slurp` collects the pages into one JSON document per organisation.
+    #
+    # `type=sources` drops forks at the server, and archived repositories are
+    # dropped at the clone below, where the API offers no filter. Both are the
+    # same judgement: a fork or an archived repository is not a working copy.
+    - name: List the source repositories in each organisation
+      ansible.builtin.command:
+        cmd: gh api --paginate --slurp "orgs/{{ item }}/repos?per_page=100&type=sources&sort=full_name"
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+      loop: ["fixture-org"]
+      register: walter_org_repos
+      # A read, so it is `ok` rather than `changed` however many repositories
+      # it names.
+      changed_when: false
+
+    # One flat loop over every repository of every organisation: `--slurp`
+    # produced a list of pages per org, so two flatten levels turn the
+    # registered results into plain repository objects, and `full_name`
+    # ("org/repo") carries both halves of the clone URL and the checkout path
+    # in one string that cannot drift apart.
+    #
+    # Archived repositories are skipped with `when` rather than filtered out of
+    # the loop, so the run says which ones it passed over instead of silently
+    # producing a shorter list.
+    #
+    # https rather than git@, like the Emacs clone above and for the same
+    # reason — the machine's own token authenticates through the gh credential
+    # helper, so the checkouts can push back with nothing of the workstation's
+    # involved.
+    #
+    # Same `update: false`, also for the same reason: these are working copies on
+    # a development machine, and a later create must not discard edits made
+    # there. `git pull` on the machine is how one moves; a repository added to
+    # the organisation later arrives on the next create.
+    - name: Clone the organisations' repositories
+      ansible.builtin.git:
+        repo: "https://github.com/{{ item.full_name }}.git"
+        dest: "{{ ansible_env.HOME }}/code/{{ item.full_name }}"
+        update: false
+      loop: "{{ walter_org_repos.results | map(attribute='stdout') | map('from_json') | list | flatten(levels=2) }}"
+      loop_control:
+        label: "{{ item.full_name }}"
+      when: not item.archived
+
+
+    # Apply getcolors/dotfiles from the checkout clone-orgs made above. Walter
+    # does not carry a second copy of that package's configuration contract: the
+    # checkout's own colors.yml selects Ubuntu and $HOME, and its existing Green
+    # launcher drives the package.
+    #
+    # This has to follow the organisation clones — on a new machine the checkout
+    # does not exist before them — and precede atuin, whose endpoint may be
+    # configured by the files installed here.
+    #
+    # The package's overwrite guard is committed true. This is the one authorized
+    # create, so its runtime override is false; COLORS_PAR_PROFILE is deliberately
+    # absent because both packages reject it. A walter stamp makes the invocation
+    # once-only, preserving edits made in $HOME on later creates.
+    - name: Apply the dotfiles checkout once
+      ansible.builtin.command:
+        cmd: ./green create
+        chdir: "~/code/fixture-org/dotfiles"
+        creates: "{{ ansible_env.HOME }}/.local/state/walter/dotfiles"
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+        COLORS_PAR_DOTFILES_PREVENT_OVERWRITE: "false"
+
+    # Only reached when the launcher exited 0. A failed create leaves no stamp,
+    # so the next walter create retries it.
+    - name: Record that the dotfiles checkout was applied
+      ansible.builtin.copy:
+        dest: "{{ ansible_env.HOME }}/.local/state/walter/dotfiles"
+        mode: "0644"
+        content: |
+          Written by walter after `~/code/fixture-org/dotfiles/green create` completed.
+          Its presence protects edits in $HOME from later walter creates.
+          Delete it to apply the checkout again.
+
+
+    # Shell history, synced to an existing account. A replacement machine that
+    # cannot see the history of the one it replaced has lost the thing that made
+    # the old one worth keeping.
+    #
+    # Last in the play: the account is configured against ~/.config/atuin/config.toml,
+    # which a dotfiles profile may well be what puts there — including a
+    # self-hosted `sync_address`. Logging in before that would authenticate
+    # against the wrong server.
+    #
+    # Only the username comes from desired state. The password and the
+    # encryption key are read from walter's own process environment, because
+    # colors.yml is committed and the key decrypts every machine's history — so
+    # they travel as COLORS_PAR_* like every other credential in this stack and
+    # never reach a rendered file. `lookup` runs on the controller, and
+    # ansible-playbook can see them because green merges its parent environment
+    # into the one it runs with.
+    #
+    # Checked before use rather than after: unset, the login would run with empty
+    # flags and fail with atuin's own error, which says nothing about the real
+    # cause. This is not in validate.clj on purpose — `build` renders from
+    # desired state alone and must stay credential-free, so a secret that only
+    # `create` needs has to be checked where `create` runs.
+    #
+    # The assertion names the variables and tests only their length; neither the
+    # message nor a failing `that:` expression can print a value.
+    - name: Refuse to log in to atuin without its credentials
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'COLORS_PAR_ATUIN_PASSWORD') | length > 0
+          - lookup('env', 'COLORS_PAR_ATUIN_KEY') | length > 0
+        fail_msg: >-
+          atuin-username is set, but COLORS_PAR_ATUIN_PASSWORD and
+          COLORS_PAR_ATUIN_KEY are not both in the environment. They belong in
+          .envrc.private, never in colors.yml — the key decrypts this account's
+          history on every machine.
+        success_msg: "atuin credentials are present in the environment"
+
+    # A stamp of walter's own, deliberately, and not for want of trying to
+    # observe the machine instead. atuin keeps its session inside meta.db, a
+    # sqlite database — there is no session file to point `creates` at, and an
+    # earlier version of this step pointed at one that never exists, so the login
+    # silently re-ran on every converge. The other candidate, parsing `atuin
+    # status` for the username, reads output that is not a stable contract: the
+    # workstation this was written on runs 18.15.2 and the machine 18.18.0.
+    #
+    # ~/.local/share/atuin/key cannot serve either. atuin writes it the first
+    # time it runs, before any login, so a machine that has merely started a
+    # shell already has one.
+    #
+    # The name carries the username, so pointing this at a different account
+    # converges where a second create against the same one does not.
+    #
+    # no_log because Ansible echoes a failed command's arguments, and a failed
+    # login is exactly when the key would otherwise be printed. The cost is real:
+    # when this fails it fails opaquely, and diagnosing it means running the same
+    # command by hand on the machine.
+    #
+    # Logging in replaces any locally generated key, which makes history written
+    # before this point unreadable. That is what adopting an existing account
+    # means, and it is the reason this runs once rather than on every create.
+    - name: Log in to atuin
+      ansible.builtin.command:
+        cmd: >-
+          atuin login
+          -u fixture-user
+          -p "{{ lookup('env', 'COLORS_PAR_ATUIN_PASSWORD') }}"
+          -k "{{ lookup('env', 'COLORS_PAR_ATUIN_KEY') }}"
+        creates: "{{ ansible_env.HOME }}/.local/state/walter/atuin-fixture-user"
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+      no_log: true
+
+    - name: Record that atuin is logged in
+      ansible.builtin.copy:
+        dest: "{{ ansible_env.HOME }}/.local/state/walter/atuin-fixture-user"
+        mode: "0644"
+        content: |
+          Written by walter after `atuin login -u fixture-user`. atuin keeps its
+          session in meta.db rather than a file, so this stamp is what stops the
+          login re-running on every create. Delete it to log in again.
+
+    # Unlike the login, this is not stamped: pulling history is the point of the
+    # account, and there is nothing about it a second run would undo. It reports
+    # `ok` rather than `changed` because it always transfers something, and a
+    # step that is always changed tells you nothing.
+    #
+    # It is the last task in the play, so a transient api.atuin.sh failure fails
+    # a create in which everything else has already succeeded. That is the
+    # deliberate opposite of the Emacs choice above, where packages are left
+    # unfetched precisely to keep MELPA out of the provisioning path: history
+    # that silently did not sync is a machine you would trust and should not.
+    - name: Sync the shell history
+      ansible.builtin.command:
+        cmd: atuin sync
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+      changed_when: false

@@ -43,6 +43,11 @@ digitalocean-size: s-1vcpu-1gb-35gb-intel
 digitalocean-image: ubuntu-25-10-x64
 digitalocean-vpc-uuid: 00000000-0000-0000-0000-000000000000
 
+vultr-name: walter-fixture
+vultr-region: ams
+vultr-plan: vc2-2c-4gb
+vultr-os-id: 2284
+
 yandex-cloud-id: b1gfixturecloud
 yandex-folder-id: b1gfixturefolder
 yandex-zone: ru-central1-a

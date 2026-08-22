@@ -1,11 +1,11 @@
 (ns io.github.getcolors.walter.validate
   "Walter's desired-state rules, driven by ONCE's provider registry.
 
-  The registry is consumed as data rather than reimplemented. It is the single
-  place recording, per provider, the non-secret keys its templates interpolate
-  and the credentials it needs, and keeping one copy is what stops a provider
-  being validated against one set of keys and run with another. Walter drives it
-  over two of ONCE's four slots: there is no SMTP and no DNS here.
+  The registry is consumed as data rather than reimplemented, then its compute
+  slot is filtered to Walter's deliberately supported providers. It remains the
+  single place recording the keys and credentials each selected template needs,
+  while a new ONCE provider cannot silently become a Walter feature at pin-bump
+  time. Walter drives two of ONCE's four slots: there is no SMTP or DNS here.
 
   Nothing upstream promises this registry's shape. `scripts/golden.sh` is what
   actually catches a change to it — see plans/0001."
@@ -14,9 +14,14 @@
    [green.cli :as green-cli]
    [io.github.getcolors.once.validate :as once-validate]))
 
+(def compute-providers
+  "The ONCE compute templates Walter deliberately supports. New ONCE providers
+  do not become Walter features merely because a dependency pin moves."
+  #{"oci" "hcloud" "digitalocean" "vultr" "yandex" "no-infra"})
+
 (def providers
-  "ONCE's provider registry, verbatim. One of the two things walter reuses."
-  once-validate/providers)
+  "ONCE's provider registry, filtered to Walter's advertised compute surface."
+  (update once-validate/providers :provider-compute select-keys compute-providers))
 
 (def slots
   "The provider slots walter fills. ONCE has four; walter provisions a machine
@@ -36,7 +41,7 @@
   key there would be carried purely for a downstream consumer — and because it
   never reaches a generated file it is exactly the blind spot ONCE's own rules
   call out, needing a three-colour commit and a parity fixture to add honestly."
-  #{"oci"})
+  #{"oci" "vultr"})
 
 (defn stoppable?
   "Whether the selected compute provider supports `stop` and `start`."
@@ -48,13 +53,13 @@
 
   Three shapes exist upstream and all three are coverable without touching
   ONCE's templates: OCI reads a public-key *path* through `file()`, Yandex
-  interpolates the key *content*, and hcloud/DigitalOcean take a key already
-  registered with the provider — which walter satisfies by rendering its own
-  `ssh-key.tf` beside ONCE's `main.tf`, the same merge trick `outputs.tf`
+  interpolates the key *content*, and hcloud/DigitalOcean/Vultr take a key
+  already registered with the provider — which walter satisfies by rendering
+  its own `ssh-key.tf` beside ONCE's `main.tf`, the same merge trick `outputs.tf`
   uses. `no-infra` has no compute resource, so the key is generated and simply
-  not injected anywhere. The providers walter does not advertise (aws, google,
-  azure, vultr) are refused rather than half-supported."
-  #{"oci" "hcloud" "digitalocean" "yandex" "no-infra"})
+  not injected anywhere. Providers walter does not advertise are refused rather
+  than half-supported."
+  #{"oci" "hcloud" "digitalocean" "vultr" "yandex" "no-infra"})
 
 (def machine-key-keys
   "The per-provider desired-state keys `compute-keygen` derives.
@@ -64,7 +69,7 @@
   and refuses them when explicitly set, rather than letting the two sources
   fight."
   #{:oci-ssh-authorized-keys :hcloud-ssh-keys :digitalocean-ssh-keys
-    :compute-pubkey})
+    :vultr-ssh-keys :compute-pubkey})
 
 (defn keygen?
   "Whether walter generates and manages the machine-access keypair."
@@ -185,6 +190,8 @@
           "run from the project directory rather than overriding it.")]))
 
 (def ^:private instance-id-re #"^ocid1\.instance\.[A-Za-z0-9._-]+$")
+(def ^:private vultr-instance-id-re
+  #"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 (def ^:private github-login-re
   "A GitHub account name: alphanumerics and interior hyphens, 39 characters at
@@ -262,6 +269,10 @@
                   (placeholder? (:oci-instance-id opts))
                   (re-matches instance-id-re (str (:oci-instance-id opts))))
       [":oci-instance-id must be an instance OCID (ocid1.instance....)"])
+    (when-not (or (nil? (:vultr-instance-id opts))
+                  (placeholder? (:vultr-instance-id opts))
+                  (re-matches vultr-instance-id-re (str (:vultr-instance-id opts))))
+      [":vultr-instance-id must be a Vultr instance UUID"])
     (when-not (or (nil? (:power-wait-seconds opts))
                   (and (integer? (:power-wait-seconds opts))
                        (pos? (:power-wait-seconds opts))))
