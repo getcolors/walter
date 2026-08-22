@@ -50,6 +50,33 @@
         cmd: sysctl --load /etc/sysctl.d/90-cloudflared.conf
       changed_when: false
 
+    # A development machine is what reverse tunnels (`ssh -R`) terminate on,
+    # and a client's ExitOnForwardFailure is only as good as what sshd tells
+    # it. Two failure modes are closed here. Dead sessions: without keepalives
+    # sshd holds a crashed client's forwarded port for hours, so the
+    # reconnecting client is refused the bind — or never learns its tunnel
+    # died. Silent rebinds: with the default GatewayPorts, sshd accepts a
+    # forward for a non-loopback address and quietly binds loopback instead —
+    # a "success" the client cannot see through; `clientspecified` honours the
+    # requested address, and only when the client asks for one.
+    #
+    # `validate` runs on the drop-in alone, so a bad edit here fails the copy
+    # instead of reaching a reload.
+    - name: Make sshd report forward failures honestly
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/00-walter-forwarding.conf
+        content: |
+          ClientAliveInterval 15
+          ClientAliveCountMax 3
+          AllowTcpForwarding yes
+          GatewayPorts clientspecified
+        owner: root
+        group: root
+        mode: "0644"
+        validate: /usr/sbin/sshd -t -f %s
+      notify: Reload SSH
+
     # The Determinate Systems installer rather than the upstream shell script:
     # it is non-interactive with --no-confirm, it detects systemd by itself, and
     # it leaves /nix/receipt.json behind — which makes `creates` an accurate
@@ -846,3 +873,12 @@
         PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
       changed_when: false
 <% endif %>
+  handlers:
+    # A reload, not a restart, and safe to run at end of play: sshd re-reads
+    # its configuration without dropping established connections, Ansible's
+    # included.
+    - name: Reload SSH
+      become: true
+      ansible.builtin.service:
+        name: ssh
+        state: reloaded
