@@ -1,0 +1,73 @@
+---
+# Vultr images initially expose root. This is the only stage allowed to use it:
+# create the stable development login, prove its key and sudo policy are in
+# place, then close both root and password SSH before normal provisioning.
+- name: Bootstrap the Ubuntu development login
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Create the Ubuntu primary group
+      ansible.builtin.group:
+        name: ubuntu
+        gid: 1000
+        state: present
+
+    - name: Create the Ubuntu user
+      ansible.builtin.user:
+        name: ubuntu
+        uid: 1000
+        group: ubuntu
+        groups: sudo
+        append: true
+        shell: /bin/bash
+        create_home: true
+        state: present
+
+    - name: Create the Ubuntu SSH directory
+      ansible.builtin.file:
+        path: /home/ubuntu/.ssh
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: "0700"
+
+    - name: Authorize Walter's dedicated machine key
+      ansible.builtin.copy:
+        dest: /home/ubuntu/.ssh/authorized_keys
+        content: "<{ compute-pubkey }>\n"
+        owner: ubuntu
+        group: ubuntu
+        mode: "0600"
+
+    - name: Grant passwordless sudo to Ubuntu
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/90-walter-ubuntu
+        content: "ubuntu ALL=(ALL:ALL) NOPASSWD: ALL\n"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Disable root and password SSH login
+      ansible.builtin.copy:
+        # OpenSSH takes the first value it sees. Sort before Ubuntu's
+        # 50-cloud-init.conf or its PasswordAuthentication value wins.
+        dest: /etc/ssh/sshd_config.d/00-walter-login.conf
+        content: |
+          PermitRootLogin no
+          PasswordAuthentication no
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload SSH
+
+    - name: Validate SSH configuration before closing bootstrap access
+      ansible.builtin.command: /usr/sbin/sshd -t
+      changed_when: false
+
+  handlers:
+    - name: Reload SSH
+      ansible.builtin.service:
+        name: ssh
+        state: reloaded

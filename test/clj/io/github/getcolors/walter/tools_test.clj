@@ -72,6 +72,11 @@
       (is (= "ubuntu" (:sudoer p)))
       (is (= "w" (:name p)))
       (is (some? (:ip p)))))
+  (testing "Vultr's provider image is root-only, but Walter's bootstrap hands every normal stage ubuntu"
+    (let [p (tools/fallback-compute-params {:provider-compute "vultr" :profile "w"})]
+      (is (= "ubuntu" (:user p)))
+      (is (= "ubuntu" (:sudoer p)))
+      (is (= "1000" (:uid p)))))
   (testing "no-infra takes what desired state already knows"
     (let [p (tools/fallback-compute-params {:provider-compute "no-infra"
                                             :no-infra-compute-ip "198.51.100.10"
@@ -81,6 +86,49 @@
       (is (= "dev" (:user p)))))
   (testing "an unknown provider still renders"
     (is (some? (:ip (tools/fallback-compute-params {:provider-compute "hcloud"}))))))
+
+;; ---------------------------------------------------------------------------
+;; Vultr's one-time root bootstrap
+
+(deftest vultr-bootstrap-probes-the-final-login-before-falling-back-to-root
+  (is (= "root" (tools/vultr-bootstrap-user {:green/event :build})))
+  (let [seen (atom nil)
+        opts {:ip "203.0.113.7" :profile "p" :compute-keygen true}]
+    (is (= "ubuntu" (tools/vultr-bootstrap-user
+                      opts (fn [args _ timeout]
+                             (reset! seen [args timeout])
+                             {:ok? true}))))
+    (is (some #{"ubuntu@203.0.113.7"} (first @seen)))
+    (is (some #{"/home/ubuntu/.ssh/p"} (first @seen)))
+    (is (= "root" (tools/vultr-bootstrap-user
+                    opts (fn [& _] {:ok? false}))))))
+
+(deftest vultr-bootstrap-renders-root-entry-and-adopts-ubuntu-downstream
+  (let [dir (str (fs/create-temp-dir))
+        result (tools/ansible-bootstrap-step
+                {:provider-compute "vultr"
+                 :compute-keygen true
+                 :compute-pubkey "ssh-ed25519 AAAAfixture"
+                 :green/event :build
+                 :profile "p" :workdir dir :ip "203.0.113.7"})
+        stage #(str dir "/p/walter-ansible-bootstrap/" %)
+        inventory (slurp (stage "inventory.json"))
+        playbook (slurp (stage "main.yml"))]
+    (is (= 0 (:green/exit result)))
+    (is (= "ubuntu" (:user result)))
+    (is (str/includes? inventory "root"))
+    (is (str/includes? playbook "PermitRootLogin no"))
+    (is (str/includes? playbook "PasswordAuthentication no"))
+    (is (str/includes? playbook "NOPASSWD: ALL"))
+    (is (str/includes? playbook "ssh-ed25519 AAAAfixture"))))
+
+(deftest non-vultr-providers-render-no-bootstrap-stage
+  (let [dir (str (fs/create-temp-dir))
+        result (tools/ansible-bootstrap-step
+                {:provider-compute "oci" :green/event :build
+                 :profile "p" :workdir dir})]
+    (is (= 0 (:green/exit result)))
+    (is (not (fs/exists? (str dir "/p/walter-ansible-bootstrap"))))))
 
 ;; ---------------------------------------------------------------------------
 ;; inventory

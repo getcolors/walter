@@ -176,6 +176,35 @@ for v in oci yandex no-infra; do
 done
 echo "  ok — material-taking providers render no key resource"
 
+# Vultr alone needs Walter's root-to-ubuntu handoff. The provider template must
+# stay shared and root-capable for its remote-exec, while every normal stage
+# after bootstrap runs as ubuntu and root/password SSH are closed.
+bootstrap="$tmp/vultr/walter-fixture/walter-ansible-bootstrap"
+[ -f "$bootstrap/main.yml" ] || {
+  echo "golden: FAIL — Vultr rendered no Ubuntu bootstrap stage" >&2
+  exit 1
+}
+grep -q '"ansible_user" : "root"' "$bootstrap/inventory.json" || {
+  echo "golden: FAIL — first Vultr bootstrap no longer enters as root" >&2
+  exit 1
+}
+for setting in 'PermitRootLogin no' 'PasswordAuthentication no' 'NOPASSWD: ALL'; do
+  grep -q "$setting" "$bootstrap/main.yml" || {
+    echo "golden: FAIL — Vultr bootstrap lost: $setting" >&2
+    exit 1
+  }
+done
+grep -q '"ansible_user" : "ubuntu"' \
+  "$tmp/vultr/walter-fixture/walter-ansible-remote/inventory.json" || {
+  echo "golden: FAIL — normal Vultr provisioning no longer runs as ubuntu" >&2
+  exit 1
+}
+[ -d "$tmp/oci/walter-fixture/walter-ansible-bootstrap" ] && {
+  echo "golden: FAIL — non-Vultr provider rendered a bootstrap stage" >&2
+  exit 1
+}
+echo "  ok — Vultr bootstraps once through root and provisions through ubuntu"
+
 if [ "$accept" = 1 ]; then
   echo "goldens regenerated"
 else

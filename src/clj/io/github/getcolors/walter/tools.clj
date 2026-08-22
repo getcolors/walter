@@ -33,6 +33,7 @@
   ONCE's state key."
   "walter-compute")
 
+(def ansible-bootstrap-tool "walter-ansible-bootstrap")
 (def ansible-local-tool "walter-ansible-local")
 (def ansible-remote-tool "walter-ansible-remote")
 (def emacs-packages-tool "walter-emacs-packages")
@@ -91,6 +92,7 @@
     (case provider-compute
       "oci" {:ip "192.168.0.1" :sudoer "ubuntu" :uid "1001" :name name :user "ubuntu"}
       "yandex" {:ip "192.168.0.1" :sudoer "ubuntu" :uid "1000" :name name :user "ubuntu"}
+      "vultr" {:ip "192.168.0.1" :sudoer "ubuntu" :uid "1000" :name name :user "ubuntu"}
       "no-infra" (cond-> {:ip (or (:no-infra-compute-ip opts) "192.168.0.1")
                           :sudoer (or (:no-infra-compute-sudoer opts) "root")
                           :name name
@@ -499,6 +501,62 @@
          ;; extend this expression rather than duplicate the task.
          :needs-state-dir (boolean (or (not-empty (str (:dotfiles-checkout opts)))
                                        (not-empty (str (:atuin-username opts)))))))
+
+(def ^:private bootstrap-probe-timeout-ms 10000)
+
+(defn vultr-bootstrap-user
+  "Choose the login for Vultr's idempotent bootstrap.
+
+  A fresh provider image exposes root. Once Walter has created ubuntu and
+  disabled root SSH, later creates must enter through ubuntu instead. Probe the
+  final login first with the dedicated key and fall back to root only when that
+  fails. Builds perform no probe and render the first-create shape."
+  ([opts] (vultr-bootstrap-user opts process/run-with-timeout))
+  ([opts run-fn]
+   (if (= :build (:green/event opts))
+     "root"
+     (let [result (run-fn ["ssh" "-o" "BatchMode=yes"
+                           "-o" "StrictHostKeyChecking=no"
+                           "-o" "UserKnownHostsFile=/dev/null"
+                           "-o" "IdentitiesOnly=yes"
+                           "-i" (machine-key-file opts)
+                           (str "ubuntu@" (:ip opts)) "true"]
+                          {} bootstrap-probe-timeout-ms)]
+       (if (:ok? result) "ubuntu" "root")))))
+
+(defn ansible-bootstrap-step
+  "Turn Vultr's root-only provider image into Walter's Ubuntu login.
+
+  This is the sole normal root SSH connection. It creates ubuntu with the
+  dedicated key and passwordless sudo, then disables root and password SSH.
+  Every downstream stage receives ubuntu as the authoritative login. Other
+  providers pass through without rendering a bootstrap stage."
+  [opts]
+  (if (not= "vultr" (str (:provider-compute opts)))
+    (assoc opts :green/exit 0)
+    (let [dir (tool-dir opts ansible-bootstrap-tool)
+          bootstrap-user (vultr-bootstrap-user opts)
+          data (assoc (data-fn opts) :user bootstrap-user)
+          specs [(template-spec (walter-template "ansible-bootstrap" "ansible.cfg")
+                                (str dir "/ansible.cfg") data)
+                 (template-spec (walter-template "ansible-bootstrap" "main.yml")
+                                (str dir "/main.yml") data)
+                 (raw-spec (str dir "/inventory.json") (inventory data))]
+          rendered (sc/scaffold opts specs)
+          adopted #(assoc % :green/exit 0 :user "ubuntu" :sudoer "ubuntu" :uid "1000"
+                          :walter/compute-params
+                          (merge (:walter/compute-params %)
+                                 {:user "ubuntu" :sudoer "ubuntu" :uid "1000"}))]
+      (if (= :build (:green/event opts))
+        (adopted rendered)
+        (let [result (ansible/ansible-step
+                      rendered
+                      {:dir dir
+                       :inventory "inventory.json"
+                       :playbooks {:create "main.yml"}
+                       :host-key-checking false
+                       :private-key (machine-key-file opts)})]
+          (if (wf/failed? result) result (adopted result)))))))
 
 (defn ansible-local-step
   "Manage the `Host <alias>` block in `~/.ssh/config`.

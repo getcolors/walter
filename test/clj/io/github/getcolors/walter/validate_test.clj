@@ -345,6 +345,16 @@
                                  #"not supported"))
           (str provider " should accept compute-keygen")))))
 
+(deftest vultr-requires-generated-key-material-for-the-ubuntu-bootstrap
+  (let [vultr (-> base
+                  (dissoc :oci-ssh-authorized-keys)
+                  (assoc :provider-compute "vultr"
+                         :vultr-name "w" :vultr-region "ams"
+                         :vultr-plan "vc2-2c-4gb" :vultr-os-id 2284))]
+    (is (seq (errors-matching vultr #"requires :compute-keygen true")))
+    (is (= [] (errors-matching (assoc vultr :compute-keygen true)
+                               #"requires :compute-keygen true")))))
+
 (deftest keygen-derives-the-ssh-keys-so-setting-both-is-refused
   (testing "the derived value would silently win, and the machine would come up
            authorized for a key the file never mentions"

@@ -58,7 +58,7 @@ Walter consumes **exactly two things** from ONCE:
    (`:io.github.getcolors.once.tools.tofu.<provider>/main.tf`).
 
 Everything else is walter's own — `tool-dir`, the inventory builder, both
-Ansible stages, all three step functions. That is deliberate and it is narrower
+Ansible stages, all of its step functions. That is deliberate and it is narrower
 than it first looks like it should be. In particular **walter does not reuse
 ONCE's `ansible-local`**, even though it could: that stage writes to
 `~/.ssh/config` on the operator's workstation, and reusing it would mean an
@@ -101,8 +101,8 @@ apply:
 uses for `:delete`, which is why the two new verbs needed no engine change.
 
 ```text
-create / build   start ─ github-token ─ compute ─┬─ ansible-local
-                                                 └─ ansible-remote
+create / build   start ─ github-token ─ compute ─ bootstrap ─┬─ ansible-local
+                                                             └─ ansible-remote
 
 delete           start ─ ansible-cleanup ─ compute
 
@@ -125,8 +125,13 @@ keeps it, deliberately, and the retry reuses the surviving token — after
 re-verifying the account — instead of asking for a second code. On build,
 delete, dry-run, and projects without the key it passes through untouched.
 
-Create and build fork after compute; the Ansible stages are independent and
-neither joins. Delete drops the managed ssh block before destroying, so a
+Create and build fork after bootstrap; the two normal Ansible stages are
+independent and neither joins. Bootstrap is a no-op except on Vultr. There it is
+the sole root SSH connection: a fresh image exposes root, so Walter creates
+`ubuntu` (UID/GID 1000) with its dedicated key and passwordless sudo, validates
+an sshd drop-in disabling root and password login, then reloads SSH. All normal
+stages run as ubuntu. A later create probes ubuntu first, so convergence does
+not depend on root access Walter already closed. Delete drops the managed ssh block before destroying, so a
 machine that is already gone still cleans up the workstation.
 
 ### Why stop and start skip OpenTofu
@@ -157,6 +162,7 @@ address and refreshes the managed SSH alias.
 |---|---|---|
 | `:walter/github-token` | — | the device-flow token acquisition above; no directory, nothing rendered |
 | `:walter/compute` | `walter-compute` | ONCE's provider template + walter's `outputs.tf` for OCI/Vultr (and, with `compute-keygen` on hcloud/DO/Vultr, walter's `ssh-key.tf`); outputs ip/user/sudoer/name |
+| `:walter/ansible-bootstrap` | `walter-ansible-bootstrap` | Vultr only: root creates ubuntu + key + sudo, then disables root/password SSH; later creates enter as ubuntu |
 | `:walter/ansible-local` | `walter-ansible-local` | the managed `Host <profile>` block in `~/.ssh/config`, with `IdentityFile`/`IdentitiesOnly` when `compute-keygen` is on |
 | `:walter/ansible-remote` | `walter-ansible-remote` | ping, unprivileged cloudflared sysctls, nix, terminfo, and — when the gating key is set — the gh login and git identity, packages, shell, runtimes, Emacs, dotfiles, agent credentials, atuin |
 | `:walter/emacs-packages` | `walter-emacs-packages` | starts the ELPA/MELPA bootstrap and does **not** wait for it |

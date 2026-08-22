@@ -88,7 +88,9 @@ power-wait-seconds: 300
 # files in ~/.ssh alone: a keypair is not provider state, and the next create
 # of this profile adopts it.
 #
-# Left unset, you supply a key per provider exactly as before.
+# Left unset, you supply a key per provider exactly as before. Vultr is the
+# exception and requires this to be true: Walter needs the generated public key
+# to create ubuntu before disabling the image's root SSH login.
 #
 # compute-keygen: true
 

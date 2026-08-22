@@ -1,8 +1,8 @@
 (ns io.github.getcolors.walter.workflow
   "The DAG the launcher runs, and the steps that are not a tool.
 
-      create / build   start ─ github-token ─ compute ─┬─ ansible-local
-                                                       └─ ansible-remote ─ emacs-packages
+      create / build   start ─ github-token ─ compute ─ bootstrap ─┬─ ansible-local
+                                                                  └─ ansible-remote ─ emacs-packages
 
       delete           start ─ ansible-cleanup ─ compute
 
@@ -19,7 +19,7 @@
   interactive at the beginning only and unattended after. On builds, deletes,
   and projects with no `github-account` it passes through untouched.
 
-  Create and build fork after compute: the two Ansible stages are independent
+  Create and build fork after bootstrap: the two normal Ansible stages are independent
   and neither joins. Delete drops the managed ssh block before anything is
   destroyed, so a machine that is already gone still cleans up. Stop and start
   never reach OpenTofu; OCI uses its CLI and Vultr its HTTP API.
@@ -217,8 +217,9 @@
     ;; :create and :build
     (case step
       :walter/start          [start-step :walter/github-token]
-      :walter/github-token   [github/github-token-step :walter/compute]
-      :walter/compute        [tools/compute-step :walter/ansible-local :walter/ansible-remote]
+      :walter/github-token     [github/github-token-step :walter/compute]
+      :walter/compute          [tools/compute-step :walter/ansible-bootstrap]
+      :walter/ansible-bootstrap [tools/ansible-bootstrap-step :walter/ansible-local :walter/ansible-remote]
       :walter/ansible-local  [tools/ansible-local-step]
       :walter/ansible-remote [tools/ansible-remote-step :walter/emacs-packages]
       :walter/emacs-packages [tools/emacs-packages-step])))
@@ -238,7 +239,8 @@
 
 (def side-effecting-steps
   [:walter/github-token
-   :walter/compute :walter/ansible-local :walter/ansible-remote
+   :walter/compute :walter/ansible-bootstrap
+   :walter/ansible-local :walter/ansible-remote
    :walter/emacs-packages
    :walter/ansible-cleanup :walter/power-off :walter/power-on])
 

@@ -18,14 +18,15 @@
 ;; ---------------------------------------------------------------------------
 ;; the graphs
 
-(deftest create-forks-into-the-two-ansible-stages
+(deftest create-bootstraps-before-forking-into-the-normal-ansible-stages
   (testing "the token step sits between start and compute — the one interactive
            moment has to land before anything long-running begins"
     (is (= [:walter/github-token] (steps-for :create :walter/start)))
     (is (= [:walter/compute] (steps-for :create :walter/github-token))))
+  (is (= [:walter/ansible-bootstrap] (steps-for :create :walter/compute)))
   (is (= [:walter/ansible-local :walter/ansible-remote]
-         (steps-for :create :walter/compute)))
-  (testing "neither joins — they are independent"
+         (steps-for :create :walter/ansible-bootstrap)))
+  (testing "neither normal stage joins — they are independent"
     (is (= [] (steps-for :create :walter/ansible-local)))))
 
 (deftest emacs-packages-comes-last-and-hangs-off-the-remote-stage
@@ -62,7 +63,8 @@
 
 (deftest every-side-effecting-step-is-dry-runnable
   (doseq [step [:walter/github-token
-                :walter/compute :walter/ansible-local :walter/ansible-remote
+                :walter/compute :walter/ansible-bootstrap
+                :walter/ansible-local :walter/ansible-remote
                 :walter/emacs-packages
                 :walter/ansible-cleanup :walter/power-off :walter/power-on]]
     (is (contains? (set workflow/side-effecting-steps) step)
@@ -198,7 +200,7 @@
                    :walter/instance-id "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"})]
       (is (= 0 (:green/exit result)))
       (is (= "203.0.113.77" (:ip result)))
-      (is (= "root" (:user result))))))
+      (is (= "ubuntu" (:user result))))))
 
 (deftest a-no-op-start-writes-no-ssh-block
   (testing "there is no new address to record, and a placeholder one would break

@@ -65,6 +65,12 @@ workstation's keys: GitHub work rides the machine's own token, and the only
 private key involved in reaching the machine is the one walter generated for
 exactly that.
 
+Vultr requires `compute-keygen: true` and has one bootstrap exception to the
+normal login: its provider image exposes root, so Walter enters once to create
+`ubuntu` (UID/GID 1000) with the dedicated key and passwordless sudo, then
+disables both root and password SSH. Every normal Ansible stage and
+`ssh <profile>` use `ubuntu`; later creates probe that login first.
+
 Nothing else is installed. Other toolchains are the user's `nix profile
 install`, not a walter feature.
 

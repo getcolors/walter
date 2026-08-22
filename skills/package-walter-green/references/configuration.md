@@ -83,7 +83,9 @@ operator already has authorizes *that* key on the machine rather than minting a
 new one, with no warning. A profile named for the deployment
 (`walter-liliana` → `~/.ssh/walter-liliana`) cannot collide.
 
-Left unset, you supply a key per provider exactly as documented below.
+Left unset, you supply a key per provider exactly as documented below, except
+on Vultr: Vultr requires `compute-keygen: true` because Walter needs the public
+material to create `ubuntu` before it disables the image's root SSH login.
 
 ## GitHub identity
 
@@ -162,10 +164,17 @@ digitalocean-image digitalocean-ssh-keys
 vultr-name  vultr-region  vultr-plan  vultr-os-id  vultr-ssh-keys
 ```
 
-`vultr-ssh-keys` is an existing Vultr SSH-key UUID when `compute-keygen` is off.
-With keygen on, walter registers the dedicated generated public key as a
-Terraform-managed `vultr_ssh_key` and derives this value itself. The local
-keypair survives deletion; the account registration follows provider state.
+Vultr requires `compute-keygen: true`; do not set `vultr-ssh-keys` yourself.
+Walter registers the dedicated generated public key as a Terraform-managed
+`vultr_ssh_key` and derives the value itself. The local keypair survives
+deletion; the account registration follows provider state.
+
+Vultr's image initially exposes only root, so create has one provider-specific
+bootstrap stage. It enters as root, creates `ubuntu` with UID/GID 1000, the
+dedicated key, and passwordless sudo, then sets `PermitRootLogin no` and
+`PasswordAuthentication no` and reloads SSH. Every normal Ansible stage and the
+managed `ssh <profile>` alias use `ubuntu`. A later create probes that final
+login first and never depends on the root access it already closed.
 
 **yandex** — `COLORS_PAR_YANDEX_TOKEN`, and `compute-pubkey` holding the public
 key content.
@@ -414,13 +423,15 @@ anything you would be annoyed to lose.
 ```
 <workdir>/<profile>/
 ├── walter-compute/          backend.tf.json  main.tf  [outputs.tf]  [ssh-key.tf]
+├── walter-ansible-bootstrap/ ansible.cfg  inventory.json  main.yml  # Vultr only
 ├── walter-ansible-local/    ansible.cfg  inventory.ini  main.yml
 ├── walter-ansible-remote/   ansible.cfg  inventory.json  main.yml
 └── walter-emacs-packages/   ansible.cfg  inventory.json  main.yml
 ```
 
 `outputs.tf` appears only for providers walter can power cycle; it publishes the
-instance id the power verbs act on. `ssh-key.tf` appears only under
+instance id the power verbs act on. `walter-ansible-bootstrap/` appears only on
+Vultr and performs the one root-to-ubuntu handoff described above. `ssh-key.tf` appears only under
 `compute-keygen` on hcloud, DigitalOcean, and Vultr, where keys are registered
 with the provider rather than passed as material. `walter-emacs-packages/` appears only
 when `emacs-config-repo` is set — it is a whole stage rather than a task, so

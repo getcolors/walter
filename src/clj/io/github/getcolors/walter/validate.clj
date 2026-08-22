@@ -248,6 +248,13 @@
       [(str ":compute-keygen is not supported on provider-compute "
             (pr-str (:provider-compute opts)) " — walter can feed a generated "
             "key to " (str/join ", " (sort keygen-providers)) " only")])
+    ;; Walter closes Vultr's root-only bootstrap login. Without the generated
+    ;; key's public material there is no safe key to install for ubuntu before
+    ;; that door closes, so half-supporting hand-registered account keys would
+    ;; create a machine nobody can enter.
+    (when (and (= "vultr" (str (:provider-compute opts)))
+               (not (keygen? opts)))
+      [":provider-compute \"vultr\" requires :compute-keygen true so Walter can bootstrap ubuntu before disabling root SSH"])
     ;; The derived keys and a hand-set value cannot both win, and losing
     ;; silently is worse than refusing loudly: the machine would come up
     ;; authorized for a key the file never mentions.
