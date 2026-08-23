@@ -9,13 +9,17 @@
   launcher calls — and bump `launcher-contract` in the bundled launcher to
   match. The handshake turns a stale pin into an actionable exit 2 rather than
   a confusing resolution failure. History in the comment below."
-  3)
+  4)
 ;; 3: the SSH Keypair Standard (workspace standards/ssh-keypair.md).
 ;;    `compute-keygen` is superseded: generation is the default, an explicit
 ;;    machine key is the opt-out, the keypair moves from ~/.ssh/<profile> to
 ;;    the deployment's .ssh/<profile>, and the delete DAG gains
 ;;    :walter/ssh-cleanup. A launcher pinned older still requires the machine
 ;;    key in desired state and refuses a colors.yml written for keygen mode.
+;; 4: the keypair moves back to ~/.ssh/<profile> — the standard's location is
+;;    now the operator's ~/.ssh, not the deployment's .ssh/. A launcher pinned
+;;    older resolves the key inside the checkout, cannot see one living in
+;;    ~/.ssh, and would refuse or regenerate beside a live deployment.
 
 (defn host-alias
   "The `~/.ssh/config` Host alias walter manages.

@@ -6,6 +6,7 @@
    [clojure.test :refer [deftest is testing]]
    [green.ansible :as ansible]
    [green.tofu :as tofu]
+   [io.github.getcolors.once.ssh :as once-ssh]
    [io.github.getcolors.walter.tools :as tools]))
 
 (deftest stage-names-are-walter-specific
@@ -92,18 +93,19 @@
 
 (deftest vultr-bootstrap-probes-the-final-login-before-falling-back-to-root
   (is (= "root" (tools/vultr-bootstrap-user {:green/event :build})))
-  (let [seen (atom nil)
-        opts {:ip "203.0.113.7" :profile "p" :provider-compute "vultr"
-              :green/state-file "/w/colors.yml"}]
-    (is (= "ubuntu" (tools/vultr-bootstrap-user
-                      opts (fn [args _ timeout]
-                             (reset! seen [args timeout])
-                             {:ok? true}))))
-    (is (some #{"ubuntu@203.0.113.7"} (first @seen)))
-    (is (some #{"/w/.ssh/p"} (first @seen))
-        "the probe uses the deployment-owned key, .ssh/ next to colors.yml")
-    (is (= "root" (tools/vultr-bootstrap-user
-                    opts (fn [& _] {:ok? false}))))))
+  (with-redefs [once-ssh/home-dir (constantly "/w")]
+    (let [seen (atom nil)
+          opts {:ip "203.0.113.7" :profile "p" :provider-compute "vultr"
+                :green/state-file "/w/colors.yml"}]
+      (is (= "ubuntu" (tools/vultr-bootstrap-user
+                        opts (fn [args _ timeout]
+                               (reset! seen [args timeout])
+                               {:ok? true}))))
+      (is (some #{"ubuntu@203.0.113.7"} (first @seen)))
+      (is (some #{"/w/.ssh/p"} (first @seen))
+          "the probe uses the deployment-owned key in ~/.ssh")
+      (is (= "root" (tools/vultr-bootstrap-user
+                      opts (fn [& _] {:ok? false})))))))
 
 (deftest vultr-bootstrap-renders-root-entry-and-adopts-ubuntu-downstream
   (let [dir (str (fs/create-temp-dir))
@@ -941,6 +943,7 @@
     (let [dir (str (fs/create-temp-dir))
           opts {:profile "p" :provider-compute "oci"
                 :green/state-file (str dir "/colors.yml")}]
+     (with-redefs [once-ssh/home-dir (constantly dir)]
       (testing "both halves present is a no-op"
         (fs/create-dirs (str dir "/.ssh"))
         (spit (str dir "/.ssh/p") "PRIVATE")
@@ -965,7 +968,7 @@
       (testing "opt-out mode touches nothing"
         (is (nil? (tools/ensure-renderable!
                    (assoc opts :oci-ssh-authorized-keys "/x.pub")
-                   (fn [& _] (is false) {:ok? false}))))))))
+                   (fn [& _] (is false) {:ok? false})))))))))
 
 (deftest the-token-path-arrives-as-an-extra-var-not-a-rendered-value
   (testing "the playbook names the variable; the path — let alone the token —
@@ -1021,18 +1024,19 @@
 
 (deftest the-managed-block-names-the-key-only-in-keygen-mode
   (testing "on build the rendered ssh-config block carries the stable
-           placeholder path; on real events the deployment's absolute
-           .ssh/<profile>; in opt-out mode nothing"
+           placeholder path; on real events the operator's absolute
+           ~/.ssh/<profile>; in opt-out mode nothing"
     (is (= "/home/build-placeholder/.ssh/p"
            (:machine-key-path (tools/data-fn {:profile "p"
                                               :provider-compute "oci"
                                               :green/event :build}))))
-    (is (str/ends-with?
-         (str (:machine-key-path (tools/data-fn {:profile "p"
-                                                 :provider-compute "oci"
-                                                 :green/event :create
-                                                 :green/state-file "/w/colors.yml"})))
-         "/w/.ssh/p"))
+    (with-redefs [once-ssh/home-dir (constantly "/w")]
+      (is (str/ends-with?
+           (str (:machine-key-path (tools/data-fn {:profile "p"
+                                                   :provider-compute "oci"
+                                                   :green/event :create
+                                                   :green/state-file "/w/colors.yml"})))
+           "/w/.ssh/p")))
     (is (nil? (:machine-key-path
                (tools/data-fn {:profile "p" :provider-compute "oci"
                                :oci-ssh-authorized-keys "/x.pub"}))))))

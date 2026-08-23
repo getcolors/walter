@@ -107,21 +107,23 @@
 (def ^:private keygen-timeout-ms 30000)
 
 (def ^:private build-placeholder-dir
-  "The `.ssh/` path a build renders in place of the real one. Walter's goldens
-  are committed, so a build must produce the same bytes on every workstation —
-  ONCE's own builds carry the real absolute path because nothing there commits
-  a rendered tree."
+  "The `~/.ssh` path a build renders in place of the real one — a stable
+  stand-in for the operator's home directory. Walter's goldens are committed,
+  so a build must produce the same bytes on every workstation — ONCE's own
+  builds carry the real absolute path because nothing there commits a
+  rendered tree."
   "/home/build-placeholder/.ssh")
 
 (defn machine-key-file
-  "The private half of the machine keypair — `.ssh/<profile>` next to
-  colors.yml per the SSH Keypair Standard (workspace standards/ssh-keypair.md)
-  — or nil in opt-out mode.
+  "The private half of the machine keypair — `~/.ssh/<profile>` per the SSH
+  Keypair Standard (workspace standards/ssh-keypair.md) — or nil in opt-out
+  mode.
 
   Named exactly by profile so two walter deployments cannot share a key by
-  accident, and kept in the deployment rather than under ~/.ssh: key material
-  is deployment state, it travels with the checkout that owns the machine, and
-  the `.*` gitignore convention keeps it invisible to git by construction.
+  accident: the profile already keys remote state, so it is globally unique,
+  which is what makes the operator's flat `~/.ssh` safe to share. Living in
+  `~/.ssh` rather than the checkout keeps key material out of every git tree
+  and gives the operator one predictable place to copy credentials from.
   Unlike v2's `compute-keygen`, the file does not survive delete — the cleanup
   step removes it after a successful destroy, which is what lets an existing
   key without state mean what the standard says it means."

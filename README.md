@@ -52,7 +52,7 @@ this identity and refuse to build without it.
 
 By default walter generates and owns the machine-access keypair (SSH Keypair
 Standard, `workspace/standards/ssh-keypair.md`): a profile-named ed25519 pair
-in `.ssh/` next to `colors.yml`, created on the first real create, fed to the
+in the operator's `~/.ssh`, created on the first real create, fed to the
 provider, pinned for `ssh <profile>` and Ansible, and removed by a successful
 delete. Set the provider's machine-key value instead and you supply the key
 yourself, exactly as before the standard.

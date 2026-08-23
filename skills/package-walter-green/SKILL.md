@@ -31,7 +31,7 @@ runs GitHub's device flow as its first action. Provider credentials use
   holds the **path** to a public-key file that OpenTofu reads at plan time —
   record the path, never inline the contents, and never read a private key.
   By default walter generates and manages the machine keypair
-  `.ssh/<profile>` next to colors.yml; never read or move those files either.
+  `~/.ssh/<profile>`; never read or move those files either.
 - With `github-account` set, a real `create` starts by printing a one-time
   code and waiting — up to about fifteen minutes — for the user to approve it
   at https://github.com/login/device. That is the design, not a hang: the

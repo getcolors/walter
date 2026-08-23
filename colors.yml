@@ -70,14 +70,14 @@ power-wait-seconds: 300
 # By default walter generates and owns the machine-access keypair (SSH Keypair
 # Standard, workspace standards/ssh-keypair.md): leave every machine-key value
 # below unset and the first real create makes an ed25519 keypair named after
-# the profile in .ssh/ next to this file, feeds the public half to the
+# the profile in ~/.ssh, feeds the public half to the
 # selected provider — OCI and Yandex take the material directly; hcloud,
 # DigitalOcean, and Vultr get a key resource named after the profile, declared
 # by the compute template itself — and delete removes it after a successful
 # destroy. The managed ~/.ssh/config block pins `ssh <profile>` to that key
 # with IdentityFile + IdentitiesOnly, and Ansible connects with it too.
 #
-# An existing .ssh/<profile> without deployment state, or a provider-side key
+# An existing ~/.ssh/<profile> without deployment state, or a provider-side key
 # named after the profile outside the deployment's state, stops the create
 # instead of being overwritten or adopted; the error names the recovery.
 #
