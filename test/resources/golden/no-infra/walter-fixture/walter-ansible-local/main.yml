@@ -35,6 +35,4 @@
               HostName {{ ip }}
               User {{ user }}
               Port 22
-              IdentityFile ~/.ssh/walter-fixture
-              IdentitiesOnly yes
 

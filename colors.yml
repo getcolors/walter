@@ -67,32 +67,26 @@ power-wait-seconds: 300
 
 # --- machine access ---------------------------------------------------------
 #
-# Optional. Set true and walter generates the machine-access keypair itself —
-# ed25519, no passphrase, ~/.ssh/<profile> on this workstation — and
-# feeds the public half to the selected provider: OCI and Yandex take the
-# material directly, while hcloud, DigitalOcean, and Vultr get a key resource
-# rendered beside the compute template. The managed ~/.ssh/config block then pins
-# `ssh <profile>` to that key with IdentityFile + IdentitiesOnly, and Ansible
-# connects with it too.
+# By default walter generates and owns the machine-access keypair (SSH Keypair
+# Standard, workspace standards/ssh-keypair.md): leave every machine-key value
+# below unset and the first real create makes an ed25519 keypair named after
+# the profile in .ssh/ next to this file, feeds the public half to the
+# selected provider — OCI and Yandex take the material directly; hcloud,
+# DigitalOcean, and Vultr get a key resource named after the profile, declared
+# by the compute template itself — and delete removes it after a successful
+# destroy. The managed ~/.ssh/config block pins `ssh <profile>` to that key
+# with IdentityFile + IdentitiesOnly, and Ansible connects with it too.
 #
-# The file is named by the profile and nothing else, so the profile is what
-# keeps it clear of your own keys. An existing file is never overwritten, so a
-# profile that collides with a key you already have — `id_ed25519` — silently
-# adopts it and authorizes your personal key on the machine instead. Name the
-# profile for the deployment (`walter-liliana`) and that cannot happen.
+# An existing .ssh/<profile> without deployment state, or a provider-side key
+# named after the profile outside the deployment's state, stops the create
+# instead of being overwritten or adopted; the error names the recovery.
 #
-# With this on, oci-ssh-authorized-keys, hcloud-ssh-keys,
-# digitalocean-ssh-keys and compute-pubkey below are walter's to derive:
-# leave them out, or the build refuses. An existing key file is never
-# touched — it may be authorized on a live machine — and delete leaves the
-# files in ~/.ssh alone: a keypair is not provider state, and the next create
-# of this profile adopts it.
-#
-# Left unset, you supply a key per provider exactly as before. Vultr is the
-# exception and requires this to be true: Walter needs the generated public key
-# to create ubuntu before disabling the image's root SSH login.
-#
-# compute-keygen: true
+# Setting the provider's machine-key value (oci-ssh-authorized-keys,
+# hcloud-ssh-keys, digitalocean-ssh-keys, compute-pubkey) switches generation
+# off and behaves exactly as before — keep that key's private half in
+# ssh-agent. Vultr is the exception and accepts no explicit key: walter must
+# hold the private half to create ubuntu before it disables the image's root
+# SSH login.
 
 # --- oci --------------------------------------------------------------------
 oci-config-file-profile: REPLACE_ME

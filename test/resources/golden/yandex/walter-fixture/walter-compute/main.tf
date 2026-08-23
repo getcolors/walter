@@ -59,7 +59,7 @@ resource "yandex_compute_instance" "node1" {
   # Yandex has no account-level SSH key registry: the user and its key are
   # created by cloud-init from instance metadata.
   metadata = {
-    ssh-keys = "ubuntu:ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBUILDPLACEHOLDER0000000000000000000000"
+    ssh-keys = "ubuntu:ssh-ed25519 PLACEHOLDER managed-by-colors"
   }
 
   # Wait for ssh before starting Ansible
@@ -67,6 +67,7 @@ resource "yandex_compute_instance" "node1" {
     type = "ssh"
     user = "ubuntu"
     host = self.network_interface.0.nat_ip_address
+    private_key = file("/home/build-placeholder/.ssh/walter-fixture")
   }
   provisioner "remote-exec" {
     inline = ["ls"]

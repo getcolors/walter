@@ -38,7 +38,7 @@
     (is (= [] (steps-for :create :walter/ansible-local))))
   (testing "and it is not in any other graph: there is nothing to warm on a
            power cycle, and nothing to undo on a delete"
-    (is (= [] (steps-for :delete :walter/compute)))
+    (is (= [:walter/ssh-cleanup] (steps-for :delete :walter/compute)))
     (is (= [:walter/ansible-local] (steps-for :start :walter/power-on)))))
 
 (deftest build-runs-the-same-graph-as-create
@@ -48,7 +48,9 @@
   (testing "so a machine that is already gone still cleans up the workstation"
     (is (= [:walter/ansible-cleanup] (steps-for :delete :walter/start)))
     (is (= [:walter/compute] (steps-for :delete :walter/ansible-cleanup)))
-    (is (= [] (steps-for :delete :walter/compute)))))
+    (is (= [:walter/ssh-cleanup] (steps-for :delete :walter/compute))
+        "the local machine key goes only after the compute destroy succeeded")
+    (is (= [] (steps-for :delete :walter/ssh-cleanup)))))
 
 (deftest stop-never-reaches-opentofu
   (testing "no compute stage in the graph at all — power is not desired state"

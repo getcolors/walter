@@ -46,6 +46,7 @@ resource "oci_core_instance" "ampere_vm" {
     type = "ssh"
     user = "ubuntu"
     host = self.public_ip
+    private_key = file("/home/build-placeholder/.ssh/walter-fixture")
   }
   provisioner "remote-exec" {
     inline = ["ls"]

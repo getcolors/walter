@@ -12,14 +12,14 @@ provider-backend: local
 compute-prevent-destroy: true
 power-wait-seconds: 300
 
-# Set so every golden renders the derived key values and, on hcloud and
-# digitalocean, the ssh-key.tf resource beside ONCE's main.tf. A build derives
-# stable placeholders (generation is a create-time side effect), so the goldens
-# stay byte-identical across workstations. With this on, the per-provider ssh
-# key values below must be absent — walter derives them, and validate.clj
-# refuses the combination. The absent branch — hand-supplied keys, exactly as
-# before the feature — is covered once in tools_test and validate_test.
-compute-keygen: true
+# No machine-key values below, on purpose: their absence selects keygen mode
+# (SSH Keypair Standard, workspace standards/ssh-keypair.md), so every golden
+# renders ONCE's keygen branch — the profile-named key resource on the
+# name-registering providers, the filled path or content elsewhere. A build
+# renders stable placeholders (generation is a create-time side effect), so
+# the goldens stay byte-identical across workstations. The opt-out branch —
+# hand-supplied keys, exactly as before — is covered in tools_test and
+# validate_test.
 
 oci-config-file-profile: DEFAULT
 oci-subnet-id: ocid1.subnet.oc1.eu-frankfurt-1.aaaaaaaafixturesubnet

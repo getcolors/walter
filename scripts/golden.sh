@@ -138,39 +138,53 @@ grep -q 'vultr_instance.node1.id' \
 echo "  ok — non-stoppable providers render no instance-id output"
 
 # --------------------------------------------------------------------------
-# The other half of the compute-keygen coupling: providers that register keys
-# by name get walter's ssh-key.tf beside ONCE's main.tf, and the value walter
-# feeds into ONCE's ssh_keys line must reference that resource — the reference
-# is also the dependency edge, and a break in either half surfaces as an
-# opaque tofu failure during a real apply.
+# The machine-key coupling, standard shape (workspace standards/ssh-keypair.md):
+# the fixture carries no machine-key values, so every variant renders ONCE's
+# keygen branch — the provider key resource named after the profile on the
+# name-registering providers, referenced by attribute from the instance's key
+# line. Both halves live in ONCE's template now; a pin bump that loses either
+# surfaces here rather than as an opaque tofu failure during a real apply.
 
 for v in hcloud digitalocean vultr; do
-  [ -f "$tmp/$v/walter-fixture/walter-compute/ssh-key.tf" ] || {
-    echo "golden: FAIL — $v registers keys by name but rendered no ssh-key.tf" >&2
+  grep -q "resource \"${v}_ssh_key\" \"machine\"" \
+    "$tmp/$v/walter-fixture/walter-compute/main.tf" || {
+    echo "golden: FAIL — $v registers keys but ONCE's keygen branch rendered no ${v}_ssh_key resource" >&2
+    exit 1
+  }
+  grep -A2 "resource \"${v}_ssh_key\" \"machine\"" \
+    "$tmp/$v/walter-fixture/walter-compute/main.tf" | grep -q '"walter-fixture"' || {
+    echo "golden: FAIL — $v's machine key resource is not named after the profile" >&2
     exit 1
   }
 done
-grep -q 'hcloud_ssh_key.walter.name' \
+grep -q 'ssh_keys    = \[hcloud_ssh_key.machine.id\]' \
   "$tmp/hcloud/walter-fixture/walter-compute/main.tf" || {
-  echo "golden: FAIL — hcloud's ssh_keys no longer references walter's key resource" >&2
+  echo "golden: FAIL — hcloud's ssh_keys no longer references the machine key resource" >&2
   exit 1
 }
-grep -q 'digitalocean_ssh_key.walter.fingerprint' \
+grep -q 'ssh_keys = \[digitalocean_ssh_key.machine.id\]' \
   "$tmp/digitalocean/walter-fixture/walter-compute/main.tf" || {
-  echo "golden: FAIL — digitalocean's ssh_keys no longer references walter's key resource" >&2
+  echo "golden: FAIL — digitalocean's ssh_keys no longer references the machine key resource" >&2
   exit 1
 }
-grep -q 'vultr_ssh_key.walter.id' \
+grep -q 'ssh_key_ids = \[vultr_ssh_key.machine.id\]' \
   "$tmp/vultr/walter-fixture/walter-compute/main.tf" || {
-  echo "golden: FAIL — vultr's ssh_key_ids no longer references walter's key resource" >&2
+  echo "golden: FAIL — vultr's ssh_key_ids no longer references the machine key resource" >&2
   exit 1
 }
-echo "  ok — name-registering providers render walter's key resource and reference it"
+echo "  ok — name-registering providers render the profile-named key resource and reference it"
 
-# Providers that take key material directly must render none of it as a file.
-for v in oci yandex no-infra; do
+# Providers that take key material directly render no key resource, and no
+# variant renders the old ssh-key.tf sidecar.
+for v in oci yandex no-infra hcloud digitalocean vultr; do
   [ -f "$tmp/$v/walter-fixture/walter-compute/ssh-key.tf" ] && {
-    echo "golden: FAIL — $v takes key material directly but rendered ssh-key.tf" >&2
+    echo "golden: FAIL — $v rendered the retired ssh-key.tf sidecar" >&2
+    exit 1
+  }
+done
+for v in oci yandex no-infra; do
+  grep -q '_ssh_key" "machine"' "$tmp/$v/walter-fixture/walter-compute/main.tf" 2>/dev/null && {
+    echo "golden: FAIL — $v takes key material directly but rendered a key resource" >&2
     exit 1
   }
 done

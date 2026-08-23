@@ -11,6 +11,14 @@ provider "digitalocean" {
   # token comes from DIGITALOCEAN_TOKEN in the environment
 }
 
+# The machine keypair this deployment generated and owns (SSH Keypair
+# Standard): the account resource is named after the profile and lives in this
+# stack's state, which is what makes its ownership decidable.
+resource "digitalocean_ssh_key" "machine" {
+  name       = "walter-fixture"
+  public_key = trimspace(file("/home/build-placeholder/.ssh/walter-fixture.pub"))
+}
+
 resource "digitalocean_droplet" "node1" {
   name     = "walter-fixture"
   region   = "ams3"
@@ -19,12 +27,13 @@ resource "digitalocean_droplet" "node1" {
   vpc_uuid = "00000000-0000-0000-0000-000000000000"
 
   # SSH Keys are passed as a list of IDs or Fingerprints
-  ssh_keys = ["${digitalocean_ssh_key.walter.fingerprint}"]
+  ssh_keys = [digitalocean_ssh_key.machine.id]
   # Wait for ssh before starting Ansible
   connection {
     type = "ssh"
     user = "root"
     host = self.ipv4_address
+    private_key = file("/home/build-placeholder/.ssh/walter-fixture")
   }
   provisioner "remote-exec" {
     inline = ["ls"]
@@ -40,5 +49,6 @@ output "params" {
     sudoer = "root"
     name = "walter-fixture"
     user = "root"
+    ssh_key_id = digitalocean_ssh_key.machine.id
   }
 }

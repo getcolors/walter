@@ -333,37 +333,32 @@
                (merge base github-identity
                       {:emacs-config-repo "https://github.com/me/emacs.d.git"}))))))
 
-(deftest compute-keygen-must-be-boolean-and-on-a-supported-provider
-  (is (seq (errors-matching (assoc base :compute-keygen "true")
-                            #":compute-keygen")))
-  (testing "the providers walter can feed a generated key to"
-    (doseq [provider ["oci" "hcloud" "digitalocean" "vultr" "yandex" "no-infra"]]
-      (is (= [] (errors-matching (-> base
-                                     (dissoc :oci-ssh-authorized-keys)
-                                     (assoc :provider-compute provider
-                                            :compute-keygen true))
-                                 #"not supported"))
-          (str provider " should accept compute-keygen")))))
+(deftest the-compute-keygen-flag-is-superseded
+  (testing "generation is the default now, so any value — even false — gets the
+           migration message rather than a silent ignore"
+    (doseq [value [true false "true"]]
+      (is (seq (errors-matching (assoc base :compute-keygen value)
+                                #":compute-keygen is superseded"))
+          (str (pr-str value) " should be refused")))
+    (is (= [] (errors-matching base #":compute-keygen")))))
 
-(deftest vultr-requires-generated-key-material-for-the-ubuntu-bootstrap
-  (let [vultr (-> base
-                  (dissoc :oci-ssh-authorized-keys)
-                  (assoc :provider-compute "vultr"
-                         :vultr-name "w" :vultr-region "ams"
-                         :vultr-plan "vc2-2c-4gb" :vultr-os-id 2284))]
-    (is (seq (errors-matching vultr #"requires :compute-keygen true")))
-    (is (= [] (errors-matching (assoc vultr :compute-keygen true)
-                               #"requires :compute-keygen true")))))
+(deftest vultr-refuses-an-explicit-machine-key
+  (testing "walter must hold the private half to bootstrap ubuntu before it
+           disables root SSH, so opt-out would create a machine nobody can
+           enter"
+    (let [vultr (-> base
+                    (dissoc :oci-ssh-authorized-keys)
+                    (assoc :provider-compute "vultr"
+                           :vultr-name "w" :vultr-region "ams"
+                           :vultr-plan "vc2-2c-4gb" :vultr-os-id 2284))]
+      (is (= [] (errors-matching vultr #":vultr-ssh-keys")))
+      (is (seq (errors-matching (assoc vultr :vultr-ssh-keys "key-id")
+                                #":vultr-ssh-keys is not accepted"))))))
 
-(deftest keygen-derives-the-ssh-keys-so-setting-both-is-refused
-  (testing "the derived value would silently win, and the machine would come up
-           authorized for a key the file never mentions"
-    (is (seq (errors-matching (assoc base :compute-keygen true)
-                              #":oci-ssh-authorized-keys is set"))))
-  (testing "with the hand-set key removed, keygen waives the requirement"
-    (is (= [] (validate/state-errors (-> base
-                                         (dissoc :oci-ssh-authorized-keys)
-                                         (assoc :compute-keygen true))))))
-  (testing "without keygen the provider key is required, as it always was"
-    (is (seq (errors-matching (dissoc base :oci-ssh-authorized-keys)
-                              #":oci-ssh-authorized-keys is required")))))
+(deftest the-machine-key-selects-its-own-mode-by-presence
+  (testing "an absent machine key is keygen mode, not an error (SSH Keypair
+           Standard) — and a present one is opt-out, not a conflict"
+    (is (= [] (validate/state-errors (dissoc base :oci-ssh-authorized-keys))))
+    (is (= [] (validate/state-errors base)))
+    (is (validate/keygen? (dissoc base :oci-ssh-authorized-keys)))
+    (is (not (validate/keygen? base)))))

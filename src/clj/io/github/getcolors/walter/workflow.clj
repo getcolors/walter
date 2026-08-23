@@ -38,6 +38,7 @@
    [green.progress :as progress]
    [green.tofu :as tofu]
    [green.workflow :as wf]
+   [io.github.getcolors.once.ssh :as once-ssh]
    [io.github.getcolors.walter.github :as github]
    [io.github.getcolors.walter.oci :as oci]
    [io.github.getcolors.walter.tools :as tools]
@@ -201,7 +202,11 @@
     (case step
       :walter/start           [start-step :walter/ansible-cleanup]
       :walter/ansible-cleanup [ansible-cleanup-step :walter/compute]
-      :walter/compute         [tools/compute-step])
+      ;; The local keypair goes last, strictly after a successful compute
+      ;; destroy: a failed delete leaves the key, which is still the only
+      ;; credential to whatever survived (SSH Keypair Standard).
+      :walter/compute         [tools/compute-step :walter/ssh-cleanup]
+      :walter/ssh-cleanup     [once-ssh/cleanup-step])
 
     :stop
     (case step
@@ -242,7 +247,8 @@
    :walter/compute :walter/ansible-bootstrap
    :walter/ansible-local :walter/ansible-remote
    :walter/emacs-packages
-   :walter/ansible-cleanup :walter/power-off :walter/power-on])
+   :walter/ansible-cleanup :walter/ssh-cleanup
+   :walter/power-off :walter/power-on])
 
 (def workflow
   (-> (wf/workflow {:start :walter/start :wire-fn wire-fn})

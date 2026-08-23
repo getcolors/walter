@@ -12,6 +12,7 @@
   (:require
    [clojure.string :as str]
    [green.cli :as green-cli]
+   [io.github.getcolors.once.ssh :as once-ssh]
    [io.github.getcolors.once.validate :as once-validate]))
 
 (def compute-providers
@@ -48,33 +49,19 @@
   [opts]
   (contains? stoppable (str (:provider-compute opts))))
 
-(def keygen-providers
-  "Compute providers `compute-keygen` can feed a generated key to.
-
-  Three shapes exist upstream and all three are coverable without touching
-  ONCE's templates: OCI reads a public-key *path* through `file()`, Yandex
-  interpolates the key *content*, and hcloud/DigitalOcean/Vultr take a key
-  already registered with the provider — which walter satisfies by rendering
-  its own `ssh-key.tf` beside ONCE's `main.tf`, the same merge trick `outputs.tf`
-  uses. `no-infra` has no compute resource, so the key is generated and simply
-  not injected anywhere. Providers walter does not advertise are refused rather
-  than half-supported."
-  #{"oci" "hcloud" "digitalocean" "vultr" "yandex" "no-infra"})
-
-(def machine-key-keys
-  "The per-provider desired-state keys `compute-keygen` derives.
-
-  When the feature is on these are walter's to fill, and a hand-set value
-  would be silently overwritten — so validation waives them from `:required`
-  and refuses them when explicitly set, rather than letting the two sources
-  fight."
-  #{:oci-ssh-authorized-keys :hcloud-ssh-keys :digitalocean-ssh-keys
-    :vultr-ssh-keys :compute-pubkey})
-
 (defn keygen?
-  "Whether walter generates and manages the machine-access keypair."
+  "Whether walter generates and manages the machine-access keypair.
+
+  The SSH Keypair Standard (workspace standards/ssh-keypair.md) semantics,
+  delegated to ONCE's implementation: an absent machine-key value in desired
+  state selects keygen mode, a present one is opt-out, and there is no flag.
+  The old `compute-keygen: true` opt-in is superseded — with generation the
+  default, the switch is the explicit key itself. ONCE's templates now render
+  the keygen branches (the provider key resource named after the profile, the
+  `private_key` connection), so walter's old `ssh-key.tf` merge trick and its
+  per-run ssh-agent are gone with it."
   [opts]
-  (true? (:compute-keygen opts)))
+  (once-ssh/keygen? opts))
 
 (def agent-credential-paths
   "Agent CLIs walter can carry a subscription login for, and the one file each
@@ -223,13 +210,12 @@
   [opts]
   (vec
    (concat
-    ;; With compute-keygen on, the per-provider ssh-key keys are walter's to
-    ;; derive from the generated keypair, so requiring them would demand values
-    ;; the operator must not set.
+    ;; The machine-key keys are no longer in the registry's :required — their
+    ;; absence selects keygen mode (SSH Keypair Standard), so nothing needs
+    ;; waiving here any more.
     (map #(str % " is required")
-         (missing-keys opts (cond->> (concat [:profile :workdir]
-                                             (slot-keys opts :required))
-                              (keygen? opts) (remove machine-key-keys))))
+         (missing-keys opts (concat [:profile :workdir]
+                                    (slot-keys opts :required))))
     (leftover-placeholders opts)
     (for [slot slots
           :let [provider (get opts slot)]
@@ -237,34 +223,20 @@
       (str "unsupported " slot " " (pr-str provider)))
     (when-not (boolean? (:compute-prevent-destroy opts))
       [":compute-prevent-destroy must be true or false"])
-    ;; Boolean like compute-prevent-destroy, for the same reason: "false" the
-    ;; string is truthy, and a key that silently generates key material must
-    ;; not have a value that reads as off and acts as on.
-    (when-not (or (nil? (:compute-keygen opts))
-                  (boolean? (:compute-keygen opts)))
-      [":compute-keygen must be true or false"])
-    (when (and (keygen? opts)
-               (not (contains? keygen-providers (str (:provider-compute opts)))))
-      [(str ":compute-keygen is not supported on provider-compute "
-            (pr-str (:provider-compute opts)) " — walter can feed a generated "
-            "key to " (str/join ", " (sort keygen-providers)) " only")])
+    ;; The flag is gone: generation is the default and the explicit key is the
+    ;; opt-out (SSH Keypair Standard). A colors.yml still carrying it gets a
+    ;; migration message rather than a silent ignore.
+    (when (some? (:compute-keygen opts))
+      [":compute-keygen is superseded by the SSH Keypair Standard — remove it; generation is the default, and setting the provider's machine key is the opt-out"])
     ;; Walter closes Vultr's root-only bootstrap login. Without the generated
-    ;; key's public material there is no safe key to install for ubuntu before
-    ;; that door closes, so half-supporting hand-registered account keys would
-    ;; create a machine nobody can enter.
+    ;; key's private half there is no way to enter as root and install ubuntu's
+    ;; key before that door closes, so opt-out would create a machine nobody
+    ;; can enter.
     (when (and (= "vultr" (str (:provider-compute opts)))
-               (not (keygen? opts)))
-      [":provider-compute \"vultr\" requires :compute-keygen true so Walter can bootstrap ubuntu before disabling root SSH"])
-    ;; The derived keys and a hand-set value cannot both win, and losing
-    ;; silently is worse than refusing loudly: the machine would come up
-    ;; authorized for a key the file never mentions.
-    (when (keygen? opts)
-      (for [k (sort machine-key-keys)
-            :when (not (placeholder? (get opts k)))]
-        (str k " is set, but :compute-keygen derives it from the generated "
-             "keypair — delete the key, or turn :compute-keygen off")))
-    ;; Yandex requires :compute-pubkey; elsewhere it is optional. Either way a
-    ;; value that is present must look like a public key.
+               (not (placeholder? (:vultr-ssh-keys opts))))
+      [":vultr-ssh-keys is not accepted — walter must hold the private key to bootstrap ubuntu before disabling root SSH; leave it unset and the profile-named keypair is generated"])
+    ;; A present :compute-pubkey is Yandex's opt-out; absent selects keygen.
+    ;; Either way a value that is present must look like a public key.
     (when-not (or (nil? (:compute-pubkey opts))
                   (placeholder? (:compute-pubkey opts))
                   (str/starts-with? (str (:compute-pubkey opts)) "ssh-"))

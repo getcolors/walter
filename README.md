@@ -50,10 +50,12 @@ re-creates stay non-interactive. The clone-bearing features
 (`emacs-config-repo`, `clone-orgs`, `dotfiles-checkout`) authenticate through
 this identity and refuse to build without it.
 
-Set `compute-keygen: true` and walter also generates the machine-access
-keypair per deployment — `~/.ssh/<profile>` on your workstation —
-feeds the public half to the provider, and pins `ssh <profile>` and Ansible
-to it. Leave it out and you supply a key per provider, exactly as before.
+By default walter generates and owns the machine-access keypair (SSH Keypair
+Standard, `workspace/standards/ssh-keypair.md`): a profile-named ed25519 pair
+in `.ssh/` next to `colors.yml`, created on the first real create, fed to the
+provider, pinned for `ssh <profile>` and Ansible, and removed by a successful
+delete. Set the provider's machine-key value instead and you supply the key
+yourself, exactly as before the standard.
 
 Set `emacs-config-repo` (an https URL) and the remote playbook also installs
 Emacs from a pinned nixpkgs and clones that configuration with the machine's
@@ -65,7 +67,8 @@ workstation's keys: GitHub work rides the machine's own token, and the only
 private key involved in reaching the machine is the one walter generated for
 exactly that.
 
-Vultr requires `compute-keygen: true` and has one bootstrap exception to the
+Vultr accepts no explicit machine key (walter needs the generated private
+half) and has one bootstrap exception to the
 normal login: its provider image exposes root, so Walter enters once to adopt
 the stock UID/GID 1000 account as `ubuntu`, install the dedicated key and
 passwordless sudo, then

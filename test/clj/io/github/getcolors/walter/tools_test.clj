@@ -93,13 +93,15 @@
 (deftest vultr-bootstrap-probes-the-final-login-before-falling-back-to-root
   (is (= "root" (tools/vultr-bootstrap-user {:green/event :build})))
   (let [seen (atom nil)
-        opts {:ip "203.0.113.7" :profile "p" :compute-keygen true}]
+        opts {:ip "203.0.113.7" :profile "p" :provider-compute "vultr"
+              :green/state-file "/w/colors.yml"}]
     (is (= "ubuntu" (tools/vultr-bootstrap-user
                       opts (fn [args _ timeout]
                              (reset! seen [args timeout])
                              {:ok? true}))))
     (is (some #{"ubuntu@203.0.113.7"} (first @seen)))
-    (is (some #{"/home/ubuntu/.ssh/p"} (first @seen)))
+    (is (some #{"/w/.ssh/p"} (first @seen))
+        "the probe uses the deployment-owned key, .ssh/ next to colors.yml")
     (is (= "root" (tools/vultr-bootstrap-user
                     opts (fn [& _] {:ok? false}))))))
 
@@ -107,7 +109,6 @@
   (let [dir (str (fs/create-temp-dir))
         result (tools/ansible-bootstrap-step
                 {:provider-compute "vultr"
-                 :compute-keygen true
                  :compute-pubkey "ssh-ed25519 AAAAfixture"
                  :green/event :build
                  :profile "p" :workdir dir :ip "203.0.113.7"})
@@ -932,41 +933,39 @@
           (is (not (fs/exists? sandbox)) "a seeded machine ends the sandbox")
           (is (nil? (:walter/github-token-file result))))))))
 
-(deftest the-apply-runs-under-an-agent-holding-the-generated-key
-  (testing "ONCE's remote-exec provisioner authenticates through whatever agent
-           SSH_AUTH_SOCK names, and only walter's own short-lived agent holds
-           the generated key — observed as \"attempted methods [none]\" before
-           this existed"
-    (let [killed (atom nil)
-          run-fn (fn [args & _]
-                   (cond
-                     (= ["ssh-agent" "-s"] args)
-                     {:exit 0 :err ""
-                      :out "SSH_AUTH_SOCK=/tmp/agent.sock; export SSH_AUTH_SOCK;\nSSH_AGENT_PID=424242; export SSH_AGENT_PID;\n"}
-                     (= "ssh-add" (first args)) {:exit 0 :out "" :err ""}
-                     (= "kill" (first args)) (do (reset! killed (second args))
-                                                 {:exit 0 :out "" :err ""})))
-          result (tools/with-machine-key-agent "/k" (fn [env] env) run-fn)]
-      (is (= {"SSH_AUTH_SOCK" "/tmp/agent.sock"} result)
-          "the socket reaches the wrapped apply as an env addition")
-      (is (= "424242" @killed) "the agent dies with the apply")))
-  (testing "an agent that cannot start or load the key fails deterministically,
-           before any provider call"
-    (let [result (tools/with-machine-key-agent
-                  "/k" (fn [_] (throw (ex-info "applied" {})))
-                  (fn [args & _] (if (= ["ssh-agent" "-s"] args)
-                                   {:exit 1 :out "" :err "no agent"}
-                                   {:exit 0 :out "" :err ""})))]
-      (is (str/includes? (:walter/agent-error result) "ssh-agent failed")))
-    (let [result (tools/with-machine-key-agent
-                  "/k" (fn [_] (throw (ex-info "applied" {})))
-                  (fn [args & _]
-                    (cond
-                      (= ["ssh-agent" "-s"] args)
-                      {:exit 0 :out "SSH_AUTH_SOCK=/s; export SSH_AUTH_SOCK;\nSSH_AGENT_PID=1; export SSH_AGENT_PID;\n" :err ""}
-                      (= "ssh-add" (first args)) {:exit 1 :out "" :err "bad key"}
-                      :else {:exit 0 :out "" :err ""})))]
-      (is (str/includes? (:walter/agent-error result) "ssh-add failed")))))
+(deftest a-delete-is-made-renderable-rather-than-blocked
+  (testing "the templates interpolate the public key through file(), so a
+           destroy has to render the values create did; a missing public half
+           is rederived and a missing keypair regenerated as a throwaway —
+           the cleanup step removes the files once the destroy succeeds"
+    (let [dir (str (fs/create-temp-dir))
+          opts {:profile "p" :provider-compute "oci"
+                :green/state-file (str dir "/colors.yml")}]
+      (testing "both halves present is a no-op"
+        (fs/create-dirs (str dir "/.ssh"))
+        (spit (str dir "/.ssh/p") "PRIVATE")
+        (spit (str dir "/.ssh/p.pub") "ssh-ed25519 AAAA p")
+        (is (nil? (tools/ensure-renderable!
+                   opts (fn [& _] (is false "must not run") {:ok? false})))))
+      (testing "a missing public half is rederived from the private one"
+        (fs/delete (str dir "/.ssh/p.pub"))
+        (is (nil? (tools/ensure-renderable!
+                   opts (fn [args _ _]
+                          (is (= ["ssh-keygen" "-y" "-f" (str dir "/.ssh/p")] args))
+                          {:ok? true :out "ssh-ed25519 AAAA rederived\n"}))))
+        (is (= "ssh-ed25519 AAAA rederived\n" (slurp (str dir "/.ssh/p.pub")))))
+      (testing "a missing keypair is regenerated as a throwaway"
+        (fs/delete (str dir "/.ssh/p"))
+        (fs/delete (str dir "/.ssh/p.pub"))
+        (is (nil? (tools/ensure-renderable!
+                   opts (fn [args _ _]
+                          (spit (last args) "PRIVATE")
+                          (spit (str (last args) ".pub") "ssh-ed25519 AAAA throwaway")
+                          {:ok? true})))))
+      (testing "opt-out mode touches nothing"
+        (is (nil? (tools/ensure-renderable!
+                   (assoc opts :oci-ssh-authorized-keys "/x.pub")
+                   (fn [& _] (is false) {:ok? false}))))))))
 
 (deftest the-token-path-arrives-as-an-extra-var-not-a-rendered-value
   (testing "the playbook names the variable; the path — let alone the token —
@@ -988,54 +987,55 @@
 ;; ---------------------------------------------------------------------------
 ;; the machine-access keypair
 
-(deftest keygen-adds-the-key-resource-only-where-keys-are-registered-by-name
-  (testing "hcloud, DigitalOcean and Vultr take a key already registered with
-           the provider, so walter renders its own ssh-key.tf beside ONCE's
-           main.tf — the outputs.tf merge trick again"
-    (doseq [provider ["hcloud" "digitalocean" "vultr"]]
-      (let [specs (tools/compute-specs {:provider-compute provider
-                                        :compute-keygen true} "/w")
-            key-spec (last specs)]
-        (is (= (if (= provider "vultr") 3 2) (count specs))
-            (str provider " should add ssh-key.tf"))
-        (is (= (keyword (str "io.github.getcolors.walter.tools.tofu." provider) "ssh-key.tf")
-               (:template key-spec)))
-        (is (= "/w/ssh-key.tf" (:target key-spec))))))
-  (testing "OCI reads a pubkey path and Yandex the content, so neither needs an
-           extra file — and no-infra has no compute resource at all"
-    (is (= 2 (count (tools/compute-specs {:provider-compute "oci"
-                                          :compute-keygen true} "/w")))
-        "main.tf plus the instance-id output, exactly as without keygen")
-    (doseq [provider ["yandex" "no-infra"]]
-      (is (= 1 (count (tools/compute-specs {:provider-compute provider
-                                            :compute-keygen true} "/w")))))))
+(deftest the-key-resource-now-comes-from-onces-template
+  (testing "walter renders no ssh-key.tf sidecar any more: in keygen mode
+           ONCE's compute templates declare the profile-named key resource
+           themselves, so the specs are main.tf plus — where the power verbs
+           work — the instance-id output, and nothing else"
+    (is (= 2 (count (tools/compute-specs {:provider-compute "vultr"} "/w"))))
+    (is (= 2 (count (tools/compute-specs {:provider-compute "oci"} "/w"))))
+    (doseq [provider ["hcloud" "digitalocean" "yandex" "no-infra"]]
+      (is (= 1 (count (tools/compute-specs {:provider-compute provider} "/w")))
+          (str provider " renders main.tf alone")))
+    (is (not-any? #(str/ends-with? (str (:target %)) "ssh-key.tf")
+                  (mapcat #(tools/compute-specs {:provider-compute %} "/w")
+                          ["hcloud" "digitalocean" "vultr"])))))
 
-(deftest a-build-derives-placeholders-never-key-material
+(deftest a-build-renders-placeholders-never-key-material
   (testing "generation is a create-time side effect, so a build renders stable
-           placeholders — a fresh key every build would break the goldens"
-    (let [derived (tools/derive-machine-key {:compute-keygen true
-                                             :profile "p"
-                                             :green/event :build})]
-      (is (= "/home/build-placeholder/.ssh/p.pub"
-             (:oci-ssh-authorized-keys derived)))
-      (is (str/starts-with? (:compute-pubkey derived) "ssh-ed25519 "))
-      (is (str/includes? (:compute-pubkey derived) "BUILDPLACEHOLDER"))
-      (testing "the hcloud, DigitalOcean and Vultr values are HCL references to
-               rendered resources, which double as dependency edges"
-        (is (= "${hcloud_ssh_key.walter.name}" (:hcloud-ssh-keys derived)))
-        (is (= "${digitalocean_ssh_key.walter.fingerprint}"
-               (:digitalocean-ssh-keys derived)))
-        (is (= "${vultr_ssh_key.walter.id}" (:vultr-ssh-keys derived))))))
-  (testing "with keygen off nothing is derived"
-    (is (= {:profile "p"} (tools/derive-machine-key {:profile "p"})))))
+           placeholders — walter commits its goldens, and a real absolute path
+           or a fresh key every build would break them across workstations"
+    (let [filled (tools/with-machine-key {:profile "p"
+                                          :provider-compute "oci"
+                                          :green/event :build})]
+      (is (true? (:ssh-keygen filled)))
+      (is (= "/home/build-placeholder/.ssh/p" (:ssh-private-key-path filled)))
+      (is (= "/home/build-placeholder/.ssh/p.pub" (:ssh-public-key-path filled)))
+      (is (= "/home/build-placeholder/.ssh/p.pub" (:oci-ssh-authorized-keys filled)))
+      (is (= "ssh-ed25519 PLACEHOLDER managed-by-colors" (:compute-pubkey filled))
+          "the Vultr bootstrap play interpolates the content on every provider")))
+  (testing "opt-out opts pass through untouched"
+    (let [opts {:profile "p" :provider-compute "oci"
+                :oci-ssh-authorized-keys "/x.pub" :green/event :build}]
+      (is (= opts (tools/with-machine-key opts))))))
 
-(deftest the-managed-block-names-the-key-only-when-walter-generated-one
-  (testing "the rendered ssh-config block carries IdentityFile in the literal ~
-           form — ssh_config expands it, and the playbook stays byte-identical
-           across workstations"
-    (is (= "~/.ssh/p"
-           (:machine-key-path (tools/data-fn {:profile "p" :compute-keygen true}))))
-    (is (nil? (:machine-key-path (tools/data-fn {:profile "p"}))))))
+(deftest the-managed-block-names-the-key-only-in-keygen-mode
+  (testing "on build the rendered ssh-config block carries the stable
+           placeholder path; on real events the deployment's absolute
+           .ssh/<profile>; in opt-out mode nothing"
+    (is (= "/home/build-placeholder/.ssh/p"
+           (:machine-key-path (tools/data-fn {:profile "p"
+                                              :provider-compute "oci"
+                                              :green/event :build}))))
+    (is (str/ends-with?
+         (str (:machine-key-path (tools/data-fn {:profile "p"
+                                                 :provider-compute "oci"
+                                                 :green/event :create
+                                                 :green/state-file "/w/colors.yml"})))
+         "/w/.ssh/p"))
+    (is (nil? (:machine-key-path
+               (tools/data-fn {:profile "p" :provider-compute "oci"
+                               :oci-ssh-authorized-keys "/x.pub"}))))))
 
 (defn- render-local-playbook
   [opts]
@@ -1048,21 +1048,21 @@
     (tools/ansible-local-step merged)
     (slurp (str (tools/tool-dir merged tools/ansible-local-tool) "/main.yml"))))
 
-(deftest the-local-playbook-writes-identityfile-only-with-keygen
-  (testing "with keygen on, ssh <profile> uses the generated key and nothing
+(deftest the-local-playbook-writes-identityfile-only-in-keygen-mode
+  (testing "in keygen mode, ssh <profile> uses the generated key and nothing
            else — IdentitiesOnly stops the agent offering the operator's own"
-    (let [rendered (render-local-playbook {:compute-keygen true})]
-      (is (str/includes? rendered "IdentityFile ~/.ssh/p"))
-      (is (str/includes? rendered "IdentitiesOnly yes"))))
-  (testing "without it the block is what it always was — matched on the config
-           line, since the header commentary mentions the word"
     (let [rendered (render-local-playbook {})]
-      (is (not (str/includes? rendered "IdentityFile ~")))))
+      (is (str/includes? rendered "IdentityFile /home/build-placeholder/.ssh/p"))
+      (is (str/includes? rendered "IdentitiesOnly yes"))))
+  (testing "opt-out renders the block exactly as it always was — matched on
+           the config line, since the header commentary mentions the word"
+    (let [rendered (render-local-playbook {:oci-ssh-authorized-keys "/x.pub"})]
+      (is (not (str/includes? rendered "IdentityFile /")))))
   (testing "no ForwardAgent line either way — nothing on the machine
            authenticates with the workstation's keys any more"
-    (is (not (str/includes? (render-local-playbook {:compute-keygen true})
-                            "ForwardAgent yes")))
-    (is (not (str/includes? (render-local-playbook {}) "ForwardAgent yes")))))
+    (is (not (str/includes? (render-local-playbook {}) "ForwardAgent yes")))
+    (is (not (str/includes? (render-local-playbook {:oci-ssh-authorized-keys "/x.pub"})
+                            "ForwardAgent yes")))))
 
 (deftest the-ansible-steps-connect-with-the-generated-key
   (testing "green's runner already supports --private-key; walter passes it
@@ -1075,8 +1075,7 @@
           (tools/ansible-remote-step {:profile "p"
                                       :workdir dir
                                       :provider-compute "oci"
-                                      :green/event :create
-                                      :compute-keygen true})))
+                                      :green/event :create})))
       (is (str/ends-with? (str (:private-key @captured)) "/.ssh/p")))
     (let [captured (atom nil)]
       (with-redefs [ansible/ansible-step (fn [opts config]
@@ -1086,6 +1085,7 @@
           (tools/ansible-remote-step {:profile "p"
                                       :workdir dir
                                       :provider-compute "oci"
+                                      :oci-ssh-authorized-keys "/x.pub"
                                       :green/event :create})))
       (is (nil? (:private-key @captured))
-          "without keygen, ssh picks its identity as it always did"))))
+          "in opt-out mode, ssh picks its identity as it always did"))))

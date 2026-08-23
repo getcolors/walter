@@ -30,8 +30,8 @@ runs GitHub's device flow as its first action. Provider credentials use
 - Public SSH keys are not secrets; private ones are. `oci-ssh-authorized-keys`
   holds the **path** to a public-key file that OpenTofu reads at plan time —
   record the path, never inline the contents, and never read a private key.
-  With `compute-keygen: true` walter generates and manages
-  `~/.ssh/<profile>` itself; never read or move that file either.
+  By default walter generates and manages the machine keypair
+  `.ssh/<profile>` next to colors.yml; never read or move those files either.
 - With `github-account` set, a real `create` starts by printing a one-time
   code and waiting — up to about fifteen minutes — for the user to approve it
   at https://github.com/login/device. That is the design, not a hang: the
@@ -88,9 +88,10 @@ directory.
    approve from a browser. This is required before offering
    `emacs-config-repo`, `clone-orgs` or `dotfiles-checkout` — their clones
    authenticate through it.
-5. Ask whether walter should generate the machine-access ssh keypair
-   (`compute-keygen: true`) or whether the user supplies a provider key as
-   before.
+5. The machine-access keypair needs no collection: walter generates a
+   profile-named keypair by default (SSH Keypair Standard). Only when the
+   user wants their own key, collect the provider's machine-key value —
+   except on Vultr, which accepts no explicit key.
 6. Ask whether the user wants their Emacs configuration on the machine. If so,
    set `emacs-config-repo` to its **https** git URL (`git@`/`ssh://` forms are
    refused) and `emacs-config-dest` to where it must live — the default is
