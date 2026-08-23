@@ -58,7 +58,12 @@
     # died. Silent rebinds: with the default GatewayPorts, sshd accepts a
     # forward for a non-loopback address and quietly binds loopback instead —
     # a "success" the client cannot see through; `clientspecified` honours the
-    # requested address, and only when the client asks for one.
+    # requested address, and only when the client asks for one. Stale Unix
+    # sockets: a `ssh -R /tmp/x.sock:...` forward leaves its socket file behind
+    # when the session ends, and by default sshd refuses to bind over it, so
+    # every reconnect fails the forward until someone deletes the file by
+    # hand. The client-side StreamLocalBindUnlink does not help — for a remote
+    # forward the server creates the socket, so only sshd's setting counts.
     #
     # `validate` runs on the drop-in alone, so a bad edit here fails the copy
     # instead of reaching a reload.
@@ -71,6 +76,7 @@
           ClientAliveCountMax 3
           AllowTcpForwarding yes
           GatewayPorts clientspecified
+          StreamLocalBindUnlink yes
         owner: root
         group: root
         mode: "0644"
