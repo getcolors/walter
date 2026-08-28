@@ -1026,20 +1026,18 @@
       (is (= opts (tools/with-machine-key opts))))))
 
 (deftest the-managed-block-names-the-key-only-in-keygen-mode
-  (testing "on build the rendered ssh-config block carries the stable
-           placeholder path; on real events the operator's absolute
-           ~/.ssh/<profile>; in opt-out mode nothing"
-    (is (= "/home/build-placeholder/.ssh/p"
+  (testing "the SSH Config Standard's literal ~ form, on every event — ssh
+           expands it, the line survives the config travelling to another
+           workstation, and builds need no placeholder; in opt-out mode
+           nothing"
+    (is (= "~/.ssh/p"
            (:machine-key-path (tools/data-fn {:profile "p"
                                               :provider-compute "oci"
                                               :green/event :build}))))
-    (with-redefs [once-ssh/home-dir (constantly "/w")]
-      (is (str/ends-with?
-           (str (:machine-key-path (tools/data-fn {:profile "p"
-                                                   :provider-compute "oci"
-                                                   :green/event :create
-                                                   :green/state-file "/w/colors.yml"})))
-           "/w/.ssh/p")))
+    (is (= "~/.ssh/p"
+           (:machine-key-path (tools/data-fn {:profile "p"
+                                              :provider-compute "oci"
+                                              :green/event :create}))))
     (is (nil? (:machine-key-path
                (tools/data-fn {:profile "p" :provider-compute "oci"
                                :oci-ssh-authorized-keys "/x.pub"}))))))
@@ -1059,17 +1057,23 @@
   (testing "in keygen mode, ssh <profile> uses the generated key and nothing
            else — IdentitiesOnly stops the agent offering the operator's own"
     (let [rendered (render-local-playbook {})]
-      (is (str/includes? rendered "IdentityFile /home/build-placeholder/.ssh/p"))
+      (is (str/includes? rendered "IdentityFile ~/.ssh/p")
+          "the standard's literal ~ form, never an absolute home path")
       (is (str/includes? rendered "IdentitiesOnly yes"))))
-  (testing "opt-out renders the block exactly as it always was — matched on
-           the config line, since the header commentary mentions the word"
+  (testing "opt-out renders no key line at all — the operator supplied the key
+           and has their own arrangements for finding it. Matched on the
+           config-line form, since the header commentary mentions the word"
     (let [rendered (render-local-playbook {:oci-ssh-authorized-keys "/x.pub"})]
-      (is (not (str/includes? rendered "IdentityFile /")))))
-  (testing "no ForwardAgent line either way — nothing on the machine
-           authenticates with the workstation's keys any more"
-    (is (not (str/includes? (render-local-playbook {}) "ForwardAgent yes")))
-    (is (not (str/includes? (render-local-playbook {:oci-ssh-authorized-keys "/x.pub"})
-                            "ForwardAgent yes")))))
+      (is (not (str/includes? rendered "IdentityFile ~")))))
+  (testing "the standard's remaining lines render in both modes: ForwardAgent
+           is explicitly off — nothing on the machine authenticates with the
+           workstation's keys — and accept-new spares a recreate the
+           interactive host-key prompt while still refusing a changed key"
+    (doseq [rendered [(render-local-playbook {})
+                      (render-local-playbook {:oci-ssh-authorized-keys "/x.pub"})]]
+      (is (str/includes? rendered "ForwardAgent no"))
+      (is (not (str/includes? rendered "ForwardAgent yes")))
+      (is (str/includes? rendered "StrictHostKeyChecking accept-new")))))
 
 (deftest the-ansible-steps-connect-with-the-generated-key
   (testing "green's runner already supports --private-key; walter passes it
@@ -1197,8 +1201,11 @@
     (is (str/includes? rendered
                        "# {mark} walter {{ host_alias }}-emma ANSIBLE MANAGED BLOCK")
         "each seat has its own marker, so removing one removes only its block")
-    (testing "seat blocks pin the same machine key in keygen mode"
-      (is (<= 3 (count (re-seq #"IdentityFile /home/build-placeholder" rendered))))))
+    (testing "seat blocks pin the same machine key in keygen mode, and carry
+             the standard's full block — matched with the block indentation,
+             since the header commentary also spells the lines out"
+      (is (= 3 (count (re-seq #"IdentityFile ~/\.ssh/p" rendered))))
+      (is (= 3 (count (re-seq #" {14}ForwardAgent no" rendered))))))
   (testing "without seats the play is exactly the one block"
     (let [rendered (render-local-playbook {})]
       (is (not (str/includes? rendered "-jack")))

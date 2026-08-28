@@ -16,10 +16,16 @@
 # something the play discovers, and a project without the feature should
 # render a block that never mentions it.
 #
-# No ForwardAgent. Nothing on the machine authenticates with the
-# workstation's keys any more — GitHub work rides the machine's own gh token
-# over https — and forwarding an agent to a host that does not need it only
-# widens what a compromise of that host can sign.
+# The block is the SSH Config Standard's (workspace standards/ssh-config.md
+# §3), which generalized walter's own. `ForwardAgent no` is explicit rather
+# than implied: nothing on the machine authenticates with the workstation's
+# keys any more — GitHub work rides the machine's own gh token over https —
+# and stating it stops a later `Host *` from turning it on.
+# `StrictHostKeyChecking accept-new` trusts the host key this deployment just
+# created on first contact and refuses it if it ever changes, so a recreate
+# needs no interactive prompt and a recycled address still warns.
+# IdentityFile uses the literal ~ form — ssh expands it, and the line
+# survives the config travelling to a workstation with a different home.
 - name: Managed local configuration
   hosts: local
   tasks:
@@ -37,7 +43,9 @@
               Port 22
 <% if machine-key-path|not-empty %>              IdentityFile <{ machine-key-path }>
               IdentitiesOnly yes
-<% endif %><% for seat in users %>
+<% endif %>              StrictHostKeyChecking accept-new
+              ForwardAgent no
+<% for seat in users %>
     # One block per seat, Selmer-rendered rather than an Ansible loop: which
     # seats exist is desired state, and each needs its own marker so a seat
     # removed from colors.yml leaves a block that the next create no longer
@@ -57,4 +65,6 @@
               Port 22
 <% if machine-key-path|not-empty %>              IdentityFile <{ machine-key-path }>
               IdentitiesOnly yes
-<% endif %><% endfor %>
+<% endif %>              StrictHostKeyChecking accept-new
+              ForwardAgent no
+<% endfor %>

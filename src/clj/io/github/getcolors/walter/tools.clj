@@ -133,14 +133,16 @@
     (once-ssh/private-key-path opts)))
 
 (defn machine-key-ssh-path
-  "What the rendered ssh-config block's IdentityFile names: the real absolute
-  path on real events, the stable placeholder on :build so the goldens stay
-  byte-identical across workstations."
+  "What the rendered ssh-config block's IdentityFile names: the literal
+  `~/.ssh/<profile>` form, on every event — the SSH Config Standard's spelling
+  (workspace standards/ssh-config.md §3). ssh_config expands the tilde itself,
+  the line survives the config travelling to a workstation whose home is not
+  /home/<user>, and builds are byte-identical across workstations with no
+  placeholder needed. The tofu-side key paths in `with-machine-key` still
+  carry real or placeholder absolute paths: HCL's file() does not expand ~."
   [opts]
   (when (validate/keygen? opts)
-    (if (= :build (:green/event opts))
-      (str build-placeholder-dir "/" (or (:profile opts) "walter"))
-      (str (.getAbsolutePath (io/file (once-ssh/private-key-path opts)))))))
+    (str "~/.ssh/" (or (:profile opts) "walter"))))
 
 (defn with-machine-key
   "ONCE's standard template values, with two walter-isms on top. On :build the
