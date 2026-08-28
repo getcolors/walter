@@ -397,9 +397,46 @@ there, or delete the file there and run `create` again.
 
 Note that seeding a shared account means two machines refreshing against one
 refresh token, and `~/.pi/agent/auth.json` in particular can hold long-lived API
-keys alongside the OAuth triple.
+keys alongside the OAuth triple. With seats (below) the same files are seeded
+into every home, so N+1 copies share that one refresh token: when a rotation on
+one logs another out, log back in there — the `force: false` guard means walter
+never clobbers the fresh session.
 
-## State backends
+## Seats
+
+| Key | Meaning |
+|---|---|
+| `users` | Optional. Extra unix logins ("seats") beside the primary one — one person's isolated workspaces, kept apart by file permissions. |
+
+```yaml
+users:
+  - jack
+  - emma
+```
+
+Names only, lowercase unix logins; `ubuntu` and `root` are refused. Everything
+identity-shaped in this file stays **singular** — the seats are one person's
+workspaces, not people — and each seat's home is provisioned with the same
+desired state as the primary login's: same nix profile, same login shell, same
+GitHub identity (the one device-flow token, seeded into each home), same Emacs
+configuration, dotfiles, org checkouts, agent credentials and atuin account.
+`ssh <profile>-<seat>` reaches each one; walter manages one `~/.ssh/config`
+block per seat beside the primary block, opening to the same machine key.
+
+The isolation contract, stated plainly:
+
+- A seat holds **no sudo**. The primary login keeps it and is the trust root —
+  it can inspect any seat, and system-level work happens from it. Do not grant
+  a seat sudo on the machine; a sudoer can read every home, which deletes the
+  feature.
+- Homes are mode `0700`, so seats cannot read or write each other's files or
+  working trees.
+- The boundary is filesystem and process, **not network or identity**: seats
+  share localhost, `/tmp`, and every credential seeded into their homes.
+
+Seats multiply the long parts of a create — the org clones and the Emacs
+package warm run once per home — and the atuin history is one account seen
+from every seat: filter by directory to recall per workspace.
 
 | Backend | Keys | Credentials |
 |---|---|---|
@@ -417,6 +454,7 @@ anything you would be annoyed to lose.
 <workdir>/<profile>/
 ├── walter-compute/          backend.tf.json  main.tf  [outputs.tf]  [ssh-key.tf]
 ├── walter-ansible-bootstrap/ ansible.cfg  inventory.json  main.yml  # Vultr only
+├── walter-ansible-seats/    ansible.cfg  inventory.json  main.yml  # only with users
 ├── walter-ansible-local/    ansible.cfg  inventory.ini  main.yml
 ├── walter-ansible-remote/   ansible.cfg  inventory.json  main.yml
 └── walter-emacs-packages/   ansible.cfg  inventory.json  main.yml
@@ -473,6 +511,7 @@ renders a playbook that does not mention them at all:
 | `seed-agent-credentials` | one credential file per named agent, copied from the controller; Claude also gets a missing onboarding flag |
 | `clone-orgs` | every source repository of each org, cloned to `~/code/<org>/<repo>` |
 | `atuin-username` | `atuin login`, then `atuin sync` |
+| `users` | one no-sudo unix login per seat, each home provisioned like the primary one |
 
 Emacs comes from `nixpkgs-unstable#emacs`, the same ref as the terminfo and
 `nix-packages` steps — the full build, with native compilation and tree-sitter.

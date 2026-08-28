@@ -23,21 +23,40 @@
     - name: Ping
       ansible.builtin.ping:
 
+    # Machine-scoped tasks below run once, delegated to the primary host — the
+    # only login holding sudo. A seat host cannot become root, and that is the
+    # isolation working, not a limitation to engineer around.
+    #
     # cloudflared's HTTP tunnel does not need root, but by default Ubuntu's
     # disabled ping_group_range makes its optional ICMP proxy log a permissions
     # warning, and the distro's small socket-buffer ceilings make quic-go warn
-    # that it cannot allocate the buffers QUIC asks for. Grant ping sockets only
-    # to the login user's primary group rather than running cloudflared as root,
-    # and use quic-go's recommended ceiling for both receive and send buffers.
+    # that it cannot allocate the buffers QUIC asks for. Grant ping sockets to
+    # every login's primary group rather than running cloudflared as root —
+    # the sysctl takes a single contiguous range, so this spans the lowest to
+    # the highest gid across the primary login and every seat — and use
+    # quic-go's recommended ceiling for both receive and send buffers.
+    - name: Collect the login groups for ping sockets
+      run_once: true
+      delegate_to: "walter-fixture"
+      ansible.builtin.command:
+        argv: [id, -g, "{{ hostvars[item].ansible_user }}"]
+      loop: "{{ groups['all'] }}"
+      register: walter_login_gids
+      changed_when: false
+
     - name: Configure kernel networking for cloudflared
+      run_once: true
+      delegate_to: "walter-fixture"
       become: true
+      vars:
+        walter_ping_gids: "{{ walter_login_gids.results | map(attribute='stdout') | map('int') | list }}"
       ansible.builtin.copy:
         dest: /etc/sysctl.d/90-cloudflared.conf
         owner: root
         group: root
         mode: "0644"
         content: |
-          net.ipv4.ping_group_range = {{ ansible_user_gid }} {{ ansible_user_gid }}
+          net.ipv4.ping_group_range = {{ walter_ping_gids | min }} {{ walter_ping_gids | max }}
           net.core.rmem_max = 7500000
           net.core.wmem_max = 7500000
 
@@ -45,6 +64,8 @@
     # independently of its persistent configuration. Writing an already-current
     # sysctl is a no-op, so only the copy task reports a desired-state change.
     - name: Apply cloudflared kernel networking
+      run_once: true
+      delegate_to: "walter-fixture"
       become: true
       ansible.builtin.command:
         cmd: sysctl --load /etc/sysctl.d/90-cloudflared.conf
@@ -68,6 +89,8 @@
     # `validate` runs on the drop-in alone, so a bad edit here fails the copy
     # instead of reaching a reload.
     - name: Make sshd report forward failures honestly
+      run_once: true
+      delegate_to: "walter-fixture"
       become: true
       ansible.builtin.copy:
         dest: /etc/ssh/sshd_config.d/00-walter-forwarding.conf
@@ -101,6 +124,8 @@
     # reports success, nix is absent, and the failure surfaces two tasks later
     # as an unexplained missing binary.
     - name: Install nix
+      run_once: true
+      delegate_to: "walter-fixture"
       become: true
       ansible.builtin.shell:
         cmd: >-
@@ -353,7 +378,13 @@
     # chsh insists the shell appear in /etc/shells. The `user` module shells out
     # to usermod, which does not — but a shell missing from the file is still
     # wrong, and it is what stops the user changing it back by hand later.
+    #
+    # Per host rather than run_once — the path carries each login's own home —
+    # but delegated to the primary host, because writing /etc/shells is root's
+    # and a seat holds no sudo. Delegation swaps the connection, not the vars:
+    # the templated path is still the current host's.
     - name: Allow the shell in /etc/shells
+      delegate_to: "walter-fixture"
       become: true
       ansible.builtin.lineinfile:
         path: /etc/shells
@@ -362,10 +393,13 @@
         create: true
         mode: "0644"
 
-    # `become`, because changing a login shell is a passwd(5) write. The user is
-    # the one Ansible connected as, not a name from colors.yml: walter has no
-    # other account, and naming one here would let a typo point this at root.
+    # `become`, because changing a login shell is a passwd(5) write — delegated
+    # to the primary host like /etc/shells above, and for the same reason. The
+    # user is the one this host's inventory connects as (`ansible_user_id` is
+    # the gathered fact, which delegation does not swap), not a name from
+    # colors.yml: naming one here would let a typo point this at root.
     - name: Set the login shell
+      delegate_to: "walter-fixture"
       become: true
       ansible.builtin.user:
         name: "{{ ansible_user_id }}"
@@ -882,8 +916,11 @@
   handlers:
     # A reload, not a restart, and safe to run at end of play: sshd re-reads
     # its configuration without dropping established connections, Ansible's
-    # included.
+    # included. run_once and delegated like the task that notifies it — the
+    # reload is machine-scoped, and only the primary login can become root.
     - name: Reload SSH
+      run_once: true
+      delegate_to: "walter-fixture"
       become: true
       ansible.builtin.service:
         name: ssh

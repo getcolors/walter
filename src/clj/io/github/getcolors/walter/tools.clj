@@ -35,6 +35,7 @@
   "walter-compute")
 
 (def ansible-bootstrap-tool "walter-ansible-bootstrap")
+(def ansible-seats-tool "walter-ansible-seats")
 (def ansible-local-tool "walter-ansible-local")
 (def ansible-remote-tool "walter-ansible-remote")
 (def emacs-packages-tool "walter-emacs-packages")
@@ -302,16 +303,41 @@
                                                     (backend-credential-env opts)))))
         (catch Exception _ nil))))
 
+(defn users
+  "The `users` entries — seat logins provisioned beside the primary one, each
+  a real unix account with its own home and the same environment, isolated by
+  file permissions rather than by machines. Names only: everything
+  identity-shaped in desired state stays singular, because the seats are one
+  person's workspaces, not people.
+
+  Same string tolerance as `nix-package-names`, for the same `COLORS_PAR_*`
+  reason, and `distinct` because validate.clj has already refused a genuine
+  duplicate."
+  [opts]
+  (vec (distinct (validate/user-names opts))))
+
 (defn inventory
   "The Ansible inventory for the one machine walter manages.
 
   ONCE's builder carries an admin/users split and a `root@host` key convention
   that a single-machine package has no use for, so this is walter's own: one
-  host, one group, keyed by the alias you would `ssh` with."
-  [{:keys [ip user host-alias]}]
-  (json/generate-string
-   {:all {:hosts {(or host-alias "walter") {:ansible_host ip :ansible_user user}}}}
-   {:pretty true}))
+  group, keyed by the alias you would `ssh` with — plus, for the stages that
+  provision every login, one extra host per seat, riding the same address as
+  `<alias>-<seat>` and connecting as its own login.
+
+  The primary host is deliberately first, in an array-map rather than whatever
+  a hash-map hashes to: the remote play's machine-scoped tasks `run_once`, and
+  first-in-inventory is what run_once executes on."
+  ([data] (inventory data nil))
+  ([{:keys [ip user host-alias]} seats]
+   (let [alias (or host-alias "walter")]
+     (json/generate-string
+      {:all {:hosts (apply array-map
+                           (concat [alias {:ansible_host ip :ansible_user user}]
+                                   (mapcat (fn [s] [(str alias "-" s)
+                                                    {:ansible_host ip :ansible_user s}])
+                                           seats)))}}
+      {:pretty true}))))
 
 (def nixpkgs-ref
   "The nixpkgs every `nix profile add` here resolves against.
@@ -480,6 +506,12 @@
          ;; workstations; ssh_config expands the tilde itself. nil when
          ;; compute-keygen is off, which is what gates the IdentityFile lines.
          :machine-key-path (machine-key-ssh-path opts)
+         ;; Normalised in place, so the templates never re-parse the raw key:
+         ;; the local play loops over it with Selmer, and the seats play takes
+         ;; it as JSON for one Ansible `loop` — same shape as the lists above.
+         :users (users opts)
+         :users-json (let [seats (users opts)]
+                       (when (seq seats) (json/generate-string seats)))
          ;; The union of the steps that stamp a once-only action. Computed here
          ;; rather than as an `or` in the template because Selmer's `<% if %>`
          ;; takes one value, and a second feature needing the directory should
@@ -543,6 +575,47 @@
                        :private-key (machine-key-file opts)})]
           (if (wf/failed? result) result (adopted result)))))))
 
+(defn ansible-seats-step
+  "Create the seat logins: real unix users beside the primary one, isolated by
+  file permissions.
+
+  Each seat gets a private home and exactly the authorized keys the primary
+  login holds — read from the machine at play time, so the stage is
+  key-mode-agnostic — and deliberately NO sudo: a sudoer can read every home,
+  which would be the isolation feature deleting itself. The primary login
+  keeps sudo and remains the trust root.
+
+  Runs as the primary login with become, after the Vultr bootstrap has adopted
+  ubuntu, so it needs no root SSH on any provider. It sits before the fork
+  because the remote play's inventory then connects as each seat — the
+  accounts must exist first.
+
+  Gated in Clojure like emacs-packages: a project with no seats renders no
+  directory at all rather than a playbook that loops over nothing. Delete
+  skips it — the homes go with the boot volume, and the local play removes the
+  seats' ssh blocks."
+  [opts]
+  (if (or (empty? (users opts))
+          (= :delete (:green/event opts)))
+    (assoc opts :green/exit 0)
+    (let [dir (tool-dir opts ansible-seats-tool)
+          data (data-fn opts)
+          specs [(template-spec (walter-template "ansible-seats" "ansible.cfg")
+                                (str dir "/ansible.cfg") data)
+                 (template-spec (walter-template "ansible-seats" "main.yml")
+                                (str dir "/main.yml") data)
+                 (raw-spec (str dir "/inventory.json") (inventory data))]
+          rendered (sc/scaffold opts specs)]
+      (if (= :build (:green/event opts))
+        rendered
+        (ansible/ansible-step rendered
+                              (cond-> {:dir dir
+                                       :inventory "inventory.json"
+                                       :playbooks {:create "main.yml"}
+                                       :host-key-checking false}
+                                (machine-key-file opts)
+                                (assoc :private-key (machine-key-file opts))))))))
+
 (defn ansible-local-step
   "Manage the `Host <alias>` block in `~/.ssh/config`.
 
@@ -596,7 +669,10 @@
                               (str dir "/ansible.cfg") data)
                (template-spec (walter-template "ansible-remote" "main.yml")
                               (str dir "/main.yml") data)
-               (raw-spec (str dir "/inventory.json") (inventory data))]
+               ;; One host per login: the primary plus every seat, so the same
+               ;; play provisions each home as its own user — no become_user,
+               ;; no per-seat task surgery.
+               (raw-spec (str dir "/inventory.json") (inventory data (users opts)))]
         rendered (sc/scaffold opts specs)]
     (if (or (= :build (:green/event opts))
             (= :delete (:green/event opts)))
@@ -645,7 +721,9 @@
                                 (str dir "/ansible.cfg") data)
                  (template-spec (walter-template "emacs-packages" "main.yml")
                                 (str dir "/main.yml") data)
-                 (raw-spec (str dir "/inventory.json") (inventory data))]
+                 ;; Seats too: each home got the Emacs clone, so each cache is
+                 ;; worth warming — the daemonized job runs once per login.
+                 (raw-spec (str dir "/inventory.json") (inventory data (users opts)))]
           rendered (sc/scaffold opts specs)]
       (if (= :build (:green/event opts))
         rendered

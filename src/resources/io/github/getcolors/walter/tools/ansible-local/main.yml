@@ -37,4 +37,24 @@
               Port 22
 <% if machine-key-path|not-empty %>              IdentityFile <{ machine-key-path }>
               IdentitiesOnly yes
-<% endif %>
+<% endif %><% for seat in users %>
+    # One block per seat, Selmer-rendered rather than an Ansible loop: which
+    # seats exist is desired state, and each needs its own marker so a seat
+    # removed from colors.yml leaves a block that the next create no longer
+    # manages — visibly, rather than merged into one marker that hides it.
+    # Same address, the seat's own login: `ssh {{ host_alias }}-<{ seat }>`.
+    - name: Manage SSH access for {{ host_alias }}-<{ seat }>
+      ansible.builtin.blockinfile:
+        path: ~/.ssh/config
+        marker: "# {mark} walter {{ host_alias }}-<{ seat }> ANSIBLE MANAGED BLOCK"
+        state: "{{ block_state | default('present') }}"
+        create: yes
+        mode: "0600"
+        block: |
+          Host {{ host_alias }}-<{ seat }>
+              HostName {{ ip }}
+              User <{ seat }>
+              Port 22
+<% if machine-key-path|not-empty %>              IdentityFile <{ machine-key-path }>
+              IdentitiesOnly yes
+<% endif %><% endfor %>

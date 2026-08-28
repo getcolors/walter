@@ -219,6 +219,37 @@ grep -q '"ansible_user" : "ubuntu"' \
 }
 echo "  ok — Vultr bootstraps once through root and provisions through ubuntu"
 
+# --------------------------------------------------------------------------
+# Seats: real unix logins beside the primary one, isolated by file
+# permissions. The fixture names two, so every variant renders the stage; the
+# claim is checked at its sharpest points — no sudo grant in the seat play,
+# and the stages that provision each home connecting as each seat.
+
+seats="$tmp/oci/walter-fixture/walter-ansible-seats"
+[ -f "$seats/main.yml" ] || {
+  echo "golden: FAIL — the fixture names seats but no seat stage rendered" >&2
+  exit 1
+}
+if grep -q 'NOPASSWD' "$seats/main.yml"; then
+  echo "golden: FAIL — the seat play grants sudo; a sudoer can read every home" >&2
+  exit 1
+fi
+grep -q '"ansible_user" : "ubuntu"' "$seats/inventory.json" || {
+  echo "golden: FAIL — the seat stage no longer connects as the primary login" >&2
+  exit 1
+}
+grep -q '"walter-fixture-jack"' \
+  "$tmp/oci/walter-fixture/walter-ansible-remote/inventory.json" || {
+  echo "golden: FAIL — the remote inventory no longer connects as each seat" >&2
+  exit 1
+}
+grep -q 'Host {{ host_alias }}-emma' \
+  "$tmp/oci/walter-fixture/walter-ansible-local/main.yml" || {
+  echo "golden: FAIL — the local play no longer manages a block per seat" >&2
+  exit 1
+}
+echo "  ok — seats render without sudo, and each home is provisioned as its own login"
+
 if [ "$accept" = 1 ]; then
   echo "goldens regenerated"
 else

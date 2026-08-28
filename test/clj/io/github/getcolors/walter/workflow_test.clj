@@ -24,8 +24,12 @@
     (is (= [:walter/github-token] (steps-for :create :walter/start)))
     (is (= [:walter/compute] (steps-for :create :walter/github-token))))
   (is (= [:walter/ansible-bootstrap] (steps-for :create :walter/compute)))
-  (is (= [:walter/ansible-local :walter/ansible-remote]
-         (steps-for :create :walter/ansible-bootstrap)))
+  (testing "the seat stage sits between bootstrap and the fork: it connects as
+           the login the Vultr bootstrap adopts, and the remote play's
+           inventory connects as each seat it creates"
+    (is (= [:walter/ansible-seats] (steps-for :create :walter/ansible-bootstrap)))
+    (is (= [:walter/ansible-local :walter/ansible-remote]
+           (steps-for :create :walter/ansible-seats))))
   (testing "neither normal stage joins — they are independent"
     (is (= [] (steps-for :create :walter/ansible-local)))))
 

@@ -1,0 +1,82 @@
+---
+# The seat logins: real unix users beside the primary one, one person's
+# isolated workspaces kept apart by file permissions. Each seat gets a private
+# home and exactly the keys the primary login holds — and deliberately NO
+# sudo: a sudoer can read every home, so granting it would be the isolation
+# feature deleting itself. The primary login keeps sudo and remains the trust
+# root; system-level work happens from that seat.
+#
+# Connects as the primary login with become — on Vultr the bootstrap has
+# already adopted ubuntu and closed root, and on every other provider the
+# image's own login carries sudo — so this stage needs no root SSH anywhere.
+# The remote stage then provisions each seat's home through its own inventory
+# host, connecting as the seat this play created.
+- name: Create the seat logins
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    # bash to start with, like the primary login on a fresh image. The remote
+    # play sets the desired login shell per seat, after the shell is installed
+    # in that seat's own nix profile and its integration file is in place —
+    # switching here would break the ordering that makes fish survivable.
+    - name: Create each seat
+      ansible.builtin.user:
+        name: "{{ item }}"
+        shell: /bin/bash
+        create_home: true
+        state: present
+      loop: <{ users-json|safe }>
+
+    # 0700 rather than the distro's adduser default: the mode IS the isolation
+    # claim. Explicit rather than trusted, because Ubuntu changed its default
+    # (private homes since 21.04) and the provider images disagree about it.
+    - name: Keep each seat's home private
+      ansible.builtin.file:
+        path: "/home/{{ item }}"
+        state: directory
+        owner: "{{ item }}"
+        group: "{{ item }}"
+        mode: "0700"
+      loop: <{ users-json|safe }>
+
+    - name: Create each seat's SSH directory
+      ansible.builtin.file:
+        path: "/home/{{ item }}/.ssh"
+        state: directory
+        owner: "{{ item }}"
+        group: "{{ item }}"
+        mode: "0700"
+      loop: <{ users-json|safe }>
+
+    # The primary login's authorized keys, verbatim, read from the machine at
+    # play time. This is what makes the stage key-mode-agnostic: in keygen
+    # mode that file holds the generated machine key, in opt-out mode whatever
+    # key the operator supplied — either way a seat opens to exactly the
+    # credential the machine already trusts, and no second keypair exists to
+    # manage or to leak. getent rather than ~, because under become a bare ~
+    # would expand to root's home, and the primary login's home is not /home
+    # on every provider shape walter renders.
+    - name: Locate the primary login's home
+      ansible.builtin.command:
+        argv: [getent, passwd, "{{ ansible_user }}"]
+      register: walter_primary_passwd
+      changed_when: false
+
+    - name: Read the primary login's authorized keys
+      ansible.builtin.slurp:
+        src: "{{ walter_primary_passwd.stdout.split(':')[5] }}/.ssh/authorized_keys"
+      register: walter_primary_keys
+
+    # force is left at its default (true), unlike the credential seeding in the
+    # remote play: SSH access must converge with desired state, and there is no
+    # seat-made login to protect — a key added on the machine by hand is
+    # exactly the drift a create should correct.
+    - name: Authorize the primary login's keys for each seat
+      ansible.builtin.copy:
+        dest: "/home/{{ item }}/.ssh/authorized_keys"
+        content: "{{ walter_primary_keys.content | b64decode }}"
+        owner: "{{ item }}"
+        group: "{{ item }}"
+        mode: "0600"
+      loop: <{ users-json|safe }>

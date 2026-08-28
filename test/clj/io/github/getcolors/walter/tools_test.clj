@@ -236,8 +236,11 @@
            without being run as root"
     (let [rendered (render-remote-playbook {})]
       (is (str/includes? rendered
-                         "net.ipv4.ping_group_range = {{ ansible_user_gid }} {{ ansible_user_gid }}")
-          "only the login user's primary group receives ping-socket access")
+                         "net.ipv4.ping_group_range = {{ walter_ping_gids | min }} {{ walter_ping_gids | max }}")
+          "the logins' primary groups receive ping-socket access — a single
+           contiguous range spanning the primary login and every seat")
+      (is (str/includes? rendered "argv: [id, -g, \"{{ hostvars[item].ansible_user }}\"]")
+          "the gids are read from the machine, per inventory login")
       (is (str/includes? rendered "net.core.rmem_max = 7500000"))
       (is (str/includes? rendered "net.core.wmem_max = 7500000"))
       (is (str/includes? rendered
@@ -1093,3 +1096,121 @@
                                       :green/event :create})))
       (is (nil? (:private-key @captured))
           "in opt-out mode, ssh picks its identity as it always did"))))
+
+;; ---------------------------------------------------------------------------
+;; seats
+
+(deftest the-inventory-gains-one-host-per-seat
+  (let [raw (tools/inventory {:ip "203.0.113.7" :user "ubuntu" :host-alias "dev"}
+                             ["jack" "emma"])
+        parsed (json/parse-string raw)]
+    (is (= {"all" {"hosts" {"dev" {"ansible_host" "203.0.113.7"
+                                   "ansible_user" "ubuntu"}
+                            "dev-jack" {"ansible_host" "203.0.113.7"
+                                        "ansible_user" "jack"}
+                            "dev-emma" {"ansible_host" "203.0.113.7"
+                                        "ansible_user" "emma"}}}}
+           parsed))
+    (testing "the primary host is first — the remote play's machine-scoped
+             tasks run_once, and first-in-inventory is where run_once executes"
+      (is (< (str/index-of raw "\"dev\"") (str/index-of raw "\"dev-jack\"")))
+      (is (< (str/index-of raw "\"dev-jack\"") (str/index-of raw "\"dev-emma\""))))))
+
+(deftest the-one-host-inventory-is-unchanged-without-seats
+  (is (= (tools/inventory {:ip "1.2.3.4" :user "u" :host-alias "dev"})
+         (tools/inventory {:ip "1.2.3.4" :user "u" :host-alias "dev"} nil)
+         (tools/inventory {:ip "1.2.3.4" :user "u" :host-alias "dev"} []))))
+
+(deftest seat-names-ride-the-flat-key-string-shape
+  (is (= ["jack" "emma"] (tools/users {:users "jack emma"})))
+  (is (= ["jack" "emma"] (tools/users {:users ["jack" "emma" "jack"]}))
+      "tools deduplicates — validate has already refused a genuine duplicate"))
+
+(deftest the-seats-step-renders-the-seat-play
+  (let [dir (str (fs/create-temp-dir))
+        opts {:profile "p" :workdir dir :provider-compute "oci"
+              :users ["jack" "emma"] :ip "203.0.113.7" :user "ubuntu"
+              :green/event :build}
+        result (tools/ansible-seats-step opts)
+        stage #(str dir "/p/walter-ansible-seats/" %)
+        playbook (slurp (stage "main.yml"))
+        inventory (slurp (stage "inventory.json"))]
+    (is (= 0 (:green/exit result)))
+    (is (str/includes? playbook "loop: [\"jack\",\"emma\"]"))
+    (is (str/includes? playbook "mode: \"0700\"")
+        "the home's mode is the isolation claim")
+    (is (not (str/includes? playbook "NOPASSWD"))
+        "a seat must never hold sudo — a sudoer can read every home")
+    (is (str/includes? playbook "authorized_keys")
+        "each seat opens to the keys the machine already trusts")
+    (testing "the stage connects as the primary login alone — the seats do not
+             exist until it has run"
+      (is (str/includes? inventory "\"ansible_user\" : \"ubuntu\""))
+      (is (not (str/includes? inventory "jack"))))))
+
+(deftest no-seats-means-no-seat-stage
+  (testing "like the emacs stage: the whole stage is the feature, so a project
+           without it renders no directory at all"
+    (let [dir (str (fs/create-temp-dir))
+          result (tools/ansible-seats-step {:profile "p" :workdir dir
+                                            :provider-compute "oci"
+                                            :green/event :build})]
+      (is (= 0 (:green/exit result)))
+      (is (not (fs/exists? (str dir "/p/walter-ansible-seats")))))))
+
+(deftest delete-renders-no-seat-stage
+  (testing "the homes go with the boot volume, and the local play removes the
+           seats' ssh blocks"
+    (let [dir (str (fs/create-temp-dir))
+          result (tools/ansible-seats-step {:profile "p" :workdir dir
+                                            :provider-compute "oci"
+                                            :users ["jack"]
+                                            :green/event :delete})]
+      (is (= 0 (:green/exit result)))
+      (is (not (fs/exists? (str dir "/p/walter-ansible-seats")))))))
+
+(deftest the-remote-inventory-connects-as-each-seat
+  (let [dir (str (fs/create-temp-dir))
+        merged {:profile "p" :workdir dir :provider-compute "oci"
+                :users ["jack" "emma"] :ip "203.0.113.7" :user "ubuntu"
+                :green/event :build}]
+    (tools/ansible-remote-step merged)
+    (let [inventory (slurp (str (tools/tool-dir merged tools/ansible-remote-tool)
+                                "/inventory.json"))]
+      (is (str/includes? inventory "\"p-jack\""))
+      (is (str/includes? inventory "\"ansible_user\" : \"jack\""))
+      (is (str/includes? inventory "\"p-emma\"")))))
+
+(deftest the-remote-playbook-delegates-machine-scoped-work-to-the-primary-host
+  (testing "a seat holds no sudo, so everything root-level runs once against
+           the primary host — or per host through it, for the passwd writes"
+    (let [rendered (render-remote-playbook {:users ["jack"]
+                                            :nix-packages ["fish"]
+                                            :login-shell "fish"})]
+      (is (str/includes? rendered "delegate_to: \"p\""))
+      (is (str/includes? rendered "run_once: true")))))
+
+(deftest the-local-play-manages-one-block-per-seat
+  (let [rendered (render-local-playbook {:users ["jack" "emma"]})]
+    (is (str/includes? rendered "Host {{ host_alias }}-jack"))
+    (is (str/includes? rendered "User jack"))
+    (is (str/includes? rendered
+                       "# {mark} walter {{ host_alias }}-emma ANSIBLE MANAGED BLOCK")
+        "each seat has its own marker, so removing one removes only its block")
+    (testing "seat blocks pin the same machine key in keygen mode"
+      (is (<= 3 (count (re-seq #"IdentityFile /home/build-placeholder" rendered))))))
+  (testing "without seats the play is exactly the one block"
+    (let [rendered (render-local-playbook {})]
+      (is (not (str/includes? rendered "-jack")))
+      (is (= 1 (count (re-seq #"ansible.builtin.blockinfile" rendered)))))))
+
+(deftest the-emacs-packages-inventory-warms-each-seat
+  (let [dir (str (fs/create-temp-dir))
+        merged {:profile "p" :workdir dir :provider-compute "oci"
+                :users ["jack"] :ip "203.0.113.7" :user "ubuntu"
+                :emacs-config-repo "https://github.com/x/y.git"
+                :green/event :build}]
+    (tools/emacs-packages-step merged)
+    (let [inventory (slurp (str (tools/tool-dir merged tools/emacs-packages-tool)
+                                "/inventory.json"))]
+      (is (str/includes? inventory "\"p-jack\"")))))

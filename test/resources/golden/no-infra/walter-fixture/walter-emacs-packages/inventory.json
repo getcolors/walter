@@ -4,6 +4,14 @@
       "walter-fixture" : {
         "ansible_host" : "198.51.100.10",
         "ansible_user" : "root"
+      },
+      "walter-fixture-jack" : {
+        "ansible_host" : "198.51.100.10",
+        "ansible_user" : "jack"
+      },
+      "walter-fixture-emma" : {
+        "ansible_host" : "198.51.100.10",
+        "ansible_user" : "emma"
       }
     }
   }

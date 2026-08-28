@@ -67,6 +67,17 @@ workstation's keys: GitHub work rides the machine's own token, and the only
 private key involved in reaching the machine is the one walter generated for
 exactly that.
 
+Set `users` and the machine grows **seats**: extra unix logins beside the
+primary one — one person's isolated workspaces, kept apart by file
+permissions. Each seat gets a private `0700` home, the same keys the machine
+already trusts, and the same environment as the primary login: same nix
+profile and shell, same GitHub identity, Emacs configuration, dotfiles, org
+checkouts, agent credentials and atuin account, each in its own home.
+`ssh <profile>-<seat>` reaches each one. A seat holds **no sudo** — a sudoer
+can read every home, which would delete the feature — so the primary login
+remains the trust root. The boundary is filesystem and process, not network
+or identity: seats share localhost, `/tmp`, and the seeded credentials.
+
 Vultr accepts no explicit machine key (walter needs the generated private
 half) and has one bootstrap exception to the
 normal login: its provider image exposes root, so Walter enters once to adopt

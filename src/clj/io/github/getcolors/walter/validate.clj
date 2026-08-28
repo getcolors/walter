@@ -204,6 +204,31 @@
          (map (comp str/trim str))
          (remove str/blank?))))
 
+(def ^:private unix-login-re
+  "A seat login name: lowercase letters, digits and interior hyphens, starting
+  with a letter, 32 characters at most. Deliberately stricter than useradd —
+  the realistic mistakes are an email address, a capitalised display name, or
+  a `user@host` paste, and all three carry a character this rejects."
+  #"^[a-z](?:[a-z0-9-]{0,30}[a-z0-9])?$")
+
+(def reserved-logins
+  "Logins `users` may not name. `ubuntu` is the primary login walter already
+  owns — naming it again would double-provision one home — and `root` stays
+  closed: the Vultr bootstrap disables its SSH, and a root seat would be the
+  isolation feature deleting itself."
+  #{"root" "ubuntu"})
+
+(defn user-names
+  "The `users` entries as plain strings — seat logins provisioned beside the
+  primary one — with the same flat-key string tolerance every list key here
+  has, and deliberately without `distinct`: duplicate detection below needs to
+  see what was actually written."
+  [opts]
+  (let [u (:users opts)]
+    (->> (if (sequential? u) u (str/split (str u) #"\s+"))
+         (map (comp str/trim str))
+         (remove str/blank?))))
+
 (defn state-errors
   "Everything wrong with `opts` that does not depend on credentials, as a vector
   of messages. Empty means the desired state is renderable."
@@ -283,6 +308,27 @@
       (str ":clone-orgs entry " (pr-str org)
            " is not a GitHub organisation name — this key takes the org alone, "
            "as in \"getcolors\", not a URL and not owner/repo"))
+    ;; Seat logins are unix account names walter will pass to useradd and
+    ;; interpolate into home paths, ssh aliases and an inventory — so anything
+    ;; not a plain login has to fail here, not as a useradd error half way
+    ;; through a create. Naming the primary login again, or root, is refused
+    ;; rather than deduplicated: both indicate a misunderstanding of what the
+    ;; key does, and the message is the correction.
+    (let [names (user-names opts)]
+      (concat
+       (for [u names
+             :when (not (re-matches unix-login-re u))]
+         (str ":users entry " (pr-str u) " is not a usable seat login — "
+              "lowercase letters, digits and interior hyphens, starting with "
+              "a letter, 32 characters at most"))
+       (for [u names
+             :when (contains? reserved-logins u)]
+         (str ":users must not name " (pr-str u) " — ubuntu is the primary "
+              "login walter already provisions, and root SSH is closed"))
+       (let [dups (->> names frequencies (filter #(> (val %) 1)) (map key) sort)]
+         (when (seq dups)
+           [(str ":users names " (str/join ", " (map pr-str dups))
+                 " more than once — one seat is one entry")]))))
     ;; The login shell has to come from the nix profile, and nothing else puts
     ;; anything there — so a shell that is not also in :nix-packages names a
     ;; binary that will not exist. Caught here rather than on the machine,

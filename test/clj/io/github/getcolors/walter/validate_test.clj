@@ -362,3 +362,32 @@
     (is (= [] (validate/state-errors base)))
     (is (validate/keygen? (dissoc base :oci-ssh-authorized-keys)))
     (is (not (validate/keygen? base)))))
+
+;; ---------------------------------------------------------------------------
+;; seats
+
+(deftest seat-logins-must-be-plain-unix-names
+  (testing "anything else reaches useradd, home paths and an inventory — the
+           realistic mistakes all carry a character the rule rejects"
+    (is (= [] (errors-matching (assoc base :users ["jack" "emma"]) #":users")))
+    (is (= [] (errors-matching (assoc base :users ["a" "seat-2"]) #":users")))
+    (doseq [bad ["Jack" "jack@host" "jack smith" "-jack" "jack-" "9jack"
+                 "REPLACE_ME"]]
+      (is (seq (errors-matching (assoc base :users [bad])
+                                #":users entry"))
+          (str (pr-str bad) " should be refused")))))
+
+(deftest seat-logins-may-not-shadow-the-machine-accounts
+  (is (seq (errors-matching (assoc base :users ["ubuntu"]) #":users must not name")))
+  (is (seq (errors-matching (assoc base :users ["root"]) #":users must not name"))))
+
+(deftest duplicate-seats-are-refused-not-deduplicated
+  (is (seq (errors-matching (assoc base :users ["jack" "jack" "emma"])
+                            #"more than once")))
+  (is (= [] (errors-matching (assoc base :users ["jack" "emma"]) #"more than once"))))
+
+(deftest seats-tolerate-the-flat-key-string-shape
+  (testing "COLORS_PAR_USERS overlays the vector with one string, like every
+           list key here"
+    (is (= ["jack" "emma"] (vec (validate/user-names {:users "jack emma"}))))
+    (is (= [] (errors-matching (assoc base :users "jack emma") #":users")))))

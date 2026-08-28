@@ -1,8 +1,8 @@
 (ns io.github.getcolors.walter.workflow
   "The DAG the launcher runs, and the steps that are not a tool.
 
-      create / build   start ─ github-token ─ compute ─ bootstrap ─┬─ ansible-local
-                                                                  └─ ansible-remote ─ emacs-packages
+      create / build   start ─ github-token ─ compute ─ bootstrap ─ seats ─┬─ ansible-local
+                                                                          └─ ansible-remote ─ emacs-packages
 
       delete           start ─ ansible-cleanup ─ compute
 
@@ -19,8 +19,10 @@
   interactive at the beginning only and unattended after. On builds, deletes,
   and projects with no `github-account` it passes through untouched.
 
-  Create and build fork after bootstrap: the two normal Ansible stages are independent
-  and neither joins. Delete drops the managed ssh block before anything is
+  Create and build fork after the seat stage: the two normal Ansible stages are
+  independent and neither joins. `seats` creates the extra unix logins `users`
+  names — it must follow the Vultr bootstrap and precede the remote play,
+  whose inventory connects as each seat. Delete drops the managed ssh block before anything is
   destroyed, so a machine that is already gone still cleans up. Stop and start
   never reach OpenTofu; OCI uses its CLI and Vultr its HTTP API.
 
@@ -220,11 +222,18 @@
       :walter/ansible-local [ansible-local-after-start])
 
     ;; :create and :build
+    ;;
+    ;; `seats` sits between bootstrap and the fork because ordering is load-
+    ;; bearing on both sides: it must follow the Vultr bootstrap (it connects
+    ;; as the adopted ubuntu login) and precede ansible-remote (whose inventory
+    ;; connects as each seat, so the accounts have to exist first). With no
+    ;; `users` in desired state it renders nothing and passes through.
     (case step
       :walter/start          [start-step :walter/github-token]
       :walter/github-token     [github/github-token-step :walter/compute]
       :walter/compute          [tools/compute-step :walter/ansible-bootstrap]
-      :walter/ansible-bootstrap [tools/ansible-bootstrap-step :walter/ansible-local :walter/ansible-remote]
+      :walter/ansible-bootstrap [tools/ansible-bootstrap-step :walter/ansible-seats]
+      :walter/ansible-seats  [tools/ansible-seats-step :walter/ansible-local :walter/ansible-remote]
       :walter/ansible-local  [tools/ansible-local-step]
       :walter/ansible-remote [tools/ansible-remote-step :walter/emacs-packages]
       :walter/emacs-packages [tools/emacs-packages-step])))
@@ -244,7 +253,7 @@
 
 (def side-effecting-steps
   [:walter/github-token
-   :walter/compute :walter/ansible-bootstrap
+   :walter/compute :walter/ansible-bootstrap :walter/ansible-seats
    :walter/ansible-local :walter/ansible-remote
    :walter/emacs-packages
    :walter/ansible-cleanup :walter/ssh-cleanup

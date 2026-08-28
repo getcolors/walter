@@ -152,3 +152,14 @@ clone-orgs:
 # exist to hold still. The absent branch is
 # `the-remote-playbook-omits-atuin-when-no-username-is-named` in tools_test.
 atuin-username: fixture-user
+
+# Set so every golden renders the seat stage, the per-seat inventory hosts in
+# the remote and emacs stages, and the per-seat ssh-config blocks. Names only:
+# seats are one person's isolated workspaces, so everything identity-shaped
+# above stays singular and each seat's home is provisioned with the same
+# desired state. The absent branch is `no-seats-means-no-seat-stage` and
+# friends in tools_test, for the usual reason: eight identical copies of an
+# absence prove nothing eight times.
+users:
+  - jack
+  - emma

@@ -105,8 +105,8 @@ apply:
 uses for `:delete`, which is why the two new verbs needed no engine change.
 
 ```text
-create / build   start ─ github-token ─ compute ─ bootstrap ─┬─ ansible-local
-                                                             └─ ansible-remote
+create / build   start ─ github-token ─ compute ─ bootstrap ─ seats ─┬─ ansible-local
+                                                                     └─ ansible-remote
 
 delete           start ─ ansible-cleanup ─ compute
 
@@ -129,8 +129,20 @@ keeps it, deliberately, and the retry reuses the surviving token — after
 re-verifying the account — instead of asking for a second code. On build,
 delete, dry-run, and projects without the key it passes through untouched.
 
-Create and build fork after bootstrap; the two normal Ansible stages are
-independent and neither joins. Bootstrap is a no-op except on Vultr. There it is
+Create and build fork after the seat stage; the two normal Ansible stages are
+independent and neither joins. `seats` exists only when `users` names extra
+logins: it creates each seat — a real unix user with a private `0700` home,
+the primary login's authorized keys, and **no sudo** (a sudoer can read every
+home, which would delete the isolation) — connecting as the primary login
+with become, which is why it must follow the Vultr bootstrap and precede the
+remote play, whose inventory carries one host per login so the same play
+provisions every home as its own user. The remote play's machine-scoped tasks
+(`sysctls`, `sshd` drop-in, the nix install, the SSH-reload handler) are
+`run_once` and delegated to the primary host — the only sudoer — and the two
+passwd writes (`/etc/shells`, the login shell) delegate per host for the same
+reason. The cloudflared `ping_group_range` spans the lowest to the highest
+login gid, because the sysctl takes one contiguous range. Bootstrap is a
+no-op except on Vultr. There it is
 the sole root SSH connection: a fresh image exposes root, so Walter renames the
 stock UID/GID 1000 account to `ubuntu` (or creates it when absent), installs its
 dedicated key and passwordless sudo, validates
@@ -168,8 +180,9 @@ address and refreshes the managed SSH alias.
 | `:walter/github-token` | — | the device-flow token acquisition above; no directory, nothing rendered |
 | `:walter/compute` | `walter-compute` | ONCE's provider template + walter's `outputs.tf` for OCI/Vultr; in keygen mode ONCE's template declares the profile-named key resource itself; outputs ip/user/sudoer/name |
 | `:walter/ansible-bootstrap` | `walter-ansible-bootstrap` | Vultr only: root creates ubuntu + key + sudo, then disables root/password SSH; later creates enter as ubuntu |
-| `:walter/ansible-local` | `walter-ansible-local` | the managed `Host <profile>` block in `~/.ssh/config`, with `IdentityFile`/`IdentitiesOnly` in keygen mode |
-| `:walter/ansible-remote` | `walter-ansible-remote` | ping, unprivileged cloudflared sysctls, nix, terminfo, and — when the gating key is set — the gh login and git identity, packages, shell, runtimes, Emacs, dotfiles, agent credentials, atuin |
+| `:walter/ansible-seats` | `walter-ansible-seats` | only with `users`: creates each seat login — no sudo, `0700` home, the primary login's authorized keys — as the primary login with become; renders nothing without seats |
+| `:walter/ansible-local` | `walter-ansible-local` | the managed `Host <profile>` block in `~/.ssh/config` plus one `Host <profile>-<seat>` block per seat, with `IdentityFile`/`IdentitiesOnly` in keygen mode |
+| `:walter/ansible-remote` | `walter-ansible-remote` | ping, unprivileged cloudflared sysctls, nix, terminfo, and — when the gating key is set — the gh login and git identity, packages, shell, runtimes, Emacs, dotfiles, agent credentials, atuin; with seats, one inventory host per login so every home is provisioned as its own user |
 | `:walter/emacs-packages` | `walter-emacs-packages` | starts the ELPA/MELPA bootstrap and does **not** wait for it |
 
 ### The GitHub identity and the machine keypair

@@ -38,3 +38,43 @@
               IdentityFile /home/build-placeholder/.ssh/walter-fixture
               IdentitiesOnly yes
 
+    # One block per seat, Selmer-rendered rather than an Ansible loop: which
+    # seats exist is desired state, and each needs its own marker so a seat
+    # removed from colors.yml leaves a block that the next create no longer
+    # manages — visibly, rather than merged into one marker that hides it.
+    # Same address, the seat's own login: `ssh {{ host_alias }}-jack`.
+    - name: Manage SSH access for {{ host_alias }}-jack
+      ansible.builtin.blockinfile:
+        path: ~/.ssh/config
+        marker: "# {mark} walter {{ host_alias }}-jack ANSIBLE MANAGED BLOCK"
+        state: "{{ block_state | default('present') }}"
+        create: yes
+        mode: "0600"
+        block: |
+          Host {{ host_alias }}-jack
+              HostName {{ ip }}
+              User jack
+              Port 22
+              IdentityFile /home/build-placeholder/.ssh/walter-fixture
+              IdentitiesOnly yes
+
+    # One block per seat, Selmer-rendered rather than an Ansible loop: which
+    # seats exist is desired state, and each needs its own marker so a seat
+    # removed from colors.yml leaves a block that the next create no longer
+    # manages — visibly, rather than merged into one marker that hides it.
+    # Same address, the seat's own login: `ssh {{ host_alias }}-emma`.
+    - name: Manage SSH access for {{ host_alias }}-emma
+      ansible.builtin.blockinfile:
+        path: ~/.ssh/config
+        marker: "# {mark} walter {{ host_alias }}-emma ANSIBLE MANAGED BLOCK"
+        state: "{{ block_state | default('present') }}"
+        create: yes
+        mode: "0600"
+        block: |
+          Host {{ host_alias }}-emma
+              HostName {{ ip }}
+              User emma
+              Port 22
+              IdentityFile /home/build-placeholder/.ssh/walter-fixture
+              IdentitiesOnly yes
+
