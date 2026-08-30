@@ -48,6 +48,14 @@
 (deftest build-runs-the-same-graph-as-create
   (is (= (steps-for :create :walter/compute) (steps-for :build :walter/compute))))
 
+(deftest focused-convergence-reaches-only-its-own-step
+  (is (= [:walter/converge-nix]
+         (steps-for :converge-nix :walter/start)))
+  (is (= [] (steps-for :converge-nix :walter/converge-nix)))
+  (is (= [:walter/converge-asdf]
+         (steps-for :converge-asdf :walter/start)))
+  (is (= [] (steps-for :converge-asdf :walter/converge-asdf))))
+
 (deftest delete-drops-the-ssh-block-before-destroying
   (testing "so a machine that is already gone still cleans up the workstation"
     (is (= [:walter/ansible-cleanup] (steps-for :delete :walter/start)))
@@ -72,6 +80,7 @@
                 :walter/compute :walter/ansible-bootstrap
                 :walter/ansible-local :walter/ansible-remote
                 :walter/emacs-packages
+                :walter/converge-nix :walter/converge-asdf
                 :walter/ansible-cleanup :walter/power-off :walter/power-on]]
     (is (contains? (set workflow/side-effecting-steps) step)
         (str step " must be skipped by --dry-run"))))
@@ -110,6 +119,10 @@
       (is (= 2 (:green/exit (start (assoc opts :green/event :create)))))
       (is (= 0 (:green/exit (start (assoc opts :green/event :create
                                           :green/dry-run true))))))))
+
+(deftest focused-convergence-needs-no-provider-credentials
+  (doseq [event [:converge-nix :converge-asdf]]
+    (is (= 0 (:green/exit (start (assoc vt/base :green/event event)))))))
 
 (deftest a-build-of-invalid-state-fails-before-rendering
   (let [result (start (assoc (dissoc vt/base :oci-subnet-id) :green/event :build))]
@@ -255,12 +268,13 @@
                          "walter {{ host_alias }} ANSIBLE MANAGED BLOCK")))))
 
 (deftest a-dry-run-touches-nothing
-  (let [dir (str (fs/create-temp-dir))
-        result (wf/run workflow/workflow
-                       (assoc vt/base
-                              :green/event :create
-                              :green/dry-run true
-                              :workdir dir
-                              :profile "walter-test"))]
-    (is (= 0 (:green/exit result)))
-    (is (empty? (fs/list-dir dir)))))
+  (doseq [event [:create :converge-nix :converge-asdf]]
+    (let [dir (str (fs/create-temp-dir))
+          result (wf/run workflow/workflow
+                         (assoc vt/base
+                                :green/event event
+                                :green/dry-run true
+                                :workdir dir
+                                :profile "walter-test"))]
+      (is (= 0 (:green/exit result)))
+      (is (empty? (fs/list-dir dir))))))

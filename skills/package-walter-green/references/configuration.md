@@ -215,13 +215,15 @@ edits made on the machine are never discarded — pulling is the user's call.
 | `login-shell` | Optional. A shell from `nix-packages`, made the account's login shell. |
 
 Resolved against `nixpkgs-unstable`. That is a channel branch and not a
-revision, so these track upstream: two creates months apart do not produce the
-same versions. Deliberate for a development machine — and it is what makes asdf
-0.20 reachable at all.
+revision, so a first install tracks upstream and `converge-nix` advances existing
+declared entries to its current revision. Deliberate for a development machine —
+and it is what makes current asdf reachable at all.
 
 The list is the machine's **baseline, not an inventory**. Anything installed by
 hand on the machine is invisible here and does not survive a delete; adding a
-name is what makes it come back.
+name is what makes it come back. `converge-nix` identifies declared entries by
+both their attribute and original nixpkgs URL, updates only stale matches, and
+preserves unrelated profile elements. Removing a name does not uninstall it.
 
 **Unfree packages install.** The one `nix profile add` runs with
 `NIXPKGS_ALLOW_UNFREE=1` and `--impure`, which are needed by each other: the
@@ -267,6 +269,18 @@ changed in the same commit.
 corepack installs its shims into that Node's own bin directory, which asdf does
 not expose until told to look again; the playbook reshims. Skip that and
 `corepack enable pnpm` reports success while `pnpm` stays command-not-found.
+
+## Focused convergence commands
+
+`converge-nix` and `converge-asdf` run the same Nix/asdf task sources as
+`create`, but only against the existing managed SSH aliases: the primary login
+and every configured seat. They do not read OpenTofu state or need provider and
+backend credentials. The machine must already exist and be running.
+
+`converge-nix` ensures the declared Nix entries exist and updates stale declared
+entries. `converge-asdf` installs the exact declared runtime versions and repeats
+Corepack enable/reshim. Both accept `--dry-run`; neither selects an unpinned
+latest asdf runtime.
 
 ## Dotfiles
 

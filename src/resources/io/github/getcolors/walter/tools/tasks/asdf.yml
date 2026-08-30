@@ -1,0 +1,69 @@
+---
+# Exact language runtime versions from colors.yml. This task file is shared by
+# the full create and the focused converge-asdf event.
+- name: Add the asdf plugins
+  ansible.builtin.command:
+    cmd: asdf plugin add {{ item.name }} {{ item.plugin | default('', true) }}
+  loop: <{ asdf-tools-json|safe }>
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+  register: walter_asdf_plugins
+  changed_when: "'already added' not in walter_asdf_plugins.stdout + walter_asdf_plugins.stderr"
+
+- name: Install the asdf versions
+  ansible.builtin.command:
+    cmd: asdf install {{ item.name }} {{ item.version }}
+  loop: <{ asdf-tools-json|safe }>
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+  register: walter_asdf_installs
+  changed_when: "'already installed' not in walter_asdf_installs.stdout + walter_asdf_installs.stderr"
+
+- name: Set the home asdf versions
+  ansible.builtin.command:
+    cmd: asdf set --home {{ item.name }} {{ item.version }}
+  loop: <{ asdf-tools-json|safe }>
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+  changed_when: false
+
+<% if login-shell-is-fish %>
+- name: Put asdf on PATH for fish
+  ansible.builtin.copy:
+    dest: "{{ ansible_env.HOME }}/.config/fish/conf.d/asdf.fish"
+    mode: "0644"
+    content: |
+      # Managed by walter. The Go asdf is reached through its shims alone.
+      fish_add_path --prepend {{ ansible_env.HOME }}/.asdf/shims
+<% endif %>
+
+- name: Put asdf on PATH for POSIX shells
+  ansible.builtin.blockinfile:
+    path: "{{ ansible_env.HOME }}/.profile"
+    create: true
+    mode: "0644"
+    marker: "# {mark} walter asdf"
+    block: |
+      case ":$PATH:" in
+        *":$HOME/.asdf/shims:"*) ;;
+        *) PATH="$HOME/.asdf/shims:$PATH"; export PATH ;;
+      esac
+
+<% if corepack-packages-json|not-empty %>
+# Corepack's shims belong to the selected Node installation, so changing Node
+# without repeating these two tasks can make pnpm disappear.
+- name: Enable the corepack package managers
+  ansible.builtin.command:
+    cmd: corepack enable {{ item }}
+  loop: <{ corepack-packages-json|safe }>
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.asdf/shims:{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+  changed_when: false
+
+- name: Reshim so the corepack binaries are reachable
+  ansible.builtin.command:
+    cmd: asdf reshim nodejs
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+  changed_when: false
+<% endif %>

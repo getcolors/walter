@@ -23,7 +23,8 @@
    [io.github.getcolors.once.ssh :as once-ssh]
    [io.github.getcolors.walter.github :as github]
    [io.github.getcolors.walter.utils :as utils]
-   [io.github.getcolors.walter.validate :as validate]))
+   [io.github.getcolors.walter.validate :as validate])
+  (:import [java.util Base64]))
 
 (def compute-tool
   "The compute stage directory, and half of its OpenTofu state key.
@@ -38,6 +39,8 @@
 (def ansible-seats-tool "walter-ansible-seats")
 (def ansible-local-tool "walter-ansible-local")
 (def ansible-remote-tool "walter-ansible-remote")
+(def converge-nix-tool "walter-converge-nix")
+(def converge-asdf-tool "walter-converge-asdf")
 (def emacs-packages-tool "walter-emacs-packages")
 
 (def ^:private walter-root "io.github.getcolors.walter.tools")
@@ -318,6 +321,22 @@
   [opts]
   (vec (distinct (validate/user-names opts))))
 
+(defn alias-inventory
+  "An inventory that deliberately resolves through Walter's managed SSH aliases.
+
+  Focused convergence events must not read OpenTofu state or call a provider
+  merely to rediscover an address already recorded in ~/.ssh/config. The
+  aliases also carry each login and the dedicated IdentityFile. A missing alias
+  therefore fails as an existing-machine prerequisite rather than falling back
+  to a build placeholder address."
+  [data seats]
+  (let [alias (or (:host-alias data) "walter")]
+    (json/generate-string
+     {:all {:hosts (apply array-map
+                          (concat [alias {}]
+                                  (mapcat (fn [s] [(str alias "-" s) {}]) seats)))}}
+     {:pretty true})))
+
 (defn inventory
   "The Ansible inventory for the one machine walter manages.
 
@@ -471,6 +490,13 @@
          :host-alias (utils/host-alias opts)
          :nix-package-flakerefs (nix-package-flakerefs opts)
          :nix-package-count (count (nix-package-names opts))
+         :nix-package-names-json (json/generate-string (vec (nix-package-names opts)))
+         :nix-package-names-b64 (.encodeToString
+                                 (Base64/getEncoder)
+                                 (.getBytes (json/generate-string
+                                             (vec (nix-package-names opts)))
+                                            "UTF-8"))
+         :nixpkgs-ref nixpkgs-ref
          :login-shell-is-fish (= "fish" (not-empty (str/trim (str (:login-shell opts)))))
          ;; Rendered as JSON rather than looped in the template: a JSON array is
          ;; a valid YAML flow sequence, so the playbook keeps one task with an
@@ -674,7 +700,13 @@
                ;; One host per login: the primary plus every seat, so the same
                ;; play provisions each home as its own user — no become_user,
                ;; no per-seat task surgery.
-               (raw-spec (str dir "/inventory.json") (inventory data (users opts)))]
+               (raw-spec (str dir "/inventory.json") (inventory data (users opts)))
+               ;; Shared sources: the focused convergence events render these
+               ;; same task files into their own stages.
+               (template-spec (walter-template "tasks" "nix-packages.yml")
+                              (str dir "/nix-packages.yml") data)
+               (template-spec (walter-template "tasks" "asdf.yml")
+                              (str dir "/asdf.yml") data)]
         rendered (sc/scaffold opts specs)]
     (if (or (= :build (:green/event opts))
             (= :delete (:green/event opts)))
@@ -692,6 +724,50 @@
         (if (wf/failed? result)
           result
           (github/delete-token-dir! result))))))
+
+(defn- converge-step
+  "Run one focused, existing-machine convergence through managed SSH aliases.
+
+  No provider or backend is consulted. The alias is the prerequisite and the
+  dedicated playbook checks the per-login binary before including the same task
+  source the full create uses."
+  [opts kind]
+  (let [{:keys [tool title binary binary-path task-file]}
+        (case kind
+          :nix {:tool converge-nix-tool
+                :title "Converge the declared Nix profile"
+                :binary "nix"
+                :binary-path "/nix/var/nix/profiles/default/bin/nix"
+                :task-file "nix-packages.yml"}
+          :asdf {:tool converge-asdf-tool
+                 :title "Converge the declared asdf runtimes"
+                 :binary "asdf"
+                 :binary-path "{{ ansible_env.HOME }}/.nix-profile/bin/asdf"
+                 :task-file "asdf.yml"})
+        dir (tool-dir opts tool)
+        data (assoc (data-fn opts)
+                    :converge-title title
+                    :converge-binary binary
+                    :converge-binary-path binary-path
+                    :converge-task-file task-file)
+        specs [(template-spec (walter-template "ansible-converge" "ansible.cfg")
+                              (str dir "/ansible.cfg") data)
+               (template-spec (walter-template "ansible-converge" "main.yml")
+                              (str dir "/main.yml") data)
+               (template-spec (walter-template "tasks" task-file)
+                              (str dir "/" task-file) data)
+               (raw-spec (str dir "/inventory.json")
+                         (alias-inventory data (users opts)))]
+        rendered (sc/scaffold opts specs)]
+    (ansible/ansible-step rendered
+                          {:dir dir
+                           :inventory "inventory.json"
+                           :playbooks {:create "main.yml"}
+                           :extra-vars (when (= kind :nix)
+                                         {:walter_nix_upgrade true})})))
+
+(defn converge-nix-step [opts] (converge-step opts :nix))
+(defn converge-asdf-step [opts] (converge-step opts :asdf))
 
 (defn emacs-packages-step
   "Start the Emacs package bootstrap on the machine and return without waiting.

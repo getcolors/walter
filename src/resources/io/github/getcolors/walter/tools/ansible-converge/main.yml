@@ -1,0 +1,21 @@
+---
+- name: <{ converge-title }>
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Check the focused convergence prerequisite
+      ansible.builtin.stat:
+        path: "<{ converge-binary-path }>"
+      register: walter_converge_prerequisite
+
+    - name: Refuse focused convergence before the machine has been created
+      ansible.builtin.assert:
+        that: walter_converge_prerequisite.stat.exists
+        fail_msg: >-
+          <{ converge-binary }> is not installed for {{ inventory_hostname }}.
+          Run `green create` first; focused convergence operates only on an
+          existing Walter machine.
+        success_msg: "<{ converge-binary }> is installed"
+
+    - name: Run the focused convergence tasks
+      ansible.builtin.include_tasks: <{ converge-task-file }>

@@ -39,6 +39,7 @@ the code before acting on it.
 ./green build                         # render the work directory only
 ./green create --dry-run              # print the graph, touch nothing
 ./green stop | start                  # power cycle (OCI and Vultr)
+./green converge-nix | converge-asdf  # focused tooling convergence on every login
 bb test                              # the unit suite, under babashka
 bb golden                            # every provider variant vs committed output
 bb golden:accept                     # regenerate after an intended change
@@ -113,6 +114,9 @@ delete           start ─ ansible-cleanup ─ compute
 stop             start ─ power-off
 
 start            start ─ power-on ─ ansible-local
+
+converge-nix     start ─ converge-nix
+converge-asdf    start ─ converge-asdf
 ```
 
 `github-token` is the one interactive step walter has, and it is first on
@@ -183,6 +187,8 @@ address and refreshes the managed SSH alias.
 | `:walter/ansible-seats` | `walter-ansible-seats` | only with `users`: creates each seat login — no sudo, `0700` home, the primary login's authorized keys — as the primary login with become; renders nothing without seats |
 | `:walter/ansible-local` | `walter-ansible-local` | the managed `Host <profile>` block in `~/.ssh/config` plus one `Host <profile>-<seat>` block per seat, with `IdentityFile`/`IdentitiesOnly` in keygen mode |
 | `:walter/ansible-remote` | `walter-ansible-remote` | ping, unprivileged cloudflared sysctls, nix, terminfo, and — when the gating key is set — the gh login and git identity, packages, shell, runtimes, Emacs, dotfiles, agent credentials, atuin; with seats, one inventory host per login so every home is provisioned as its own user |
+| `:walter/converge-nix` | `walter-converge-nix` | through the managed aliases, ensures declared Nix entries exist and advances only those entries on the primary login and every seat |
+| `:walter/converge-asdf` | `walter-converge-asdf` | through the managed aliases, installs exact declared asdf versions and refreshes Corepack shims on every login |
 | `:walter/emacs-packages` | `walter-emacs-packages` | starts the ELPA/MELPA bootstrap and does **not** wait for it |
 
 ### The GitHub identity and the machine keypair

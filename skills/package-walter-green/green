@@ -156,17 +156,20 @@
 ;; ---------------------------------------------------------------------------
 ;; CLI
 
-(def commands #{"build" "create" "delete" "stop" "start"})
+(def commands #{"build" "create" "delete" "stop" "start"
+                "converge-nix" "converge-asdf"})
 
 (def usage
-  (str "Usage: green <build|create|delete|stop|start> "
+  (str "Usage: green <build|create|delete|stop|start|converge-nix|converge-asdf> "
        "[-f|--file colors.yml] [--dry-run]\n"
        "\n"
        "  build    render the work directory only — no provider is contacted\n"
        "  create   provision the machine and record it in ~/.ssh/config\n"
        "  delete   destroy it, dropping the ssh block first\n"
        "  stop     power it off  (OCI/Vultr; a no-op elsewhere)\n"
-       "  start    power it on and refresh its address"))
+       "  start    power it on and refresh its address\n"
+       "  converge-nix   update declared Nix packages on every login\n"
+       "  converge-asdf  install declared asdf versions on every login"))
 
 (defn run
   "REPL-friendly entry point that returns the final opts map."

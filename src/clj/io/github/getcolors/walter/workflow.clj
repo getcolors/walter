@@ -10,6 +10,9 @@
 
       start            start ─ power-on ─ ansible-local
 
+      converge-nix     start ─ converge-nix
+      converge-asdf    start ─ converge-asdf
+
   `wire-fn` returns a different graph per `:green/event`, which is how ONCE
   already handles `:delete` — the two power verbs need no engine change at all.
 
@@ -221,6 +224,16 @@
       :walter/power-on      [power-on-step :walter/ansible-local]
       :walter/ansible-local [ansible-local-after-start])
 
+    :converge-nix
+    (case step
+      :walter/start        [start-step :walter/converge-nix]
+      :walter/converge-nix [tools/converge-nix-step])
+
+    :converge-asdf
+    (case step
+      :walter/start         [start-step :walter/converge-asdf]
+      :walter/converge-asdf [tools/converge-asdf-step])
+
     ;; :create and :build
     ;;
     ;; `seats` sits between bootstrap and the fork because ordering is load-
@@ -256,6 +269,7 @@
    :walter/compute :walter/ansible-bootstrap :walter/ansible-seats
    :walter/ansible-local :walter/ansible-remote
    :walter/emacs-packages
+   :walter/converge-nix :walter/converge-asdf
    :walter/ansible-cleanup :walter/ssh-cleanup
    :walter/power-off :walter/power-on])
 

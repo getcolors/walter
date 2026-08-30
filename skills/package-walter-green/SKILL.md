@@ -1,6 +1,6 @@
 ---
 name: package-walter-green
-description: Creates and operates a remote development machine with Green, OpenTofu and Ansible, and powers it off and on to stop paying for it while you sleep. Use when initializing a walter project, generating colors.yml, selecting a compute or state provider, building or dry-running configuration, provisioning or destroying the machine, or stopping and starting it.
+description: Creates and operates a remote development machine with Green, OpenTofu and Ansible, powers it off and on, and focuses Nix or asdf convergence across every login. Use when initializing a walter project, generating colors.yml, selecting providers, building or provisioning the machine, stopping or starting it, or converging declared Nix packages and asdf runtimes.
 license: MIT
 ---
 
@@ -13,7 +13,9 @@ directory. Walter provisions one machine, records it in `~/.ssh/config` so
 ## Requirements
 
 Babashka runs the launcher. `create` and `delete` also need OpenTofu and
-Ansible. `stop` and `start` need the `oci` CLI and a live session. With
+Ansible. `stop` and `start` need the provider's power credentials.
+`converge-nix` and `converge-asdf` need an already-created, running machine and
+its managed SSH aliases, but no provider or backend credentials. With
 `github-account` set, a real `create` also needs `gh` on the workstation — it
 runs GitHub's device flow as its first action. Provider credentials use
 `COLORS_PAR_*` variables, except OCI, which uses the profile named in
@@ -66,6 +68,8 @@ generating or changing desired state, and before any real `create` or `delete`.
 ./green create             # provision, and write the ssh config block
 ./green stop               # power off
 ./green start              # power on, and refresh the ssh config block
+./green converge-nix       # update declared Nix entries on every login
+./green converge-asdf      # install declared asdf versions on every login
 ./green delete             # destroy, dropping the ssh block first
 ```
 
@@ -140,6 +144,24 @@ and is expected. Do not report it as a provisioning failure.
 `nix` and `emacs` reach `PATH` via `/etc/profile.d/nix.sh`, a **login** shell
 mechanism: `ssh walter-oci` sees them, `ssh walter-oci emacs …` as a one-shot
 command does not.
+
+## Focused tooling convergence
+
+`converge-nix` and `converge-asdf` operate only on an existing, running machine.
+They use `ssh <profile>` and every `ssh <profile>-<seat>` alias, never OpenTofu
+state or a provider API. If an alias or prerequisite binary is absent, run
+`create`; if the machine is stopped, run `start`.
+
+`converge-nix` ensures every `nix-packages` entry exists, resolves the profile
+elements Walter owns from `nix profile list --json`, and advances only stale
+declared elements to the current `nixpkgs-unstable`. It preserves unrelated
+packages installed by the user and does not remove a former declaration.
+
+`converge-asdf` adds missing plugins, installs the exact `asdf-tools` versions,
+sets them for the home, and repeats Corepack enable/reshim so a Node change does
+not make pnpm disappear. It never chooses `latest` on its own.
+
+Both commands support `--dry-run`. A second real run must report no changes.
 
 ## Stopping and starting
 

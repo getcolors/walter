@@ -1,0 +1,57 @@
+---
+# The declared per-login Nix profile. `create` ensures the entries exist;
+# `converge-nix` additionally advances only those entries to the current
+# nixpkgs-unstable revision. User-installed profile elements are never touched.
+- name: Install the project's nix packages
+  ansible.builtin.command:
+    cmd: nix profile add --impure <{ nix-package-flakerefs }>
+  environment:
+    PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+    NIXPKGS_ALLOW_UNFREE: "1"
+  register: walter_nix_packages
+  changed_when: >-
+    walter_nix_packages.stderr_lines
+    | select('search', 'is already added') | list | length < <{ nix-package-count }>
+
+# Resolve profile element names from Nix's own JSON rather than assuming an
+# attribute such as google-cloud-sdk has the same element name. originalUrl
+# prevents a coincidentally named package from another flake being upgraded.
+- name: Resolve Walter's declared Nix profile elements
+  when: walter_nix_upgrade | default(false) | bool
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import base64, json, subprocess, sys
+        wanted = set(json.loads(base64.b64decode(sys.argv[1])))
+        profile = json.loads(subprocess.check_output(
+            ["nix", "profile", "list", "--json"], text=True))
+        target = json.loads(subprocess.check_output(
+            ["nix", "flake", "metadata", "--json", "<{ nixpkgs-ref }>"],
+            text=True))["url"]
+        elements = []
+        for name, value in profile.get("elements", {}).items():
+            attr = value.get("attrPath", "").rsplit(".", 1)[-1]
+            if (attr in wanted and
+                    value.get("originalUrl") == "<{ nixpkgs-ref }>" and
+                    value.get("url") != target):
+                elements.append(name)
+        print(json.dumps(sorted(elements)))
+      - <{ nix-package-names-b64 }>
+  environment:
+    PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+  register: walter_nix_elements
+  changed_when: false
+
+- name: Upgrade only Walter's declared Nix profile elements
+  when:
+    - walter_nix_upgrade | default(false) | bool
+    - walter_nix_elements.stdout | from_json | length > 0
+  ansible.builtin.command:
+    argv: "{{ ['nix', 'profile', 'upgrade', '--impure'] + (walter_nix_elements.stdout | from_json) }}"
+  environment:
+    PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+    NIXPKGS_ALLOW_UNFREE: "1"
+  register: walter_nix_upgrades
+  changed_when: "'upgrading ' in walter_nix_upgrades.stdout + walter_nix_upgrades.stderr"

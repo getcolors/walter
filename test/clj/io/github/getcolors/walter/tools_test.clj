@@ -153,6 +153,14 @@
                          ["all" "hosts"])
                  "dev")))
 
+(deftest focused-convergence-uses-only-managed-ssh-aliases
+  (let [hosts (get-in (json/parse-string
+                       (tools/alias-inventory {:host-alias "dev"} ["rose" "jack"]))
+                      ["all" "hosts"])]
+    (is (= ["dev" "dev-rose" "dev-jack"] (vec (keys hosts))))
+    (is (every? empty? (vals hosts))
+        "the SSH config supplies address, user and key; no state-derived IP is rendered")))
+
 ;; ---------------------------------------------------------------------------
 ;; the instance id
 
@@ -207,6 +215,40 @@
 ;; ---------------------------------------------------------------------------
 ;; the remote playbook
 
+(deftest focused-convergence-renders-the-shared-task-sources
+  (let [dir (str (fs/create-temp-dir))
+        base {:profile "p" :workdir dir :green/event :converge-asdf
+              :nix-packages ["asdf-vm"]
+              :asdf-tools [{:name "nodejs" :version "24.20.0"}]
+              :users ["rose" "jack"]}]
+    (with-redefs [ansible/ansible-step (fn [opts config]
+                                        (is (nil? (:private-key config)))
+                                        (is (not= false (:host-key-checking config)))
+                                        (assoc opts :green/exit 0))]
+      (tools/converge-asdf-step base))
+    (let [stage (tools/tool-dir base tools/converge-asdf-tool)
+          inventory (slurp (str stage "/inventory.json"))]
+      (is (fs/exists? (str stage "/asdf.yml")))
+      (is (str/includes? (slurp (str stage "/main.yml"))
+                         "include_tasks: asdf.yml"))
+      (is (str/includes? inventory "p-rose"))
+      (is (str/includes? inventory "p-jack")))))
+
+(deftest converge-nix-selects-only-stale-declared-nixpkgs-elements
+  (let [dir (str (fs/create-temp-dir))
+        base {:profile "p" :workdir dir :green/event :converge-nix
+              :nix-packages ["ripgrep"]}]
+    (with-redefs [ansible/ansible-step (fn [opts config]
+                                        (is (= true (get-in config
+                                                            [:extra-vars :walter_nix_upgrade])))
+                                        (assoc opts :green/exit 0))]
+      (tools/converge-nix-step base))
+    (let [tasks (slurp (str (tools/tool-dir base tools/converge-nix-tool)
+                            "/nix-packages.yml"))]
+      (is (str/includes? tasks "value.get(\"originalUrl\")"))
+      (is (str/includes? tasks "value.get(\"url\") != target"))
+      (is (str/includes? tasks "'nix', 'profile', 'upgrade', '--impure'")))))
+
 (defn- render-remote-playbook
   "Run the remote step as a build — which renders and returns without reaching
   for Ansible — and hand back the playbook it wrote."
@@ -218,7 +260,15 @@
                        :green/event :build}
                       opts)]
     (tools/ansible-remote-step merged)
-    (slurp (str (tools/tool-dir merged tools/ansible-remote-tool) "/main.yml"))))
+    (let [stage (tools/tool-dir merged tools/ansible-remote-tool)]
+      ;; The focused events and create deliberately consume the same rendered
+      ;; task files. Concatenate the configured ones for assertions that care
+      ;; about task details rather than the include boundary.
+      (str (slurp (str stage "/main.yml"))
+           (when (seq (:nix-packages merged))
+             (slurp (str stage "/nix-packages.yml")))
+           (when (seq (:asdf-tools merged))
+             (slurp (str stage "/asdf.yml")))))))
 
 (deftest the-remote-playbook-installs-nix-unconditionally
   (testing "nix is the one thing walter treats as part of what a development

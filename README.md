@@ -12,6 +12,8 @@ not paying for it overnight.
 ./green create             # provision, and record the ssh alias
 ./green stop               # power off
 ./green start              # power on, and refresh the alias
+./green converge-nix       # update declared Nix packages on every login
+./green converge-asdf      # install declared asdf versions on every login
 ./green delete             # destroy, dropping the ssh block first
 ```
 
@@ -93,6 +95,15 @@ install`, not a walter feature.
 provider has no power API walter can drive and exit 0. Both implementations act
 on immutable provider instance IDs and refresh the SSH alias from the live API
 after start; power state remains outside OpenTofu.
+
+`converge-nix` and `converge-asdf` are focused existing-machine operations. They
+connect through the managed SSH aliases to the primary login and every seat,
+without reading OpenTofu state or requiring provider credentials. The Nix event
+ensures the declared profile entries exist and advances only those entries to
+the current `nixpkgs-unstable` revision; manually installed profile elements are
+left alone. The asdf event installs the exact versions in `asdf-tools`, then
+re-enables and reshims any declared Corepack packages. Run `create` first, and
+`start` first when the machine is stopped.
 
 ## Development
 
