@@ -332,9 +332,14 @@
   [data seats]
   (let [alias (or (:host-alias data) "walter")]
     (json/generate-string
+     ;; `distinct` at the source rather than trusting the caller: an inventory
+     ;; is a JSON object, so a repeated seat would emit a duplicate key that
+     ;; every reader silently collapses — including the golden assertion that
+     ;; exists to police this file.
      {:all {:hosts (apply array-map
                           (concat [alias {}]
-                                  (mapcat (fn [s] [(str alias "-" s) {}]) seats)))}}
+                                  (mapcat (fn [s] [(str alias "-" s) {}])
+                                          (distinct seats))))}}
      {:pretty true})))
 
 (defn inventory
@@ -375,21 +380,6 @@
   to match whatever that revision ships."
   "github:NixOS/nixpkgs/nixpkgs-unstable")
 
-(defn nix-package-names
-  "The `nix-packages` entries, trimmed and with blanks dropped.
-
-  A YAML list is the shape colors.yml wants — it reads well and
-  `green.cli/keywordize` carries it through untouched. A plain string is accepted
-  too, and not as a convenience: `nix-packages` is otherwise the only non-scalar
-  key walter has, and `green.cli/read-pars` overlays `COLORS_PAR_*` onto flat keys
-  as strings. Without this, setting COLORS_PAR_NIX_PACKAGES would replace the
-  vector with a string that renders as one impossible package name."
-  [opts]
-  (let [names (:nix-packages opts)]
-    (->> (if (sequential? names) names (str/split (str names) #"\s+"))
-         (map (comp str/trim str))
-         (remove str/blank?))))
-
 (defn nix-package-flakerefs
   "The names as pinned flakerefs, space-separated for one `nix profile add`.
 
@@ -397,38 +387,9 @@
   rather than one per package, so nix resolves the set together and the profile
   takes a single generation."
   [opts]
-  (->> (nix-package-names opts)
+  (->> (validate/nix-package-names opts)
        (map #(str nixpkgs-ref "#" %))
        (str/join " ")))
-
-(defn asdf-tools
-  "The `asdf-tools` entries, normalised to {:name :version :plugin}.
-
-  `plugin` is optional: asdf resolves a bare name against its own plugin index,
-  and only a plugin outside that index — or one deliberately pinned to a fork —
-  needs the URL spelled out."
-  [opts]
-  (->> (:asdf-tools opts)
-       (keep (fn [t]
-               (let [name* (not-empty (str/trim (str (:name t))))
-                     version (not-empty (str/trim (str (:version t))))]
-                 (when (and name* version)
-                   (cond-> {:name name* :version version}
-                     (not-empty (str/trim (str (:plugin t))))
-                     (assoc :plugin (str/trim (str (:plugin t)))))))))
-       vec))
-
-(defn corepack-packages
-  "The `corepack-packages` names — package managers Node's own corepack enables.
-
-  Same string tolerance as `nix-package-names`, for the same `COLORS_PAR_*`
-  reason."
-  [opts]
-  (let [names (:corepack-packages opts)]
-    (->> (if (sequential? names) names (str/split (str names) #"\s+"))
-         (map (comp str/trim str))
-         (remove str/blank?)
-         vec)))
 
 (defn clone-orgs
   "The `clone-orgs` entries — GitHub organisations whose every source repository
@@ -489,12 +450,11 @@
          :user (or (not-empty (str (:user opts))) "root")
          :host-alias (utils/host-alias opts)
          :nix-package-flakerefs (nix-package-flakerefs opts)
-         :nix-package-count (count (nix-package-names opts))
-         :nix-package-names-json (json/generate-string (vec (nix-package-names opts)))
+         :nix-package-count (count (validate/nix-package-names opts))
          :nix-package-names-b64 (.encodeToString
                                  (Base64/getEncoder)
                                  (.getBytes (json/generate-string
-                                             (vec (nix-package-names opts)))
+                                             (vec (validate/nix-package-names opts)))
                                             "UTF-8"))
          :nixpkgs-ref nixpkgs-ref
          :login-shell-is-fish (= "fish" (not-empty (str/trim (str (:login-shell opts)))))
@@ -502,9 +462,9 @@
          ;; a valid YAML flow sequence, so the playbook keeps one task with an
          ;; Ansible `loop` instead of N generated ones, and the indentation
          ;; cannot drift.
-         :asdf-tools-json (let [tools (asdf-tools opts)]
+         :asdf-tools-json (let [tools (validate/asdf-tools opts)]
                             (when (seq tools) (json/generate-string tools)))
-         :corepack-packages-json (let [pkgs (corepack-packages opts)]
+         :corepack-packages-json (let [pkgs (validate/corepack-packages opts)]
                                    (when (seq pkgs) (json/generate-string pkgs)))
          ;; JSON for the same reason as asdf-tools above: one Ansible `loop`
          ;; over a flow sequence rather than N generated tasks whose
@@ -730,7 +690,8 @@
 
   No provider or backend is consulted. The alias is the prerequisite and the
   dedicated playbook checks the per-login binary before including the same task
-  source the full create uses."
+  source the full create uses. Host-key checking is deliberately left enabled:
+  focused convergence trusts the alias already established by create."
   [opts kind]
   (let [{:keys [tool title binary binary-path task-file]}
         (case kind
@@ -759,15 +720,31 @@
                (raw-spec (str dir "/inventory.json")
                          (alias-inventory data (users opts)))]
         rendered (sc/scaffold opts specs)]
-    (ansible/ansible-step rendered
-                          {:dir dir
-                           :inventory "inventory.json"
-                           :playbooks {:create "main.yml"}
-                           :extra-vars (when (= kind :nix)
-                                         {:walter_nix_upgrade true})})))
+    (if (= :build (:green/event opts))
+      rendered
+      (ansible/ansible-step rendered
+                            {:dir dir
+                             :inventory "inventory.json"
+                             :playbooks {:create "main.yml"}
+                             :extra-vars (when (= kind :nix)
+                                           {:walter_nix_upgrade true})}))))
 
-(defn converge-nix-step [opts] (converge-step opts :nix))
-(defn converge-asdf-step [opts] (converge-step opts :asdf))
+(defn converge-nix-step
+  "Converge the declared Nix profile, or pass through when nothing is declared.
+
+  The pass-through is what a `build` needs: validation refuses a real
+  `converge-nix` with an empty `nix-packages`, but a build of the same project
+  renders every stage, and a stage with nothing to converge should render no
+  directory at all rather than a play with an empty command — the gate
+  `emacs-packages` already applies to a project with no Emacs configuration."
+  [opts]
+  (if (seq (validate/nix-package-names opts)) (converge-step opts :nix) opts))
+
+(defn converge-asdf-step
+  "Converge the declared asdf runtimes, or pass through when none are declared.
+  Same build-time gate as `converge-nix-step`."
+  [opts]
+  (if (seq (validate/asdf-tools opts)) (converge-step opts :asdf) opts))
 
 (defn emacs-packages-step
   "Start the Emacs package bootstrap on the machine and return without waiting.

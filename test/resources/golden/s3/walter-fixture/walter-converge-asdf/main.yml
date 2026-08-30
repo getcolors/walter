@@ -1,0 +1,21 @@
+---
+- name: Converge the declared asdf runtimes
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Check the focused convergence prerequisite
+      ansible.builtin.stat:
+        path: "{{ ansible_env.HOME }}/.nix-profile/bin/asdf"
+      register: walter_converge_prerequisite
+
+    - name: Refuse focused convergence before the machine has been created
+      ansible.builtin.assert:
+        that: walter_converge_prerequisite.stat.exists
+        fail_msg: >-
+          asdf is not installed for {{ inventory_hostname }}.
+          Run `green create` first; focused convergence operates only on an
+          existing Walter machine.
+        success_msg: "asdf is installed"
+
+    - name: Run the focused convergence tasks
+      ansible.builtin.include_tasks: asdf.yml

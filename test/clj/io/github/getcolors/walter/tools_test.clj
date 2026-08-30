@@ -7,7 +7,8 @@
    [green.ansible :as ansible]
    [green.tofu :as tofu]
    [io.github.getcolors.once.ssh :as once-ssh]
-   [io.github.getcolors.walter.tools :as tools]))
+   [io.github.getcolors.walter.tools :as tools]
+   [io.github.getcolors.walter.validate :as validate]))
 
 (deftest stage-names-are-walter-specific
   (testing "remote state is keyed <profile>/<tool>, and only convention keeps
@@ -159,7 +160,13 @@
                       ["all" "hosts"])]
     (is (= ["dev" "dev-rose" "dev-jack"] (vec (keys hosts))))
     (is (every? empty? (vals hosts))
-        "the SSH config supplies address, user and key; no state-derived IP is rendered")))
+        "the SSH config supplies address, user and key; no state-derived IP is rendered"))
+  (testing "a repeated seat cannot emit a duplicate JSON key, which every reader
+           collapses silently — including the golden assertion over this file"
+    (is (= ["dev" "dev-rose"]
+           (vec (keys (get-in (json/parse-string
+                               (tools/alias-inventory {:host-alias "dev"} ["rose" "rose"]))
+                              ["all" "hosts"])))))))
 
 ;; ---------------------------------------------------------------------------
 ;; the instance id
@@ -234,6 +241,14 @@
       (is (str/includes? inventory "p-rose"))
       (is (str/includes? inventory "p-jack")))))
 
+(deftest focused-build-stages-are-gated-by-their-own-declarations
+  (let [dir (str (fs/create-temp-dir))
+        base {:profile "p" :workdir dir :green/event :build}]
+    (is (= base (tools/converge-nix-step base)))
+    (is (= base (tools/converge-asdf-step base)))
+    (is (not (fs/exists? (tools/tool-dir base tools/converge-nix-tool))))
+    (is (not (fs/exists? (tools/tool-dir base tools/converge-asdf-tool))))))
+
 (deftest converge-nix-selects-only-stale-declared-nixpkgs-elements
   (let [dir (str (fs/create-temp-dir))
         base {:profile "p" :workdir dir :green/event :converge-nix
@@ -247,6 +262,9 @@
                             "/nix-packages.yml"))]
       (is (str/includes? tasks "value.get(\"originalUrl\")"))
       (is (str/includes? tasks "value.get(\"url\") != target"))
+      (is (str/includes? tasks "parts[0] in (\"legacyPackages\", \"packages\")"))
+      (is (str/includes? tasks "attr = \".\".join(parts)"))
+      (is (not (str/includes? tasks "rsplit(\".\", 1)[-1]")))
       (is (str/includes? tasks "'nix', 'profile', 'upgrade', '--impure'")))))
 
 (defn- render-remote-playbook
@@ -359,9 +377,9 @@
            COLORS_PAR_* as strings — a string must not render as one impossible
            package name"
     (is (= ["asdf-vm" "ripgrep" "fd" "fish"]
-           (tools/nix-package-names {:nix-packages ["asdf-vm" "ripgrep" "fd" "fish"]})))
+           (validate/nix-package-names {:nix-packages ["asdf-vm" "ripgrep" "fd" "fish"]})))
     (is (= ["asdf-vm" "ripgrep" "fd" "fish"]
-           (tools/nix-package-names {:nix-packages "asdf-vm ripgrep fd fish"})))
+           (validate/nix-package-names {:nix-packages "asdf-vm ripgrep fd fish"})))
     (is (= "" (tools/nix-package-flakerefs {})))
     (is (= "" (tools/nix-package-flakerefs {:nix-packages []}))
         "an empty list is the same intent as no key at all")

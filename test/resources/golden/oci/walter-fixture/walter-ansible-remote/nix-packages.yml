@@ -23,7 +23,7 @@
       - python3
       - -c
       - |
-        import base64, json, subprocess, sys
+        import base64, json, re, subprocess, sys
         wanted = set(json.loads(base64.b64decode(sys.argv[1])))
         profile = json.loads(subprocess.check_output(
             ["nix", "profile", "list", "--json"], text=True))
@@ -32,7 +32,13 @@
             text=True))["url"]
         elements = []
         for name, value in profile.get("elements", {}).items():
-            attr = value.get("attrPath", "").rsplit(".", 1)[-1]
+            parts = value.get("attrPath", "").split(".")
+            # Nix may qualify the attribute with its output and system. Strip
+            # only that known prefix: an unfamiliar shape must fail closed.
+            if (len(parts) > 2 and parts[0] in ("legacyPackages", "packages")
+                    and re.fullmatch(r"[A-Za-z0-9_]+-[A-Za-z0-9_]+", parts[1])):
+                parts = parts[2:]
+            attr = ".".join(parts)
             if (attr in wanted and
                     value.get("originalUrl") == "github:NixOS/nixpkgs/nixpkgs-unstable" and
                     value.get("url") != target):
@@ -54,4 +60,7 @@
     PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
     NIXPKGS_ALLOW_UNFREE: "1"
   register: walter_nix_upgrades
+  # Nix currently announces an advanced element with `upgrading `. As with the
+  # install warnings above, wording changes can misreport Ansible's changed bit
+  # but cannot change what Nix installed.
   changed_when: "'upgrading ' in walter_nix_upgrades.stdout + walter_nix_upgrades.stderr"

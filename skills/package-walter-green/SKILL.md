@@ -161,7 +161,11 @@ packages installed by the user and does not remove a former declaration.
 sets them for the home, and repeats Corepack enable/reshim so a Node change does
 not make pnpm disappear. It never chooses `latest` on its own.
 
-Both commands support `--dry-run`. A second real run must report no changes.
+Both commands support `--dry-run`, and every task is safe to run again.
+`converge-asdf` reports no change once its exact versions are converged.
+`converge-nix` reports a change when Nix advances an element; that flag follows
+Nix's current `upgrading ` wording, so an upstream rewording can misreport the
+flag without changing what is installed.
 
 ## Stopping and starting
 
@@ -204,3 +208,9 @@ Consequences worth telling the user about:
   from the account the machine is meant to act as, or fix `github-account`.
 - **A contract mismatch** — the pinned commit is older than this launcher.
   Re-copy `green` from an updated skill; nothing inside the project fixes it.
+- **Focused convergence reports that a host key changed** — unlike create,
+  `converge-nix` and `converge-asdf` deliberately keep SSH host-key checking
+  enabled. For the narrow same-address/different-key case after a rebuild, run
+  `ssh-keygen -R <address-from-the-error>` and retry. Use the address SSH names,
+  not the managed alias; every seat shares that address. Hashed `known_hosts`
+  entries cannot be repaired reliably by eye.

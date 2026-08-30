@@ -78,6 +78,32 @@ build_variant no-infra COLORS_PAR_PROVIDER_COMPUTE=no-infra
 build_variant s3 COLORS_PAR_PROVIDER_BACKEND=s3
 build_variant r2 COLORS_PAR_PROVIDER_BACKEND=r2
 
+# Focused convergence resolves entirely through the managed SSH aliases. Parse
+# the inventory rather than grepping it: a grep passes on a missing or extra
+# host, and on host vars that appear anywhere in the file. Duplicate keys are
+# not checkable here — a JSON object collapses them before any reader sees
+# them — so `alias-inventory` deduplicates at the source instead.
+for v in oci oci-pinned hcloud digitalocean vultr yandex no-infra s3 r2; do
+  for stage in walter-converge-nix walter-converge-asdf; do
+    inventory="$tmp/$v/walter-fixture/$stage/inventory.json"
+    [ -f "$inventory" ] || {
+      echo "golden: FAIL — $v did not render $stage" >&2
+      exit 1
+    }
+    bb -e '(require (quote [cheshire.core :as json]))
+           (let [hosts (get-in (json/parse-string (slurp (first *command-line-args*)))
+                               ["all" "hosts"])
+                 expected ["walter-fixture" "walter-fixture-jack" "walter-fixture-emma"]]
+             (when-not (= expected (vec (keys hosts)))
+               (binding [*out* *err*] (println "unexpected focused inventory hosts:" (vec (keys hosts))))
+               (System/exit 1))
+             (when-not (every? empty? (vals hosts))
+               (binding [*out* *err*] (println "focused inventory contains host vars:" hosts))
+               (System/exit 1)))' "$inventory"
+  done
+done
+echo "  ok — focused stages use exactly the managed aliases and no host vars"
+
 # --------------------------------------------------------------------------
 # The resource address walter's extra output depends on.
 #

@@ -391,3 +391,42 @@
            list key here"
     (is (= ["jack" "emma"] (vec (validate/user-names {:users "jack emma"}))))
     (is (= [] (errors-matching (assoc base :users "jack emma") #":users")))))
+
+;; ---------------------------------------------------------------------------
+;; focused convergence
+
+(deftest focused-convergence-refuses-empty-desired-state
+  (is (= [":converge-nix needs at least one entry in :nix-packages — there is nothing to converge"]
+         (errors-matching (assoc base :green/event :converge-nix)
+                          #"nothing to converge")))
+  (is (= [":converge-asdf needs at least one entry in :asdf-tools — there is nothing to converge"]
+         (errors-matching (assoc base :green/event :converge-asdf)
+                          #"nothing to converge"))))
+
+(deftest malformed-focused-entries-normalise-to-nothing
+  (is (seq (errors-matching (assoc base :green/event :converge-nix
+                                        :nix-packages [" " ""])
+                            #":converge-nix")))
+  (is (seq (errors-matching (assoc base :green/event :converge-asdf
+                                        :asdf-tools [{:name " " :version "1"}
+                                                     {:name "ruby" :version ""}])
+                            #":converge-asdf"))))
+
+(deftest normal-create-and-build-do-not-require-focused-declarations
+  (doseq [event [:create :build]]
+    (is (= [] (errors-matching (assoc base :green/event event)
+                               #"nothing to converge")))))
+
+(deftest dependent-rules-use-the-same-normalised-entries
+  (testing "a malformed entry cannot make a usable asdf declaration disappear from its prerequisite rule"
+    (is (seq (errors-matching (assoc base :asdf-tools [{:name " " :version "1"}
+                                                        {:name "ruby" :version "3.4.1"}]
+                                      :nix-packages ["ripgrep"])
+                              #":asdf-tools needs"))))
+  (testing "a blank corepack entry renders nothing, so it demands no runtime"
+    (is (= [] (errors-matching (assoc base :corepack-packages ["  " ""])
+                               #":corepack-packages needs"))))
+  (testing "a malformed nodejs entry cannot satisfy Corepack's prerequisite"
+    (is (seq (errors-matching (assoc base :corepack-packages ["pnpm"]
+                                      :asdf-tools [{:name "nodejs" :version " "}])
+                              #":corepack-packages needs")))))

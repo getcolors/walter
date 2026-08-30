@@ -229,6 +229,59 @@
          (map (comp str/trim str))
          (remove str/blank?))))
 
+(defn nix-package-names
+  "The usable `nix-packages` entries, trimmed and with blanks dropped.
+
+  A YAML list is the shape colors.yml wants — it reads well and
+  `green.cli/keywordize` carries it through untouched. A plain string is accepted
+  too, and not as a convenience: `nix-packages` is otherwise the only non-scalar
+  key walter has, and `green.cli/read-pars` overlays `COLORS_PAR_*` onto flat keys
+  as strings. Without this, setting COLORS_PAR_NIX_PACKAGES would replace the
+  vector with a string that renders as one impossible package name.
+
+  It lives here rather than in `tools` because the rules and the templates have
+  to agree on what counts as declared: an entry that normalizes away must not
+  satisfy a prerequisite rule while rendering nothing."
+  [opts]
+  (let [names (:nix-packages opts)]
+    (->> (if (sequential? names) names (str/split (str names) #"\s+"))
+         (map (comp str/trim str))
+         (remove str/blank?))))
+
+(defn asdf-tools
+  "The usable `asdf-tools` entries, normalised to {:name :version :plugin}.
+
+  `plugin` is optional: asdf resolves a bare name against its own plugin index,
+  and only a plugin outside that index — or one deliberately pinned to a fork —
+  needs the URL spelled out. An entry missing either a name or a version is
+  dropped rather than rendered, which is why the rules read this and not the raw
+  key: a half-written entry that renders no task must not satisfy the
+  `asdf-vm` or Corepack prerequisites either."
+  [opts]
+  (->> (:asdf-tools opts)
+       (keep (fn [t]
+               (let [name* (not-empty (str/trim (str (:name t))))
+                     version (not-empty (str/trim (str (:version t))))]
+                 (when (and name* version)
+                   (cond-> {:name name* :version version}
+                     (not-empty (str/trim (str (:plugin t))))
+                     (assoc :plugin (str/trim (str (:plugin t)))))))))
+       vec))
+
+(defn corepack-packages
+  "The usable `corepack-packages` names — package managers Node's own corepack
+  enables.
+
+  Same string tolerance as `nix-package-names`, for the same `COLORS_PAR_*`
+  reason, and here for the same agreement reason as `asdf-tools`: a blank entry
+  renders no corepack task, so it must not demand a `nodejs` runtime either."
+  [opts]
+  (let [names (:corepack-packages opts)]
+    (->> (if (sequential? names) names (str/split (str names) #"\s+"))
+         (map (comp str/trim str))
+         (remove str/blank?)
+         vec)))
+
 (defn state-errors
   "Everything wrong with `opts` that does not depend on credentials, as a vector
   of messages. Empty means the desired state is renderable."
@@ -334,22 +387,25 @@
     ;; binary that will not exist. Caught here rather than on the machine,
     ;; because the failure there is a user whose shell does not start.
     (let [shell (not-empty (str/trim (str (:login-shell opts))))
-          packages (let [p (:nix-packages opts)]
-                     (set (map (comp str/trim str)
-                               (if (sequential? p) p (str/split (str p) #"\s+")))))]
+          packages (set (nix-package-names opts))
+          tools (asdf-tools opts)]
       (concat
+       (when (and (= :converge-nix (:green/event opts)) (empty? packages))
+         [":converge-nix needs at least one entry in :nix-packages — there is nothing to converge"])
+       (when (and (= :converge-asdf (:green/event opts)) (empty? tools))
+         [":converge-asdf needs at least one entry in :asdf-tools — there is nothing to converge"])
        (when (and shell (not (contains? packages shell)))
          [(str ":login-shell " (pr-str shell) " is not in :nix-packages — "
                "the shell has to be installed before it can be set")])
        ;; asdf is not special-cased anywhere: it reaches the machine as an entry
        ;; in :nix-packages like everything else, so asking for tools without it
        ;; renders a playbook whose every asdf task fails.
-       (when (and (seq (:asdf-tools opts)) (not (contains? packages "asdf-vm")))
+       (when (and (seq tools) (not (contains? packages "asdf-vm")))
          [(str ":asdf-tools needs \"asdf-vm\" in :nix-packages — "
                "nothing else puts asdf on the machine")])
        ;; corepack is part of Node, not a package of its own.
-       (when (and (seq (:corepack-packages opts))
-                  (not (some #(= "nodejs" (str (:name %))) (:asdf-tools opts))))
+       (when (and (seq (corepack-packages opts))
+                  (not (some #(= "nodejs" (:name %)) tools)))
          [(str ":corepack-packages needs a \"nodejs\" entry in :asdf-tools — "
                "corepack ships inside Node and cannot be installed separately")])
        ;; The dotfiles checkout's Green launcher is a Babashka script, and

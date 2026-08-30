@@ -105,6 +105,10 @@ left alone. The asdf event installs the exact versions in `asdf-tools`, then
 re-enables and reshims any declared Corepack packages. Run `create` first, and
 `start` first when the machine is stopped.
 
+Every focused task is safe to run again. Asdf reports no change once converged;
+Nix reports a change when it advances an element, using Nix's current output
+wording for that changed flag.
+
 ## Development
 
 ```sh

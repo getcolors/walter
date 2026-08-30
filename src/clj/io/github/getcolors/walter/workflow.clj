@@ -234,7 +234,21 @@
       :walter/start         [start-step :walter/converge-asdf]
       :walter/converge-asdf [tools/converge-asdf-step])
 
-    ;; :create and :build
+    ;; :build is :create plus the two focused stages, and is derived from it
+    ;; rather than spelled out a second time: a create graph written twice is a
+    ;; create graph that eventually differs from itself. The focused steps hang
+    ;; off the same fork as the two Ansible stages — they render from desired
+    ;; state alone, so nothing orders them against anything — and they render
+    ;; only, because `converge-step` returns after scaffolding on :build.
+    :build
+    (case step
+      :walter/converge-nix  [tools/converge-nix-step]
+      :walter/converge-asdf [tools/converge-asdf-step]
+      (cond-> (vec (wire-fn step (assoc run-opts :green/event :create)))
+        (= :walter/ansible-seats step)
+        (into [:walter/converge-nix :walter/converge-asdf])))
+
+    ;; :create
     ;;
     ;; `seats` sits between bootstrap and the fork because ordering is load-
     ;; bearing on both sides: it must follow the Vultr bootstrap (it connects

@@ -282,6 +282,11 @@ entries. `converge-asdf` installs the exact declared runtime versions and repeat
 Corepack enable/reshim. Both accept `--dry-run`; neither selects an unpinned
 latest asdf runtime.
 
+Every task is safe to run again. Asdf reports no change once converged. Nix
+reports a change when it actually advances an element; its changed flag reads
+Nix's current output wording, so wording changes can affect reporting without
+affecting the installed profile.
+
 ## Dotfiles
 
 | Key | Meaning |

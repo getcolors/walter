@@ -15,6 +15,16 @@
   [event step]
   (rest (workflow/wire-fn step {:green/event event})))
 
+(defn- reachable
+  "Every node reachable from start, including start, across the branching DAG."
+  [event]
+  (loop [seen #{} pending [:walter/start]]
+    (if-let [step (first pending)]
+      (if (contains? seen step)
+        (recur seen (rest pending))
+        (recur (conj seen step) (concat (rest pending) (steps-for event step))))
+      seen)))
+
 ;; ---------------------------------------------------------------------------
 ;; the graphs
 
@@ -45,8 +55,16 @@
     (is (= [:walter/ssh-cleanup] (steps-for :delete :walter/compute)))
     (is (= [:walter/ansible-local] (steps-for :start :walter/power-on)))))
 
-(deftest build-runs-the-same-graph-as-create
-  (is (= (steps-for :create :walter/compute) (steps-for :build :walter/compute))))
+(deftest build-renders-focused-stages-that-create-never-runs
+  (let [create #{:walter/start :walter/github-token :walter/compute
+                 :walter/ansible-bootstrap :walter/ansible-seats
+                 :walter/ansible-local :walter/ansible-remote
+                 :walter/emacs-packages}
+        build (conj create :walter/converge-nix :walter/converge-asdf)]
+    (is (= create (reachable :create)))
+    (is (= build (reachable :build)))
+    (is (not (contains? (reachable :create) :walter/converge-nix)))
+    (is (not (contains? (reachable :create) :walter/converge-asdf)))))
 
 (deftest focused-convergence-reaches-only-its-own-step
   (is (= [:walter/converge-nix]
@@ -121,8 +139,10 @@
                                           :green/dry-run true))))))))
 
 (deftest focused-convergence-needs-no-provider-credentials
-  (doseq [event [:converge-nix :converge-asdf]]
-    (is (= 0 (:green/exit (start (assoc vt/base :green/event event)))))))
+  (doseq [[event declaration] [[:converge-nix {:nix-packages ["ripgrep"]}]
+                               [:converge-asdf {:nix-packages ["asdf-vm"]
+                                                :asdf-tools [{:name "ruby" :version "3.4.1"}]}]]]
+    (is (= 0 (:green/exit (start (merge vt/base declaration {:green/event event})))))))
 
 (deftest a-build-of-invalid-state-fails-before-rendering
   (let [result (start (assoc (dissoc vt/base :oci-subnet-id) :green/event :build))]
@@ -268,13 +288,16 @@
                          "walter {{ host_alias }} ANSIBLE MANAGED BLOCK")))))
 
 (deftest a-dry-run-touches-nothing
-  (doseq [event [:create :converge-nix :converge-asdf]]
+  (doseq [[event declaration] [[:create {}]
+                               [:converge-nix {:nix-packages ["ripgrep"]}]
+                               [:converge-asdf {:nix-packages ["asdf-vm"]
+                                                :asdf-tools [{:name "ruby" :version "3.4.1"}]}]]]
     (let [dir (str (fs/create-temp-dir))
           result (wf/run workflow/workflow
-                         (assoc vt/base
-                                :green/event event
-                                :green/dry-run true
-                                :workdir dir
-                                :profile "walter-test"))]
+                         (merge vt/base declaration
+                                {:green/event event
+                                 :green/dry-run true
+                                 :workdir dir
+                                 :profile "walter-test"}))]
       (is (= 0 (:green/exit result)))
       (is (empty? (fs/list-dir dir))))))

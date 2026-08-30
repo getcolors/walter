@@ -375,3 +375,36 @@ every project after a repin or they keep running the old pin:
 cp skills/package-walter-green/green ../walter-oci/green
 cp skills/package-walter-green/green ../walter-oci/.agents/skills/package-walter-green/green
 ```
+
+The never-migrate rule has one narrow exemption: an existing deployment may
+receive a pin whose only consumer-visible effect is new launcher verbs. Both
+conditions below must hold over the cumulative delta from the deployment's
+pinned SHA to the candidate SHA; a later launcher-only commit does not hide an
+earlier template change.
+
+1. The change allowlist contains only command registration, the focused events'
+   own wiring, steps and resources, tests, and documentation. Any change to an
+   existing event's steps, templates, validation, credentials, or behaviour
+   disqualifies the bump even when rendered bytes happen to match.
+2. Render the deployment's own `colors.yml` at both SHAs with
+   `WALTER_LIB_ROOT`, using a distinct `COLORS_PAR_WORKDIR` for each, then run
+   `diff -qr --exclude=walter-converge-nix --exclude=walter-converge-asdf`
+   over the two profile directories. Exit 0 is required. This proves build-
+   render equivalence, not create equivalence; the allowlist covers shared
+   stages that branch on `:green/event`.
+
+```sh
+# Repeat the first two commands for <deployment-pinned-sha> and <candidate-sha>.
+git -C ~/code/getcolors/walter worktree add "$tmp/src-$sha" "$sha"
+(cd <deployment> && WALTER_LIB_ROOT="$tmp/src-$sha" \
+  COLORS_PAR_WORKDIR="$tmp/out-$sha" ./green build)
+diff -qr --exclude=walter-converge-nix --exclude=walter-converge-asdf \
+  "$tmp/out-<pinned>/<profile>" "$tmp/out-<candidate>/<profile>"
+```
+
+Use temporary worktrees and workdirs so stale output cannot contaminate the
+comparison. `WALTER_LIB_ROOT` is only a qualification aid: it exercises a
+working-tree library, not the stamped artifact a deployment ultimately runs.
+This change itself does not qualify because `tasks/nix-packages.yml` is also
+rendered by create. In particular, a deployment pinned at `d743117` has no
+qualifying path to this branch; no rollout is implied.
