@@ -50,7 +50,7 @@
 ;; cannot resolve its own library says so rather than inventing a SHA or
 ;; silently falling back to whatever is lying around. `bb pin` refuses to stamp
 ;; a dirty or unpushed HEAD for the same reason.
-(def ^:private walter-sha "d7431173db29bd335c7b431bcd44086ce89b283e")
+(def ^:private walter-sha "16d53489ae8f76c5a40b5d7f69e64e3aa7ba60e0")
 
 (def ^:private walter-git-url "https://github.com/getcolors/walter.git")
 (def ^:private once-git-url "https://github.com/getcolors/once.git")
