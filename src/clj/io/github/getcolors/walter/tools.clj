@@ -1,13 +1,5 @@
 (ns io.github.getcolors.walter.tools
-  "The three step functions, their template specs, and the generated inventory.
-
-  Walter reuses exactly one thing from ONCE here: the compute provider templates,
-  by classpath keyword. That is the valuable part — the provider HCL, the
-  pinned-image branch, the ForceNew commentary — and it is a *resource*, which
-  `scripts/golden.sh` can watch, rather than a function signature ONCE is free
-  to reshape. Everything else in this namespace is walter's own, including both
-  Ansible stages: reusing ONCE's `ansible-local` would mean an unrelated change
-  there rewriting ~/.ssh/config on the operator's workstation at pin-bump time."
+  "Application tooling and seat lifecycle around shared library compute."
   (:require
    [cheshire.core :as json]
    [clojure.java.io :as io]
@@ -16,11 +8,14 @@
    [green.ansible :as ansible]
    [green.cli :as green-cli]
    [green.process :as process]
-   [green.providers :as provider-ops]
    [green.scaffold :as sc]
-   [green.tofu :as tofu]
    [green.workflow :as wf]
-   [io.github.getcolors.once.ssh :as once-ssh]
+   [io.github.getcolors.compute :as library]
+   [io.github.getcolors.compute-planning :as planning]
+   [io.github.getcolors.compute-orchestration :as orchestration]
+   [io.github.getcolors.compute-inspection :as inspection]
+   [io.github.getcolors.compute-ssh :as ssh]
+   [io.github.getcolors.walter.compute :as compute]
    [io.github.getcolors.walter.github :as github]
    [io.github.getcolors.walter.utils :as utils]
    [io.github.getcolors.walter.validate :as validate])
@@ -44,7 +39,6 @@
 (def emacs-packages-tool "walter-emacs-packages")
 
 (def ^:private walter-root "io.github.getcolors.walter.tools")
-(def ^:private once-root "io.github.getcolors.once.tools")
 
 (def ^:private template-opts
   "Selmer reads `<{ var }>` and `<% if %>`, leaving `{{ }}` and `{% %}` to Jinja2
@@ -60,10 +54,6 @@
   [opts tool]
   (green-cli/stage-dir opts tool {:default-profile "walter"}))
 
-(defn- once-template
-  [tool provider file]
-  (keyword (str once-root "." tool "." provider) file))
-
 (defn- walter-template
   [tool file]
   (keyword (str walter-root "." tool) file))
@@ -75,238 +65,71 @@
 (defn- raw-spec [target content]
   (sc/content-spec target content))
 
-(defn- credential-env
-  "Environment additions for the providers in `slots`, plus the state backend —
-  every stage reads and writes state, so the backend credentials belong to all of
-  them. Unset credentials are omitted, so build and dry-run stay credential-free."
-  [opts & slots]
-  (provider-ops/tool-env validate/providers opts
-                         (conj (vec slots) :provider-backend)))
+(defn- compute-json [value indent]
+  (let [padding #(apply str (repeat % " "))]
+    (cond
+      (map? value) (if (empty? value) "{}"
+                      (str "{\n" (str/join ",\n" (for [[key item] (sort-by (comp name key) value)]
+                                                       (str (padding (+ indent 2)) (json/generate-string key) ": " (compute-json item (+ indent 2)))))
+                           "\n" (padding indent) "}"))
+      (sequential? value) (if (empty? value) "[]"
+                              (str "[\n" (str/join ",\n" (map #(str (padding (+ indent 2)) (compute-json % (+ indent 2))) value)) "\n" (padding indent) "]"))
+      :else (json/generate-string value))))
 
-(defn backend-credential-env
-  "Environment additions for a process that only reads OpenTofu state. Provider
-  credentials are left out: reading state never calls a provider API."
-  [opts]
-  (credential-env opts))
-
-(defn fallback-compute-params
-  "What a build or a dry-run stands in for the values only a real apply knows.
-  Rendering must never need state, or `build` would stop being credential-free."
-  [{:keys [profile provider-compute] :as opts}]
-  (let [name (or profile "walter")]
-    (case provider-compute
-      "oci" {:ip "192.168.0.1" :sudoer "ubuntu" :uid "1001" :name name :user "ubuntu"}
-      "yandex" {:ip "192.168.0.1" :sudoer "ubuntu" :uid "1000" :name name :user "ubuntu"}
-      "vultr" {:ip "192.168.0.1" :sudoer "ubuntu" :uid "1000" :name name :user "ubuntu"}
-      "no-infra" (cond-> {:ip (or (:no-infra-compute-ip opts) "192.168.0.1")
-                          :sudoer (or (:no-infra-compute-sudoer opts) "root")
-                          :name name
-                          :user (or (:no-infra-compute-user opts) "root")}
-                   (:no-infra-compute-uid opts) (assoc :uid (:no-infra-compute-uid opts)))
-      {:ip "192.168.0.1" :sudoer "root" :name name :user "root"})))
-
-;; ---------------------------------------------------------------------------
-;; the machine-access keypair
-
-(def ^:private keygen-timeout-ms 30000)
-
-(def ^:private build-placeholder-dir
-  "The `~/.ssh` path a build renders in place of the real one — a stable
-  stand-in for the operator's home directory. Walter's goldens are committed,
-  so a build must produce the same bytes on every workstation — ONCE's own
-  builds carry the real absolute path because nothing there commits a
-  rendered tree."
-  "/home/build-placeholder/.ssh")
-
-(defn machine-key-file
-  "The private half of the machine keypair — `~/.ssh/<profile>` per the SSH
-  Keypair Standard (workspace standards/ssh-keypair.md) — or nil in opt-out
-  mode.
-
-  Named exactly by profile so two walter deployments cannot share a key by
-  accident: the profile already keys remote state, so it is globally unique,
-  which is what makes the operator's flat `~/.ssh` safe to share. Living in
-  `~/.ssh` rather than the checkout keeps key material out of every git tree
-  and gives the operator one predictable place to copy credentials from.
-  Unlike v2's `compute-keygen`, the file does not survive delete — the cleanup
-  step removes it after a successful destroy, which is what lets an existing
-  key without state mean what the standard says it means."
-  [opts]
-  (when (validate/keygen? opts)
-    (once-ssh/private-key-path opts)))
-
-(defn machine-key-ssh-path
-  "What the rendered ssh-config block's IdentityFile names: the literal
-  `~/.ssh/<profile>` form, on every event — the SSH Config Standard's spelling
-  (workspace standards/ssh-config.md §3). ssh_config expands the tilde itself,
-  the line survives the config travelling to a workstation whose home is not
-  /home/<user>, and builds are byte-identical across workstations with no
-  placeholder needed. The tofu-side key paths in `with-machine-key` still
-  carry real or placeholder absolute paths: HCL's file() does not expand ~."
-  [opts]
-  (when (validate/keygen? opts)
-    (str "~/.ssh/" (or (:profile opts) "walter"))))
-
-(defn with-machine-key
-  "ONCE's standard template values, with two walter-isms on top. On :build the
-  paths are the stable placeholder, because walter commits its rendered goldens
-  and ONCE does not. And `:compute-pubkey` is filled with the public key
-  content for every keygen provider, not only Yandex, because the Vultr
-  bootstrap play interpolates it to seed ubuntu's authorized key. Opt-out opts
-  pass through untouched."
-  [opts]
-  (if-not (validate/keygen? opts)
-    opts
-    (let [build? (= :build (:green/event opts))
-          opts (once-ssh/with-machine-key opts (not build?))
-          pub-file (io/file (once-ssh/public-key-path opts))
-          content (if (and (not build?) (.exists pub-file))
-                    (str/trim (slurp pub-file))
-                    once-ssh/placeholder-public)
-          opts (assoc opts :compute-pubkey content)]
-      (if-not build?
-        opts
-        (let [profile (or (:profile opts) "walter")
-              prv (str build-placeholder-dir "/" profile)
-              pub (str prv ".pub")
-              k (get once-ssh/machine-key-keys (str (:provider-compute opts)))]
-          (cond-> (assoc opts :ssh-private-key-path prv :ssh-public-key-path pub)
-            (and k (not= k :compute-pubkey)) (assoc k pub)))))))
-
-(defn- compute-state-output
-  "The compute stage's applied params, or nil when no state is readable — the
-  best-effort read the standard's create matrix keys on."
-  [opts]
+(defn compute-step [opts]
   (try
-    (some-> (tofu/outputs (tool-dir opts compute-tool) (backend-credential-env opts))
-            :params walk/keywordize-keys)
-    (catch Exception _ nil)))
+    (let [planning? (or (= :build (:green/event opts)) (:green/dry-run opts))
+          result (if planning?
+                   (planning/plan-deployment opts (compute/topology opts) (compute/requirements opts))
+                   (orchestration/orchestrate opts (compute/topology opts) (compute/requirements opts)))]
+      (when planning?
+        (doseq [[stage key] (cons ["shared" (get-in result [:state_keys :shared])]
+                                 (map (fn [[id key]] [(str "nodes/" (name id)) key]) (get-in result [:state_keys :nodes]))) ]
+          (let [target (io/file (tool-dir opts compute-tool) stage "backend.tf.json")]
+            (io/make-parents target)
+            (spit target (str (compute-json (:config (library/backend-plan opts key)) 0) "\n"))))
+        (doseq [[stage documents] (cons ["shared" (get-in result [:documents :shared])]
+                                      (map (fn [[id documents]] [(str "nodes/" id) documents]) (get-in result [:documents :nodes])))
+                [filename document] documents]
+          (let [target (io/file (tool-dir opts compute-tool) stage filename)]
+            (io/make-parents target)
+            (spit target (str (compute-json document 0) "\n")))))
+      (if-not (contains? #{"ready" "planned" "destroyed"} (:status result))
+        (assoc opts :green/exit 1 :green/err (if (seq (:errors result)) (str/join "\n" (:errors result)) "compute lifecycle refused; inspect state ownership and configuration"))
+        (cond-> (assoc opts :green/exit 0)
+          (:shared result) (assoc :colors-compute/shared (:shared result))
+          (:cluster result) (assoc :colors-compute/cluster (:cluster result) :ip (get-in result [:cluster :nodes 0 :ip]) :user (get-in result [:cluster :nodes 0 :user]))
+          (get-in result [:key :private_key_path])
+          (assoc :ssh-private-key-path (if planning? (str/replace (get-in result [:key :private_key_path]) "$HOME/.ssh" "/home/build-placeholder/.ssh") (get-in result [:key :private_key_path]))))))
+    (catch Exception _ (assoc opts :green/exit 1 :green/err "compute lifecycle refused; legacy monolithic state requires explicit migration"))))
 
-(defn ensure-renderable!
-  "Make a real delete renderable when key files are missing. Returns nil, or
-  an error message.
+(defn load-compute-step [opts]
+  (try
+    (let [result (inspection/read-deployment opts (into {} (System/getenv)) {} (compute/requirements opts))]
+      (case (:status result)
+        "present" (let [node (first (get-in result [:cluster :nodes]))]
+                    (cond-> (assoc opts :colors-compute/cluster (:cluster result)
+                                       :colors-compute/shared (:shared result)
+                                       :ip (:ip node) :user (compute/login node) :green/exit 0)
+                      (:ssh_identity_file node) (assoc :ssh-private-key-path (:ssh_identity_file node))))
+        "destroyed" (if (= :delete (:green/event opts)) (assoc opts :walter/already-destroyed true :green/exit 0)
+                        (assoc opts :green/exit 1 :green/err "compute deployment is destroyed"))
+        (assoc opts :green/exit 1 :green/err "compute inspection refused; existing owned state is required")))
+    (catch Exception _ (assoc opts :green/exit 1 :green/err "compute inspection refused; existing owned state is required"))))
 
-  The compute templates interpolate the public key through `file()`, so a
-  destroy has to render the same values a create did. A missing public half is
-  rederived from the private one; a missing keypair is regenerated as a
-  throwaway — harmless, because the authorized key dies with the boot volume
-  and the cleanup step removes the files once the destroy succeeds."
-  ([opts] (ensure-renderable! opts process/run-with-timeout))
-  ([opts run-fn]
-   (when (validate/keygen? opts)
-     (let [prv (once-ssh/private-key-path opts)
-           pub (once-ssh/public-key-path opts)]
-       (cond
-         (and (.exists (io/file prv)) (.exists (io/file pub))) nil
 
-         (.exists (io/file prv))
-         (let [result (run-fn ["ssh-keygen" "-y" "-f" prv] {} keygen-timeout-ms)]
-           (if (:ok? result)
-             (do (spit pub (str (str/trim (str (:out result))) "\n")) nil)
-             (str "ssh-keygen -y failed for " prv ": "
-                  (str/trim (str (:err result))))))
-
-         :else
-         (do (io/make-parents prv)
-             (let [result (run-fn ["ssh-keygen" "-q" "-t" "ed25519" "-N" ""
-                                   "-C" (str (or (:profile opts) "walter")
-                                             " managed by Colors")
-                                   "-f" prv]
-                                  {} keygen-timeout-ms)]
-               (when-not (:ok? result)
-                 (str "ssh-keygen failed for " prv ": "
-                      (str/trim (str (:err result))))))))))))
-
-(defn compute-specs
-  "ONCE's provider template, plus — on a provider walter can power cycle — one
-  extra file publishing the instance id.
-
-  OpenTofu merges every .tf in a directory, so the extra needs no change to
-  ONCE's template or a fork of it. The output addresses
-  `oci_core_instance.ampere_vm` or `vultr_instance.node1`; `scripts/golden.sh`
-  asserts both still exist. The machine-key resource walter used to render as
-  its own `ssh-key.tf` now comes from ONCE's template itself: in keygen mode
-  the keygen branch declares it, named after the profile."
-  [opts dir]
-  (let [provider (or (:provider-compute opts) "oci")]
-    (cond-> [(template-spec (once-template "tofu" provider "main.tf")
-                            (str dir "/main.tf")
-                            opts)]
-      (validate/stoppable? opts)
-      (conj (template-spec (walter-template (str "tofu." provider) "outputs.tf")
-                           (str dir "/outputs.tf")
-                           opts)))))
-
-(defn- output-params
-  [opts]
-  (some-> (get-in opts [:tofu/outputs :params]) walk/keywordize-keys))
-
-(defn compute-step
-  "Render the compute stage and apply it, adopting the machine's address.
-
-  In keygen mode the SSH Keypair Standard runs first, before any provider
-  call: a real create walks the create matrix (an existing key without state,
-  or state without a key, refuses rather than regenerates) and the provider
-  preflight (an account key named after the profile that our state does not
-  own refuses rather than adopts) — both via ONCE's implementation. A real
-  delete only makes the keypair renderable again when its files are missing,
-  because the destroy has to render the values create did; the DAG's cleanup
-  step removes them after the destroy succeeds. The short-lived ssh-agent v2
-  needed is gone: ONCE's keygen branch names the private key in the
-  provisioner's connection block itself.
-
-  The adopted params are merged flat into opts as well as kept under
-  `:walter/compute-params`, because both Ansible stages read `ip` and `user`
-  directly."
-  [opts]
-  (let [event (:green/event opts)
-        prepared
-        (cond
-          (= :build event) (with-machine-key opts)
-
-          (= :delete event)
-          (if-let [err (ensure-renderable! opts)]
-            (assoc opts :green/exit 1 :green/err err)
-            (with-machine-key opts))
-
-          :else
-          (let [checked (once-ssh/ensure-key! opts compute-state-output)]
-            (if (wf/failed? checked)
-              checked
-              (once-ssh/preflight! (with-machine-key checked)))))]
-    (if (wf/failed? prepared)
-      prepared
-      (let [opts prepared
-            dir (tool-dir opts compute-tool)
-            specs (compute-specs opts dir)
-            fallback (fallback-compute-params opts)
-            result (tofu/tofu-with-spec opts specs
-                                        {:dir dir
-                                         :env (credential-env opts :provider-compute)})]
-        (cond
-          (wf/failed? result) result
-          (= :build event) (merge result fallback {:walter/compute-params fallback})
-          ;; A destroy has run; there are no outputs left to adopt.
-          (= :delete event) result
-          :else (let [params (merge fallback (output-params result))]
-                  (merge result params {:walter/compute-params params})))))))
-
-(defn instance-id
-  "The provider instance id the power verbs act on.
-
-  Desired state wins when it carries the provider-specific escape hatch, so
-  `stop` and `start` keep working with no access to OpenTofu state at all — a
-  broken backend should not strand a running machine. Otherwise the id comes
-  from the compute stage's `instance_id` output."
-  [opts]
-  (or (case (str (:provider-compute opts))
-        "oci" (not-empty (str (:oci-instance-id opts)))
-        "vultr" (not-empty (str (:vultr-instance-id opts)))
-        nil)
-      (try
-        (not-empty (str (:instance_id (tofu/outputs (tool-dir opts compute-tool)
-                                                    (backend-credential-env opts)))))
-        (catch Exception _ nil))))
+(defn fallback-compute-params [opts] (compute/node opts))
+(defn machine-key-file [opts]
+  (or (:ssh-private-key-path opts)
+      (when (validate/keygen? opts)
+        (str (io/file (if (= :build (:green/event opts)) "/home/build-placeholder" (System/getProperty "user.home")) ".ssh" (:profile opts))))))
+(defn machine-key-ssh-path [opts]
+  (when (validate/keygen? opts) (str "~/.ssh/" (:profile opts))))
+(defn with-machine-key [opts]
+  (if-not (validate/keygen? opts) opts
+    (assoc opts :compute-pubkey
+      (if (= :build (:green/event opts)) ssh/placeholder-public
+        (str/trim (slurp (str (machine-key-file opts) ".pub")))))))
 
 (defn users
   "The `users` entries — seat logins provisioned beside the primary one, each
@@ -446,6 +269,7 @@
   one — and so an `--init-directory` to reach it — says so in colors.yml."
   [opts]
   (assoc opts
+         :ssh-keygen (validate/keygen? opts)
          :ip (or (not-empty (str (:ip opts))) "192.168.0.1")
          :user (or (not-empty (str (:user opts))) "root")
          :host-alias (utils/host-alias opts)
@@ -509,39 +333,37 @@
 
 (def ^:private bootstrap-probe-timeout-ms 10000)
 
-(defn vultr-bootstrap-user
-  "Choose the login for Vultr's idempotent bootstrap.
+(defn bootstrap-user
+  "Choose the login for an idempotent root-image bootstrap.
 
   A fresh provider image exposes root. Once Walter has created ubuntu and
   disabled root SSH, later creates must enter through ubuntu instead. Probe the
   final login first with the dedicated key and fall back to root only when that
   fails. Builds perform no probe and render the first-create shape."
-  ([opts] (vultr-bootstrap-user opts process/run-with-timeout))
+  ([opts] (bootstrap-user opts process/run-with-timeout))
   ([opts run-fn]
    (if (= :build (:green/event opts))
      "root"
-     (let [result (run-fn ["ssh" "-o" "BatchMode=yes"
-                           "-o" "StrictHostKeyChecking=no"
-                           "-o" "UserKnownHostsFile=/dev/null"
-                           "-o" "IdentitiesOnly=yes"
-                           "-i" (machine-key-file opts)
-                           (str "ubuntu@" (:ip opts)) "true"]
+     (let [result (run-fn (vec (concat ["ssh" "-o" "BatchMode=yes" "-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null"]
+                                  (when (machine-key-file opts) ["-i" (machine-key-file opts)])
+                                  (when (validate/keygen? opts) ["-o" "IdentitiesOnly=yes"])
+                                  [(str "ubuntu@" (:ip opts)) "true"]))
                           {} bootstrap-probe-timeout-ms)]
        (if (:ok? result) "ubuntu" "root")))))
 
 (defn ansible-bootstrap-step
-  "Turn Vultr's root-only provider image into Walter's Ubuntu login.
+  "Turn a normalized root-login image into Walter's Ubuntu login.
 
   This is the sole normal root SSH connection. It creates ubuntu with the
   dedicated key and passwordless sudo, then disables root and password SSH.
-  Every downstream stage receives ubuntu as the authoritative login. Other
-  providers pass through without rendering a bootstrap stage."
+  Every downstream stage receives ubuntu as the authoritative login. Non-root
+  logins pass through without rendering a bootstrap stage."
   [opts]
-  (if (not= "vultr" (str (:provider-compute opts)))
+  (if (not= "root" (:user (compute/node opts)))
     (assoc opts :green/exit 0)
     (let [dir (tool-dir opts ansible-bootstrap-tool)
-          bootstrap-user (vultr-bootstrap-user opts)
-          data (assoc (data-fn opts) :user bootstrap-user)
+          bootstrap-user (bootstrap-user opts)
+          data (assoc (data-fn (with-machine-key opts)) :user bootstrap-user)
           specs [(template-spec (walter-template "ansible-bootstrap" "ansible.cfg")
                                 (str dir "/ansible.cfg") data)
                  (template-spec (walter-template "ansible-bootstrap" "main.yml")
@@ -573,7 +395,7 @@
   which would be the isolation feature deleting itself. The primary login
   keeps sudo and remains the trust root.
 
-  Runs as the primary login with become, after the Vultr bootstrap has adopted
+  Runs as the primary login with become, after the root-login bootstrap has adopted
   ubuntu, so it needs no root SSH on any provider. It sits before the fork
   because the remote play's inventory then connects as each seat — the
   accounts must exist first.
@@ -625,8 +447,9 @@
                 :inventory "inventory.ini"
                 :playbooks {:create "main.yml" :delete "main.yml"}
                 :extra-vars {:host_alias (:host-alias data)
-                             :ip (:ip data)
-                             :user (:user data)
+                             :ssh_hosts (vec (cons {:name (:host-alias data) :ip (:ip data) :user (:user data)}
+                                                   (map (fn [seat] {:name (str (:host-alias data) "-" seat) :ip (:ip data) :user seat}) (users opts))))
+                             :ssh_legacy_marker_prefix "walter"
                              :block_state (if delete? "absent" "present")}}]
     (ansible/ansible-with-spec opts config specs)))
 

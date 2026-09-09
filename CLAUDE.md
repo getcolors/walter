@@ -29,8 +29,7 @@ the code before acting on it.
 
 - Clojure 1.12.5, plus Babashka for the launcher
 - `io.github.getcolors/green` — the workflow engine
-- `io.github.getcolors/once` — **a package dependency, not a library one**; see
-  "The reuse surface" below
+- `io.github.getcolors/colors-compute` — versioned compute, remote backend, SSH ownership and coordinated power library
 - OpenTofu, Ansible, and the `oci` CLI for the power verbs
 
 ## Commands
@@ -49,54 +48,19 @@ bb pin                               # stamp the launcher (maintainers, after a 
 
 `./green build -f other.yml` overrides the `colors.yml` found by walking up.
 
-## The reuse surface — read this before touching anything
+## Compute library boundary
 
-Walter consumes **exactly three things** from ONCE:
+Walter depends on colors-compute's Green library. It owns provider selection,
+shared/node templates, S3/R2 state and coordination, SSH registration/keypair
+ownership, and power transports. New providers require only a dependency bump.
+The package supplies one public-only node and SSH ingress; all application
+Ansible plays, inventories, GitHub device flow and local SSH config remain here.
 
-1. `io.github.getcolors.once.validate/providers` — the provider registry, as
-   data.
-2. The compute templates, by classpath keyword
-   (`:io.github.getcolors.once.tools.tofu.<provider>/main.tf`).
-3. `io.github.getcolors.once.ssh` — the SSH Keypair Standard's machinery
-   (keygen-mode detection, paths, the create matrix, the account preflight,
-   the delete cleanup), added when walter adopted the standard rather than
-   re-implementing it as a third copy.
-
-Everything else is walter's own — `tool-dir`, the inventory builder, both
-Ansible stages, all of its step functions. That is deliberate and it is narrower
-than it first looks like it should be. In particular **walter does not reuse
-ONCE's `ansible-local`**, even though it could: that stage writes to
-`~/.ssh/config` on the operator's workstation, and reusing it would mean an
-unrelated change in ONCE rewriting that file at pin-bump time.
-
-**Nothing upstream protects this surface.** ONCE's `utils/contract` versions the
-*launcher* handshake, not a library API, and ONCE's own rules treat its
-internals as free to change as long as three colours move together. There is no
-promise here to rely on. `scripts/golden.sh` is the mitigation: it renders every
-provider variant against the pinned ONCE and diffs it, so a pin bump that
-changes rendered output fails loudly instead of silently.
-
-Four things in `golden.sh` are not golden diffs and matter just as much. The
-first two are the two halves of the one coupling that can fail during a real
-apply:
-
-- ONCE's template still declares `resource "oci_core_instance" "ampere_vm"`,
-  because walter's `outputs.tf` references that address. A rename upstream would
-  otherwise surface as an opaque `tofu validate` failure during a real apply,
-  against live infrastructure, half way through a create.
-- Walter's OCI `outputs.tf` still publishes `oci_core_instance.ampere_vm.id`
-  from it. Losing this end breaks `stop` and `start`, which read the OCID rather
-  than matching a display name.
-- ONCE's Vultr template still declares `vultr_instance.node1`, and Walter's
-  Vultr `outputs.tf` publishes its immutable id for the same reason.
-- The compute stage is still named `walter-compute`.
-- Providers walter cannot power cycle render **no** `outputs.tf` at all —
-  checked against hcloud. The output only makes sense where the power verbs
-  work, and rendering it elsewhere would reference a resource the template never
-  declares.
-
-**Bump the ONCE pin deliberately and rarely.** Nothing forces it. Run
-`bb golden` immediately after, and read the diff rather than accepting it.
+Build renders library documents under `walter-compute/shared` and
+`walter-compute/nodes/0`, including credential-free backend JSON. Runtime uses
+library workspaces and owned state. Existing `profile/walter-compute.tfstate`
+requires explicit migration; no automatic adoption or missing-state fallback.
+Golden checks cover both key modes, S3/R2, normalized logins and focused aliases.
 
 ## Architecture
 
@@ -146,44 +110,27 @@ provisions every home as its own user. The remote play's machine-scoped tasks
 passwd writes (`/etc/shells`, the login shell) delegate per host for the same
 reason. The cloudflared `ping_group_range` spans the lowest to the highest
 login gid, because the sysctl takes one contiguous range. Bootstrap is a
-no-op except on Vultr. There it is
-the sole root SSH connection: a fresh image exposes root, so Walter renames the
-stock UID/GID 1000 account to `ubuntu` (or creates it when absent), installs its
-dedicated key and passwordless sudo, validates
-an sshd drop-in disabling root and password login, then reloads SSH. All normal
-stages run as ubuntu. A later create probes ubuntu first, so convergence does
-not depend on root access Walter already closed. Delete drops the managed ssh block before destroying, so a
-machine that is already gone still cleans up the workstation.
+selected by the normalized node login. Root-login images use the same stage:
+Walter adopts UID/GID 1000 as ubuntu, authorizes the managed key or preserves
+existing external root authorized keys, installs sudo, then disables root and
+password SSH. Later creates probe ubuntu first. Non-root logins pass through.
 
-### Why stop and start skip OpenTofu
+### Coordinated power
 
-ONCE's `tofu/oci/main.tf` renders no power state, and adding one would mean
-either forking the template — forfeiting the reuse that motivated the design —
-or pushing a variable ONCE never uses through three colours and a parity
-fixture, in the repository running the live website.
-
-Skipping OpenTofu is also the more honest design. An attribute the configuration
-never sets produces no diff on refresh, so stopping the machine out of band
-causes **no drift**: there is nothing to reconcile because power was never
-managed. `prevent_destroy` stays irrelevant to `stop`.
-
-The instance is found by an **immutable provider id, never by display name**.
-Walter renders one extra `outputs.tf` beside ONCE's `main.tf` — OpenTofu merges
-every `.tf` in a directory — publishing `oci_core_instance.ampere_vm.id` or
-`vultr_instance.node1.id`. Finding by a human-typed name could power off another
-project's server.
-
-Every power call waits for the terminal state. OCI delegates that wait to the
-CLI; Vultr polls the live HTTP API. A successful start then reads the live public
-address and refreshes the managed SSH alias.
+`compute-power/power-deployment` owns OCI/Vultr transport, bounded waits and
+refresh. It acquires existing deployment coordination and uses only the
+immutable provider ID from owned node state. Unsupported providers and legacy
+instance-ID overrides refuse. A successful start refreshes the local aliases
+from the observed address; uncertain failures retain coordination for recovery.
+Power tests are offline transport/state-machine checks, not live deployment proof.
 
 ### Stages
 
 | Step | Directory | Does |
 |---|---|---|
 | `:walter/github-token` | — | the device-flow token acquisition above; no directory, nothing rendered |
-| `:walter/compute` | `walter-compute` | ONCE's provider template + walter's `outputs.tf` for OCI/Vultr; in keygen mode ONCE's template declares the profile-named key resource itself; outputs ip/user/sudoer/name |
-| `:walter/ansible-bootstrap` | `walter-ansible-bootstrap` | Vultr only: root creates ubuntu + key + sudo, then disables root/password SSH; later creates enter as ubuntu |
+| `:walter/compute` | `walter-compute` | library singleton orchestration with shared/node remote state and normalized outputs |
+| `:walter/ansible-bootstrap` | `walter-ansible-bootstrap` | normalized root login: bootstrap ubuntu + key + sudo, then disable root/password SSH; later creates enter as ubuntu |
 | `:walter/ansible-seats` | `walter-ansible-seats` | only with `users`: creates each seat login — no sudo, `0700` home, the primary login's authorized keys — as the primary login with become; renders nothing without seats |
 | `:walter/ansible-local` | `walter-ansible-local` | the managed `Host <profile>` block in `~/.ssh/config` plus one `Host <profile>-<seat>` block per seat, with `IdentityFile`/`IdentitiesOnly` in keygen mode |
 | `:walter/ansible-remote` | `walter-ansible-remote` | ping, unprivileged cloudflared sysctls, nix, terminfo, and — when the gating key is set — the gh login and git identity, packages, shell, runtimes, Emacs, dotfiles, agent credentials, atuin; with seats, one inventory host per login so every home is provisioned as its own user |
@@ -210,34 +157,14 @@ ssh-config block dropped `ForwardAgent`. The machine holds its own token and
 nothing of the workstation's; deleting the machine does not revoke the token
 (GitHub Settings → Applications → GitHub CLI does).
 
-**The machine keypair is generated by default** (SSH Keypair Standard,
-`workspace/standards/ssh-keypair.md`, contract 4): an absent machine-key value
-selects keygen mode, where walter generates the profile-named
-`~/.ssh/<profile>` on the first real create and delegates the standard's machinery to
-`once.ssh` — the create matrix (a key without state, or state without a key,
-refuses rather than regenerates), the DigitalOcean/hcloud/Vultr account
-preflight (an unowned profile-named key refuses rather than adopts), and the
-delete cleanup, wired as `:walter/ssh-cleanup` strictly after the compute
-destroy. ONCE's compute templates render the provider key resource (named
-after the profile) and the `private_key` connection themselves, so walter's
-old `ssh-key.tf` sidecar and its short-lived ssh-agent are gone. An explicit
-machine-key value is the opt-out (Vultr refuses one — the bootstrap needs the
-generated private half); the retired `compute-keygen` flag gets a migration
-error. On `:build` the paths and content are stable placeholders (ONCE's
-deploy-key rule), so goldens stay byte-identical across workstations. A real
-delete first rederives or regenerates missing key files so the destroy can
-render, then removes them once it succeeds.
-
-One consumer of the key is invisible in walter's own templates: ONCE's
-compute templates carry a `remote-exec` "wait for ssh" provisioner whose
-connection block names no key, so OpenTofu authenticates it through whatever
-agent `SSH_AUTH_SOCK` points at — and nothing holds a key walter just
-generated. `compute-step` therefore runs a real create's apply under its own
-short-lived ssh-agent loaded with exactly that key
-(`with-machine-key-agent`), killed when the apply returns. Without it the
-provisioner dies with "attempted methods [none]" against a machine that is
-otherwise fine — observed on the first live create, which is why this
-exists.
+**The library generates the machine keypair by default.** Presence of the
+selected provider SSH setting opts out; there is no compute-key-mode flag.
+Build uses stable placeholders. Real lifecycle records intent before generation,
+refuses unowned collisions or missing owned keys, and removes keys only after
+confirmed resource destruction. Delete never repairs or regenerates a keypair.
+Local SSH configuration uses a package-owned locked atomic updater with legacy
+Walter primary/seat marker migration. Only managed mode emits IdentityFile and
+IdentitiesOnly; external private paths may still be used by Ansible.
 
 `nix profile add` runs with `NIXPKGS_ALLOW_UNFREE=1` and `--impure` so unfree
 attributes (`claude-code`) install beside free ones in the one invocation that
@@ -332,8 +259,8 @@ outputs.
 ## Code conventions
 
 - **Namespaces**: `io.github.getcolors.walter.*` — `utils` (contract, alias),
-  `validate` (rules over ONCE's registry), `oci` (the OCI CLI), `vultr` (the
-  Vultr HTTP API), `github` (the device-flow token), `tools` (the steps), and
+  `validate` (application rules), `compute` (singleton requirements),
+  `github` (the device-flow token), `tools` (the steps), and
   `workflow` (the graph). A new namespace needs a genuinely new concern.
 - **Keys**: plain kebab-case keywords for desired state (they match template
   variable names); namespaced for engine state (`:green/…`, `:walter/…`).

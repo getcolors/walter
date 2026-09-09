@@ -2,15 +2,15 @@
   "all" : {
     "hosts" : {
       "walter-fixture" : {
-        "ansible_host" : "192.168.0.1",
-        "ansible_user" : "root"
+        "ansible_host" : "192.0.2.10",
+        "ansible_user" : "ubuntu"
       },
       "walter-fixture-jack" : {
-        "ansible_host" : "192.168.0.1",
+        "ansible_host" : "192.0.2.10",
         "ansible_user" : "jack"
       },
       "walter-fixture-emma" : {
-        "ansible_host" : "192.168.0.1",
+        "ansible_host" : "192.0.2.10",
         "ansible_user" : "emma"
       }
     }

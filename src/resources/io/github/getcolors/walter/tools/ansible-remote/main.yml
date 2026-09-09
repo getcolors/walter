@@ -13,13 +13,18 @@
 # that is one `nix profile install` away and needs no change to walter.
 - name: Provision the development machine
   hosts: all
-  gather_facts: true
+  gather_facts: false
+  pre_tasks:
+    - name: Wait for the login to become reachable
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+    - name: Gather facts after SSH is ready
+      ansible.builtin.setup:
   tasks:
     # Kept from v1. It costs nothing and it is still the task that fails first
     # and most legibly when the inventory, the login or the key is wrong — the
     # things most likely to be wrong in a new project. It does not prove the
-    # machine is up: the compute template's remote-exec provisioner sits behind
-    # an SSH connection block, so `tofu apply` has already blocked on that.
+    # machine is up: the explicit connection wait above establishes that.
     - name: Ping
       ansible.builtin.ping:
 

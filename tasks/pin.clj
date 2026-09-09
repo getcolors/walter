@@ -7,7 +7,7 @@
   rather than as a launcher subcommand — a payload copied into a stranger's
   project should not carry a command that is wrong by construction there.
 
-  Walter's launcher pins only walter. `once` and `green` come transitively from
+  Walter's launcher pins only walter. `colors-compute` and `green` come transitively from
   walter's deps.edn, so there is one site here rather than ONCE's three."
   (:require
    [clojure.java.io :as io]

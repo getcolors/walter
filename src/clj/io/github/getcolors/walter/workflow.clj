@@ -24,7 +24,7 @@
 
   Create and build fork after the seat stage: the two normal Ansible stages are
   independent and neither joins. `seats` creates the extra unix logins `users`
-  names — it must follow the Vultr bootstrap and precede the remote play,
+  names — it must follow the root-login bootstrap and precede the remote play,
   whose inventory connects as each seat. Delete drops the managed ssh block before anything is
   destroyed, so a machine that is already gone still cleans up. Stop and start
   never reach OpenTofu; OCI uses its CLI and Vultr its HTTP API.
@@ -41,14 +41,12 @@
    [green.dry-run :as dry-run]
    [green.lifecycle :as lifecycle]
    [green.progress :as progress]
-   [green.tofu :as tofu]
+   [io.github.getcolors.compute-power :as power]
+   [io.github.getcolors.walter.compute :as compute]
    [green.workflow :as wf]
-   [io.github.getcolors.once.ssh :as once-ssh]
    [io.github.getcolors.walter.github :as github]
-   [io.github.getcolors.walter.oci :as oci]
    [io.github.getcolors.walter.tools :as tools]
-   [io.github.getcolors.walter.validate :as validate]
-   [io.github.getcolors.walter.vultr :as vultr]))
+   [io.github.getcolors.walter.validate :as validate]))
 
 (def ^:private lifecycle-events #{:create :delete})
 (def ^:private power-events #{:stop :start})
@@ -56,37 +54,8 @@
 (def ^:private defaults
   {:compute-prevent-destroy true
    :provider-compute "oci"
-   :provider-backend "local"
+   :provider-backend "s3"
    :workdir ".colors"})
-
-(defn power-preflight
-  "Everything a power verb needs before it touches the provider: a provider that
-  can be power cycled, usable provider credentials, and an instance to act on.
-
-  Not being stoppable is not an error. The verb reports it and exits 0 — the
-  no-op is deliberate, and it is reported rather than silent, because a
-  cost-saving command that quietly does nothing is one you discover on the
-  invoice."
-  ([opts] (power-preflight opts oci/cli))
-  ([opts runner]
-   (cond
-     (not (validate/stoppable? opts))
-     (assoc opts :green/exit 0 :walter/no-op true)
-
-     :else
-     (if-let [err (case (str (:provider-compute opts))
-                   "oci" (oci/session-error opts runner)
-                   "vultr" (vultr/credential-error opts)
-                   nil)]
-       (assoc opts :green/exit 2 :green/err err)
-       (if-let [id (tools/instance-id opts)]
-         (assoc opts :green/exit 0 :walter/instance-id id)
-         (let [id-key (str (:provider-compute opts) "-instance-id")]
-           (assoc opts :green/exit 2
-                  :green/err
-                  (str "no instance id for profile " (:profile opts) ".\n"
-                       "Set " id-key " in colors.yml, or run create so the "
-                       "compute stage publishes it as an OpenTofu output."))))))))
 
 (defn start-step
   "Overlay `COLORS_PAR_*`, validate, and — for a real power verb — check the
@@ -106,86 +75,34 @@
           [(fn [_ env _] (validate/env-errors env))
            (fn [opts _ _] (validate/state-errors opts))
            (fn [opts _ {:keys [event real?]}]
-             (when (and real? (lifecycle-events event)) (validate/secret-errors opts)))
-           (fn [opts _ {:keys [event real?]}]
              (when (and real? (= :delete event) (:compute-prevent-destroy opts))
                [(str "compute destruction is protected; set "
                      (green-cli/par-name :compute-prevent-destroy) "=false to delete")]))]
           :after-validate
           (fn [opts _ {:keys [event real?]}]
-            (if (and real? (power-events event))
-              (power-preflight opts)
+            (if (and real? (= :delete event))
+              (tools/load-compute-step opts)
               (assoc opts :green/exit 0)))}
     env)))
 
-(defn- logln
-  [& xs]
-  (locking *out* (apply println xs) (flush)))
-
-(defn- no-op-message
-  [opts verb]
-  (str (name verb) ": " (:provider-compute opts)
-       " has no power API walter can drive — nothing to do. "
-       "Only " (str/join ", " (sort validate/stoppable)) " can be power cycled."))
-
 (defn power-step
-  "Move the machine into the state `verb` wants.
-
-  Returns unchanged and successful when the provider cannot be power cycled, so
-  the same graph serves every provider."
+  "Use the library's coordinated power capability and observed address."
   [verb]
   (fn [opts]
-    (if (:walter/no-op opts)
-      (do (logln (no-op-message opts verb))
-          (assoc opts :green/exit 0))
-      (let [provider (str (:provider-compute opts))
-            {:keys [exit err out]}
-            (case provider
-              "oci" (oci/power! opts verb (:walter/instance-id opts))
-              "vultr" (vultr/power! opts verb (:walter/instance-id opts)))]
-        (if (zero? exit)
+    (try
+      (let [result (power/power-deployment opts (name verb))]
+        (if (= "planned" (:status result))
           (assoc opts :green/exit 0)
-          (assoc opts
-                 :green/exit (max 1 exit)
-                 :green/err (str provider " compute instance action failed: "
-                                 (or (not-empty err) (not-empty out) "(no output)"))))))))
+          (let [_ (when-not (= "ready" (:status result)) (throw (ex-info "power result unavailable" {})))
+                cluster (:cluster result) node (compute/node (assoc opts :colors-compute/cluster cluster))]
+            (assoc opts :green/exit 0 :colors-compute/cluster cluster
+                   :ssh-private-key-path (get-in result [:key :private_key_path])
+                   :ip (:ip node) :user (compute/login node)))))
+      (catch Exception _ (assoc opts :green/exit 1 :green/err "compute power refused")))))
 
 (def power-off-step (power-step :stop))
-
-(defn power-on-step
-  "Start the machine, then read its address back from the provider.
-
-  OpenTofu's stored `ip` output is not refreshed by an out-of-band power cycle,
-  so it may be stale here — and rendering a stale address into `~/.ssh/config` is
-  exactly the silent breakage this exists to prevent. Outputs' `ip` is
-  authoritative only immediately after an apply; this reads live.
-
-  `user` is the other half of that block and the start graph has no compute step
-  to adopt it from, so it comes from the provider's own default login — the same
-  value create renders. Without it `data-fn` falls back to root, and the next
-  start rewrites a working alias into one the machine refuses."
-  [opts]
-  (let [started ((power-step :start) opts)]
-    (cond
-      (wf/failed? started) started
-      (:walter/no-op started) started
-      :else (let [ip (case (str (:provider-compute started))
-                       "oci" (oci/public-ip started (:walter/instance-id started))
-                       "vultr" (vultr/public-ip started (:walter/instance-id started)))]
-              (if ip
-                (assoc started :green/exit 0 :ip ip
-                       :user (:user (tools/fallback-compute-params started)))
-                (assoc started
-                       :green/exit 1
-                       :green/err "the instance reported no public address after starting"))))))
-
-(defn ansible-local-after-start
-  "ansible-local, unless the power verb was a no-op — there is no new address to
-  record and writing a placeholder one would break `ssh <alias>`."
-  [opts]
-  (if (:walter/no-op opts)
-    (assoc opts :green/exit 0)
-    (tools/ansible-local-step opts)))
+(def power-on-step (power-step :start))
+(def ansible-local-after-start tools/ansible-local-step)
 
 (defn ansible-cleanup-step
   "Drop the managed `~/.ssh/config` block, then remove both rendered trees.
@@ -195,7 +112,8 @@
   comes from `profile` rather than from OpenTofu state, so this works when the
   machine is already gone."
   [opts]
-  (-> opts tools/ansible-local-step tools/ansible-remote-step))
+  (let [local (tools/ansible-local-step opts)]
+    (if (wf/failed? local) local (tools/ansible-remote-step local))))
 
 ;; ---------------------------------------------------------------------------
 ;; wiring
@@ -207,11 +125,7 @@
     (case step
       :walter/start           [start-step :walter/ansible-cleanup]
       :walter/ansible-cleanup [ansible-cleanup-step :walter/compute]
-      ;; The local keypair goes last, strictly after a successful compute
-      ;; destroy: a failed delete leaves the key, which is still the only
-      ;; credential to whatever survived (SSH Keypair Standard).
-      :walter/compute         [tools/compute-step :walter/ssh-cleanup]
-      :walter/ssh-cleanup     [once-ssh/cleanup-step])
+      :walter/compute         [tools/compute-step])
 
     :stop
     (case step
@@ -251,7 +165,7 @@
     ;; :create
     ;;
     ;; `seats` sits between bootstrap and the fork because ordering is load-
-    ;; bearing on both sides: it must follow the Vultr bootstrap (it connects
+    ;; bearing on both sides: it must follow the root-login bootstrap (it connects
     ;; as the adopted ubuntu login) and precede ansible-remote (whose inventory
     ;; connects as each seat, so the accounts have to exist first). With no
     ;; `users` in desired state it renders nothing and passes through.
@@ -268,28 +182,19 @@
 ;; ---------------------------------------------------------------------------
 ;; backends
 
-(defn backend-advice
-  "The `:before` advice writing backend.tf.json for the compute stage. Remote
-  state is keyed by profile and stage, and the stage is `walter-compute` rather
-  than `tofu-compute` precisely so a colliding profile still cannot address
-  another package's state."
-  [tool]
-  (tofu/conventional-backend-advice
-   {:dir-fn #(tools/tool-dir % tool)
-    :key-fn #(str (or (:profile %) "walter") "/" tool ".tfstate")}))
-
 (def side-effecting-steps
   [:walter/github-token
    :walter/compute :walter/ansible-bootstrap :walter/ansible-seats
    :walter/ansible-local :walter/ansible-remote
    :walter/emacs-packages
    :walter/converge-nix :walter/converge-asdf
-   :walter/ansible-cleanup :walter/ssh-cleanup
+   :walter/ansible-cleanup
    :walter/power-off :walter/power-on])
 
 (def workflow
-  (-> (wf/workflow {:start :walter/start :wire-fn wire-fn})
-      (wf/advice-add :walter/compute :before ::backend
-                     (backend-advice tools/compute-tool))
+  (-> (wf/workflow {:start :walter/start :wire-fn wire-fn
+                    :next-fn (fn [_ successors opts]
+                               (if (or (wf/failed? opts) (:walter/already-destroyed opts))
+                                 [] (mapv #(vector % opts) successors)))})
       progress/advise
       (dry-run/advise side-effecting-steps)))

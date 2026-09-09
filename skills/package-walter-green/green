@@ -33,16 +33,16 @@
 ;;
 ;; Nothing in this stack is published to Clojars, so a standalone copy of this
 ;; launcher resolves `walter` as an immutable git dependency and lets tools.deps
-;; pull `once` and `green` transitively from walter's own deps.edn. When the
+;; pull `colors-compute` and `green` transitively from walter's own deps.edn. When the
 ;; classpath already provides walter — running inside the project, where bb.edn
 ;; supplies local roots — the bootstrap is skipped entirely. WALTER_LIB_ROOT,
-;; ONCE_LIB_ROOT and GREEN_LIB_ROOT each override a pin with a working tree.
+;; COLORS_COMPUTE_LIB_ROOT and GREEN_LIB_ROOT each override a pin with a working tree.
 
 (def ^:private launcher-contract
   "Minimum io.github.getcolors/walter contract this launcher requires. Guarded at
   run time so a stale pin fails loudly instead of rendering templates from an
   older commit."
-  4)
+  5)
 
 ;; Managed by `bb pin` — do not edit by hand.
 ;;
@@ -53,7 +53,7 @@
 (def ^:private walter-sha "16d53489ae8f76c5a40b5d7f69e64e3aa7ba60e0")
 
 (def ^:private walter-git-url "https://github.com/getcolors/walter.git")
-(def ^:private once-git-url "https://github.com/getcolors/once.git")
+(def ^:private compute-git-url "https://github.com/getcolors/colors-compute.git")
 (def ^:private green-git-url "https://github.com/getcolors/green.git")
 
 (defn- lib-coord
@@ -70,7 +70,7 @@
 (def ^:private bootstrap-error
   (when (and (System/getProperty "babashka.version") (not resolved?))
     (let [walter (lib-coord "WALTER_LIB_ROOT" walter-git-url walter-sha nil)
-          once (lib-coord "ONCE_LIB_ROOT" once-git-url nil "green")
+          compute (lib-coord "COLORS_COMPUTE_LIB_ROOT" compute-git-url nil "green")
           green (lib-coord "GREEN_LIB_ROOT" green-git-url nil nil)]
       (if-not walter
         (str "this launcher carries no walter pin.\n"
@@ -79,7 +79,7 @@
              "Point it at a checkout meanwhile: WALTER_LIB_ROOT=/path/to/walter")
         (do ((requiring-resolve 'babashka.deps/add-deps)
              {:deps (cond-> {'io.github.getcolors/walter walter}
-                      once (assoc 'io.github.getcolors/once once)
+                      compute (assoc 'io.github.getcolors/colors-compute compute)
                       green (assoc 'io.github.getcolors/green green))})
             nil)))))
 

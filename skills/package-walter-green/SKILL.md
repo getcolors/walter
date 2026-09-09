@@ -94,8 +94,7 @@ directory.
    authenticate through it.
 5. The machine-access keypair needs no collection: walter generates a
    profile-named keypair by default (SSH Keypair Standard). Only when the
-   user wants their own key, collect the provider's machine-key value —
-   except on Vultr, which accepts no explicit key.
+   user wants their own key, collect the provider's machine-key value.
 6. Ask whether the user wants their Emacs configuration on the machine. If so,
    set `emacs-config-repo` to its **https** git URL (`git@`/`ssh://` forms are
    refused) and `emacs-config-dest` to where it must live — the default is
@@ -169,22 +168,14 @@ flag without changing what is installed.
 
 ## Stopping and starting
 
-`stop` and `start` never reach OpenTofu. No template declares a power state, so
-powering the machine off out of band causes no drift — there is nothing for
-OpenTofu to reconcile.
+The colors-compute library coordinates OCI and Vultr power operations using
+the immutable ID from owned remote node state. Both need a reachable state
+backend; unsupported providers refuse. An uncertain action retains ownership
+coordination for recovery. Start waits for a running state, reads the current
+public address, then refreshes SSH aliases. It does not recreate the VM.
 
-Consequences worth telling the user about:
-
-- **Only OCI can be power cycled today.** Everywhere else `stop` reports that
-  and exits 0. That is deliberate, not a bug. Do not present it as a failure.
-- **`create` will not restart a stopped machine.** With no power state in the
-  configuration there is no diff, so an apply leaves it stopped. `start` is the
-  only way up.
-- **Stopping stops the compute meter, not the storage one.** The boot volume
-  bills whether the machine runs or not.
-- **`stop` and `start` need the `oci` CLI to authenticate**, which OpenTofu does
-  not. Session tokens last 60 minutes. When walter reports an expired session it
-  names the command that fixes it; run that, then retry.
+OCI uses its configured CLI profile; Vultr uses COLORS_PAR_VULTR_API_KEY.
+Power billing depends on the provider and storage remains allocated.
 
 ## When something fails
 
@@ -192,10 +183,9 @@ Consequences worth telling the user about:
   another project's `.envrc`. Unset it; do not work around it.
 - **`required credential is not set: COLORS_PAR_X`** — name the variable and let
   the user export it themselves.
-- **`no instance id`** — walter could not read the compute stage's `instance_id`
-  output and desired state carries none. Either the machine was never created,
-  or the state backend is unreachable. `oci-instance-id` in `colors.yml` is the
-  documented escape hatch.
+- **Compute ownership or power refused** — inspect backend connectivity and
+  the owned deployment journal. Do not set an instance-ID override or treat an
+  unreadable state as absent. Legacy monolithic state requires explicit migration.
 - **`gh auth login failed`** — `gh` is missing on the workstation, or the
   one-time code expired unapproved. Install gh or re-run `create` and approve
   the code; there is no token to paste anywhere.

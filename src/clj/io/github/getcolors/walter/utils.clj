@@ -9,7 +9,9 @@
   launcher calls — and bump `launcher-contract` in the bundled launcher to
   match. The handshake turns a stale pin into an actionable exit 2 rather than
   a confusing resolution failure. History in the comment below."
-  4)
+  5)
+;; 5: colors-compute owns split remote state, keys and coordinated power.
+;;    Legacy monolithic state requires explicit migration.
 ;; 3: the SSH Keypair Standard (workspace standards/ssh-keypair.md).
 ;;    `compute-keygen` is superseded: generation is the default, an explicit
 ;;    machine key is the opt-out, the keypair moves from ~/.ssh/<profile> to

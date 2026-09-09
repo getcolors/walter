@@ -65,5 +65,4 @@
     cmd: asdf reshim nodejs
   environment:
     PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
-  changed_when: false
-<% endif %>
+  changed_when: false<% endif %>

@@ -9,7 +9,8 @@
   {:profile "walter-test"
    :workdir ".colors"
    :provider-compute "oci"
-   :provider-backend "local"
+   :provider-backend "s3"
+   :s3-bucket "walter-test-state" :s3-region "eu-central-1"
    :compute-prevent-destroy true
    :oci-config-file-profile "DEFAULT"
    :oci-subnet-id "ocid1.subnet.oc1.eu-frankfurt-1.aaaaexample"
@@ -37,57 +38,15 @@
 (deftest a-complete-desired-state-is-renderable
   (is (= [] (validate/state-errors base))))
 
-(deftest required-keys-come-from-the-selected-provider
-  (testing "a missing OCI key is reported"
-    (is (seq (errors-matching (dissoc base :oci-subnet-id) #":oci-subnet-id"))))
-  (testing "REPLACE_ME counts as missing"
-    (is (seq (errors-matching (assoc base :oci-shape "REPLACE_ME") #":oci-shape"))))
-  (testing "another provider's keys are not required"
-    (is (= [] (validate/state-errors (dissoc base :hcloud-name :yandex-cloud-id)))))
-  (testing "switching provider switches the requirement"
-    (let [hcloud (assoc base :provider-compute "hcloud")]
-      (is (seq (errors-matching hcloud #":hcloud-name"))))))
-
-(deftest unsupported-providers-are-named
-  (is (seq (errors-matching (assoc base :provider-compute "azure")
-                            #"unsupported :provider-compute")))
-  (is (seq (errors-matching (assoc base :provider-backend "gcs")
-                            #"unsupported :provider-backend"))))
-
-(deftest walter-fills-only-two-of-onces-four-slots
-  (testing "no SMTP or DNS provider is demanded"
-    (is (= [:provider-compute :provider-backend] validate/slots))
-    (is (= [] (validate/state-errors (dissoc base :provider-smtp :provider-dns))))))
-
 (deftest prevent-destroy-must-be-a-boolean
   (is (seq (errors-matching (assoc base :compute-prevent-destroy "true")
                             #":compute-prevent-destroy")))
   (is (= [] (validate/state-errors (assoc base :compute-prevent-destroy false)))))
 
-(deftest instance-id-must-look-like-an-instance-ocid
-  (testing "absent is fine — it is the optional escape hatch"
-    (is (= [] (validate/state-errors base))))
-  (testing "a real one passes"
-    (is (= [] (validate/state-errors
-               (assoc base :oci-instance-id "ocid1.instance.oc1.eu-frankfurt-1.aaaaexample")))))
-  (testing "a wrong-resource OCID is caught here, not half way through a power cycle"
-    (is (seq (errors-matching (assoc base :oci-instance-id "ocid1.image.oc1..aaaa")
-                              #":oci-instance-id")))))
-
-(deftest vultr-instance-id-must-be-a-uuid
-  (is (= [] (validate/state-errors
-             (assoc base :vultr-instance-id "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"))))
-  (is (seq (errors-matching (assoc base :vultr-instance-id "instance-name")
-                            #":vultr-instance-id"))))
-
 (deftest power-wait-must-be-a-positive-integer
   (is (= [] (validate/state-errors (assoc base :power-wait-seconds 60))))
   (is (seq (errors-matching (assoc base :power-wait-seconds 0) #":power-wait-seconds")))
   (is (seq (errors-matching (assoc base :power-wait-seconds "300") #":power-wait-seconds"))))
-
-(deftest compute-pubkey-is-checked-when-present
-  (is (= [] (validate/state-errors (assoc base :compute-pubkey "ssh-ed25519 AAAA"))))
-  (is (seq (errors-matching (assoc base :compute-pubkey "not-a-key") #":compute-pubkey"))))
 
 (deftest colors-par-profile-is-rejected-outright
   (testing "the variable that would point walter at another project's state"
@@ -98,30 +57,6 @@
     (is (nil? (validate/env-errors {"COLORS_PAR_PROFILE" ""}))))
   (testing "other COLORS_PAR_ variables are none of its business"
     (is (nil? (validate/env-errors {"COLORS_PAR_HCLOUD_TOKEN" "x"})))))
-
-(deftest stoppable-is-a-fact-about-the-provider-api
-  (is (validate/stoppable? {:provider-compute "oci"}))
-  (is (not (validate/stoppable? {:provider-compute "hcloud"})))
-  (is (not (validate/stoppable? {:provider-compute "digitalocean"})))
-  (is (validate/stoppable? {:provider-compute "vultr"}))
-  (is (not (validate/stoppable? {:provider-compute "yandex"})))
-  (is (not (validate/stoppable? {:provider-compute "no-infra"})))
-  (is (not (validate/stoppable? {}))))
-
-(deftest secret-errors-follow-the-selected-providers
-  (testing "OCI needs none — it authenticates from ~/.oci/config"
-    (is (= [] (vec (validate/secret-errors base)))))
-  (testing "hcloud needs its token"
-    (is (seq (validate/secret-errors (assoc base :provider-compute "hcloud")))))
-  (testing "r2 needs both keys, and naming them satisfies it"
-    (let [r2 (assoc base :provider-backend "r2"
-                    :r2-bucket "b" :r2-endpoint "https://e")]
-      (is (= 2 (count (validate/secret-errors r2))))
-      (is (= [] (vec (validate/secret-errors
-                      (assoc r2 :r2-access-key-id "k" :r2-secret-access-key "s")))))))
-  (testing "the message names the variable to export, not the key"
-    (is (str/includes? (first (validate/secret-errors (assoc base :provider-compute "hcloud")))
-                       "COLORS_PAR_HCLOUD_TOKEN"))))
 
 (deftest a-login-shell-must-be-one-of-the-installed-packages
   (testing "nothing but nix-packages puts a binary in the profile, so a shell
@@ -198,17 +133,12 @@
            example colors.yml ships every unused provider exactly that way"
     (is (= [] (validate/state-errors
                (assoc base
-                      :s3-bucket "REPLACE_ME"
-                      :s3-region "REPLACE_ME"
+                      :r2-bucket "REPLACE_ME"
+                      :r2-region "REPLACE_ME"
                       :yandex-cloud-id "REPLACE_ME"
                       :digitalocean-vpc-uuid "REPLACE_ME"
                       :hcloud-ssh-keys "REPLACE_ME"
                       :no-infra-compute-ip "REPLACE_ME")))))
-  (testing "a required key reports only that it is required — one problem, one
-           message"
-    (let [errs (validate/state-errors (assoc base :oci-subnet-id "REPLACE_ME"))]
-      (is (= 1 (count (filter #(str/includes? % ":oci-subnet-id") errs))))
-      (is (some #(re-find #":oci-subnet-id is required" %) errs))))
   (testing "engine state is not desired state and is never scaffolded"
     (is (= [] (validate/state-errors (assoc base :green/state-file "REPLACE_ME")))))
   (testing "a filled-in value is fine, and so is no key at all"
@@ -342,19 +272,6 @@
           (str (pr-str value) " should be refused")))
     (is (= [] (errors-matching base #":compute-keygen")))))
 
-(deftest vultr-refuses-an-explicit-machine-key
-  (testing "walter must hold the private half to bootstrap ubuntu before it
-           disables root SSH, so opt-out would create a machine nobody can
-           enter"
-    (let [vultr (-> base
-                    (dissoc :oci-ssh-authorized-keys)
-                    (assoc :provider-compute "vultr"
-                           :vultr-name "w" :vultr-region "ams"
-                           :vultr-plan "vc2-2c-4gb" :vultr-os-id 2284))]
-      (is (= [] (errors-matching vultr #":vultr-ssh-keys")))
-      (is (seq (errors-matching (assoc vultr :vultr-ssh-keys "key-id")
-                                #":vultr-ssh-keys is not accepted"))))))
-
 (deftest the-machine-key-selects-its-own-mode-by-presence
   (testing "an absent machine key is keygen mode, not an error (SSH Keypair
            Standard) — and a present one is opt-out, not a conflict"
@@ -430,3 +347,9 @@
     (is (seq (errors-matching (assoc base :corepack-packages ["pnpm"]
                                       :asdf-tools [{:name "nodejs" :version " "}])
                               #":corepack-packages needs")))))
+
+(deftest power-ids-cannot-bypass-owned-state
+  (doseq [key [:oci-instance-id :vultr-instance-id]]
+    (is (seq (errors-matching (assoc base key "valid-looking-id") #"retired")))))
+(deftest backend-is-library-owned-and-remote
+  (is (seq (validate/state-errors (assoc base :provider-backend "local")))))

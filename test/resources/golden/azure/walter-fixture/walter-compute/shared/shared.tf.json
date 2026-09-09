@@ -1,0 +1,127 @@
+{
+  "locals": {
+    "ingress": {
+      "ssh-0-0-0-0-0": {
+        "port": "22",
+        "priority": 100,
+        "protocol": "Tcp",
+        "sources": [
+          "0.0.0.0/0"
+        ]
+      }
+    }
+  },
+  "output": {
+    "params": {
+      "value": {
+        "firewall_id": "${azurerm_network_security_group.network.id}",
+        "location": "${azurerm_resource_group.deployment.location}",
+        "network_cidr": "${one(azurerm_virtual_network.network.address_space)}",
+        "provider": "azure",
+        "resource_group_name": "${azurerm_resource_group.deployment.name}",
+        "subnet_id": "${azurerm_subnet.network.id}",
+        "vpc_id": "${azurerm_virtual_network.network.id}",
+        "vpc_ip_range": "10.42.0.0/16"
+      }
+    }
+  },
+  "provider": {
+    "azurerm": {
+      "features": {},
+      "subscription_id": "00000000-0000-0000-0000-000000000001"
+    }
+  },
+  "resource": {
+    "azurerm_network_security_group": {
+      "network": {
+        "lifecycle": {
+          "prevent_destroy": true
+        },
+        "location": "${azurerm_resource_group.deployment.location}",
+        "name": "walter-fixture-firewall",
+        "resource_group_name": "${azurerm_resource_group.deployment.name}"
+      }
+    },
+    "azurerm_network_security_rule": {
+      "deny_inbound": {
+        "access": "Deny",
+        "destination_address_prefix": "*",
+        "destination_port_range": "*",
+        "direction": "Inbound",
+        "name": "colors-deny-inbound",
+        "network_security_group_name": "${azurerm_network_security_group.network.name}",
+        "priority": 4096,
+        "protocol": "*",
+        "resource_group_name": "${azurerm_resource_group.deployment.name}",
+        "source_address_prefix": "*",
+        "source_port_range": "*"
+      },
+      "ingress": {
+        "access": "Allow",
+        "destination_address_prefix": "*",
+        "destination_port_range": "${each.value.port}",
+        "direction": "Inbound",
+        "for_each": "${local.ingress}",
+        "name": "${each.key}",
+        "network_security_group_name": "${azurerm_network_security_group.network.name}",
+        "priority": "${each.value.priority}",
+        "protocol": "${each.value.protocol}",
+        "resource_group_name": "${azurerm_resource_group.deployment.name}",
+        "source_address_prefixes": "${each.value.sources}",
+        "source_port_range": "*"
+      }
+    },
+    "azurerm_resource_group": {
+      "deployment": {
+        "lifecycle": {
+          "prevent_destroy": true
+        },
+        "location": "westeurope",
+        "name": "example-compute"
+      }
+    },
+    "azurerm_subnet": {
+      "network": {
+        "address_prefixes": [
+          "10.42.0.0/16"
+        ],
+        "lifecycle": {
+          "prevent_destroy": true
+        },
+        "name": "walter-fixture-subnet",
+        "resource_group_name": "${azurerm_resource_group.deployment.name}",
+        "virtual_network_name": "${azurerm_virtual_network.network.name}"
+      }
+    },
+    "azurerm_subnet_network_security_group_association": {
+      "network": {
+        "lifecycle": {
+          "prevent_destroy": true
+        },
+        "network_security_group_id": "${azurerm_network_security_group.network.id}",
+        "subnet_id": "${azurerm_subnet.network.id}"
+      }
+    },
+    "azurerm_virtual_network": {
+      "network": {
+        "address_space": [
+          "10.42.0.0/16"
+        ],
+        "lifecycle": {
+          "prevent_destroy": true
+        },
+        "location": "${azurerm_resource_group.deployment.location}",
+        "name": "walter-fixture-network",
+        "resource_group_name": "${azurerm_resource_group.deployment.name}"
+      }
+    }
+  },
+  "terraform": {
+    "required_providers": {
+      "azurerm": {
+        "source": "hashicorp/azurerm",
+        "version": "4.30.0"
+      }
+    }
+  }
+}

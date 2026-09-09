@@ -16,6 +16,10 @@
   gather_facts: false
   become: true
   tasks:
+    - name: Wait for the login to become reachable
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
     # bash to start with, like the primary login on a fresh image. The remote
     # play sets the desired login shell per seat, after the shell is installed
     # in that seat's own nix profile and its integration file is in place —

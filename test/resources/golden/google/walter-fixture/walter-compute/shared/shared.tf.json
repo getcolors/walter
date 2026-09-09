@@ -1,0 +1,83 @@
+{
+  "locals": {
+    "ingress": {
+      "ssh:0.0.0.0/0": {
+        "name": "walter-fixture-03c3b75ae20a",
+        "ports": [
+          "22"
+        ],
+        "protocol": "tcp",
+        "source_ranges": [
+          "0.0.0.0/0"
+        ]
+      }
+    }
+  },
+  "output": {
+    "params": {
+      "value": {
+        "firewall_ids": "${ {for key, rule in google_compute_firewall.ingress : key => rule.id} }",
+        "network_cidr": "${google_compute_subnetwork.network.ip_cidr_range}",
+        "network_id": "${google_compute_network.network.id}",
+        "network_tag": "walter-fixture-network",
+        "provider": "google",
+        "subnetwork_id": "${google_compute_subnetwork.network.id}"
+      }
+    }
+  },
+  "provider": {
+    "google": {
+      "project": "colors-example-project",
+      "region": "europe-west1",
+      "zone": "europe-west1-b"
+    }
+  },
+  "resource": {
+    "google_compute_firewall": {
+      "ingress": {
+        "allow": [
+          {
+            "ports": "${each.value.ports}",
+            "protocol": "${each.value.protocol}"
+          }
+        ],
+        "direction": "INGRESS",
+        "for_each": "${local.ingress}",
+        "name": "${each.value.name}",
+        "network": "${google_compute_network.network.id}",
+        "source_ranges": "${each.value.source_ranges}",
+        "target_tags": [
+          "walter-fixture-network"
+        ]
+      }
+    },
+    "google_compute_network": {
+      "network": {
+        "auto_create_subnetworks": false,
+        "lifecycle": {
+          "prevent_destroy": true
+        },
+        "name": "walter-fixture-network"
+      }
+    },
+    "google_compute_subnetwork": {
+      "network": {
+        "ip_cidr_range": "10.42.0.0/16",
+        "lifecycle": {
+          "prevent_destroy": true
+        },
+        "name": "walter-fixture-network",
+        "network": "${google_compute_network.network.id}",
+        "region": "europe-west1"
+      }
+    }
+  },
+  "terraform": {
+    "required_providers": {
+      "google": {
+        "source": "hashicorp/google",
+        "version": "6.0.0"
+      }
+    }
+  }
+}

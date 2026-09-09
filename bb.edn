@@ -1,7 +1,7 @@
 ;; Development inside this checkout. Walter itself resolves to the working tree;
-;; `once` and `green` stay on the same SHAs deps.edn pins, so a fresh clone
+;; `colors-compute` and `green` stay on the same SHAs deps.edn pins, so a fresh clone
 ;; renders exactly what CI renders and the goldens mean something. Point
-;; ONCE_LIB_ROOT or GREEN_LIB_ROOT at a sibling checkout to work across repos —
+;; COLORS_COMPUTE_LIB_ROOT or GREEN_LIB_ROOT at a sibling checkout to work across repos —
 ;; that is a deliberate act, not the default.
 ;;
 ;; The launcher a user copies has no bb.edn beside it and resolves the pins
@@ -13,15 +13,11 @@
   {:doc "Run the test suite under babashka"
    :requires ([clojure.test :as t]
               [io.github.getcolors.walter.validate-test]
-              [io.github.getcolors.walter.oci-test]
-              [io.github.getcolors.walter.vultr-test]
               [io.github.getcolors.walter.github-test]
               [io.github.getcolors.walter.tools-test]
               [io.github.getcolors.walter.workflow-test])
    :task (let [{:keys [fail error]}
                (t/run-tests 'io.github.getcolors.walter.validate-test
-                            'io.github.getcolors.walter.oci-test
-                            'io.github.getcolors.walter.vultr-test
                             'io.github.getcolors.walter.github-test
                             'io.github.getcolors.walter.tools-test
                             'io.github.getcolors.walter.workflow-test)]

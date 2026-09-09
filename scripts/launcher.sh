@@ -83,18 +83,19 @@ fi
 cat >"$copy/colors.yml" <<'EOF'
 profile: launcher-check
 workdir: .colors
-provider-compute: no-infra
-provider-backend: local
+provider-compute: vultr
+provider-backend: s3
 compute-prevent-destroy: true
-no-infra-compute-ip: 198.51.100.10
-no-infra-compute-user: root
-no-infra-compute-sudoer: root
-no-infra-compute-uid: 1000
+s3-bucket: fixture-state
+s3-region: eu-central-1
+vultr-region: ams
+vultr-plan: vc2-2c-4gb
+vultr-os-id: 2284
 EOF
 
 out=$( (cd "$copy" && WALTER_LIB_ROOT="$root" ./green build 2>&1) ) ||
   fail "WALTER_LIB_ROOT did not resolve the working tree: $out"
-[ -f "$copy/.colors/launcher-check/walter-compute/main.tf" ] ||
+[ -f "$copy/.colors/launcher-check/walter-compute/nodes/0/backend.tf.json" ] ||
   fail "the override resolved but rendered nothing"
 ok "WALTER_LIB_ROOT resolves a working tree from a copied payload"
 
@@ -107,7 +108,7 @@ ok "WALTER_LIB_ROOT resolves a working tree from a copied payload"
 mkdir -p "$copy/deep/nested"
 out=$( (cd "$copy/deep/nested" && WALTER_LIB_ROOT="$root" ./../../green build 2>&1) ) ||
   fail "running from a subdirectory failed: $out"
-[ -f "$copy/.colors/launcher-check/walter-compute/main.tf" ] ||
+[ -f "$copy/.colors/launcher-check/walter-compute/nodes/0/backend.tf.json" ] ||
   fail "a subdirectory run rendered somewhere other than beside colors.yml"
 ok "finds colors.yml by walking up, and renders beside it"
 

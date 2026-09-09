@@ -1,0 +1,105 @@
+{
+  "locals": {
+    "egress": {
+      "all-ipv4": {
+        "cidr_blocks": [
+          "0.0.0.0/0"
+        ],
+        "from_port": 0,
+        "protocol": "ANY",
+        "to_port": 65535
+      }
+    },
+    "ingress": {
+      "ssh:0.0.0.0/0": {
+        "cidr_blocks": [
+          "0.0.0.0/0"
+        ],
+        "from_port": 22,
+        "protocol": "TCP",
+        "to_port": 22
+      }
+    }
+  },
+  "output": {
+    "params": {
+      "value": {
+        "network_cidr": "${yandex_vpc_subnet.network.v4_cidr_blocks[0]}",
+        "network_id": "${yandex_vpc_network.network.id}",
+        "provider": "yandex",
+        "security_group_id": "${yandex_vpc_security_group.network.id}",
+        "subnet_id": "${yandex_vpc_subnet.network.id}",
+        "zone": "ru-central1-a"
+      }
+    }
+  },
+  "provider": {
+    "yandex": {
+      "cloud_id": "b1gfixturecloud",
+      "folder_id": "b1gfixturefolder",
+      "zone": "ru-central1-a"
+    }
+  },
+  "resource": {
+    "yandex_vpc_network": {
+      "network": {
+        "lifecycle": {
+          "prevent_destroy": true
+        },
+        "name": "walter-fixture-network"
+      }
+    },
+    "yandex_vpc_security_group": {
+      "network": {
+        "dynamic": {
+          "egress": {
+            "content": {
+              "description": "${egress.key}",
+              "from_port": "${egress.value.from_port}",
+              "protocol": "${egress.value.protocol}",
+              "to_port": "${egress.value.to_port}",
+              "v4_cidr_blocks": "${egress.value.cidr_blocks}"
+            },
+            "for_each": "${local.egress}"
+          },
+          "ingress": {
+            "content": {
+              "description": "${ingress.key}",
+              "from_port": "${ingress.value.from_port}",
+              "protocol": "${ingress.value.protocol}",
+              "to_port": "${ingress.value.to_port}",
+              "v4_cidr_blocks": "${ingress.value.cidr_blocks}"
+            },
+            "for_each": "${local.ingress}"
+          }
+        },
+        "lifecycle": {
+          "prevent_destroy": true
+        },
+        "name": "walter-fixture-network",
+        "network_id": "${yandex_vpc_network.network.id}"
+      }
+    },
+    "yandex_vpc_subnet": {
+      "network": {
+        "lifecycle": {
+          "prevent_destroy": true
+        },
+        "name": "walter-fixture-network",
+        "network_id": "${yandex_vpc_network.network.id}",
+        "v4_cidr_blocks": [
+          "10.0.0.0/24"
+        ],
+        "zone": "ru-central1-a"
+      }
+    }
+  },
+  "terraform": {
+    "required_providers": {
+      "yandex": {
+        "source": "yandex-cloud/yandex",
+        "version": "0.120.0"
+      }
+    }
+  }
+}

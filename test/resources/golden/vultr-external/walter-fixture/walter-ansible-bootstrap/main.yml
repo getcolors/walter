@@ -1,0 +1,133 @@
+---
+# Some provider images initially expose root. This is the only stage allowed to use it:
+# create the stable development login, prove its key and sudo policy are in
+# place, then close both root and password SSH before normal provisioning.
+- name: Bootstrap the Ubuntu development login
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Wait for the login to become reachable
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    # Vultr's current Ubuntu image reserves UID/GID 1000 for `linuxuser` even
+    # though the provider template enters as root. Adopt those numeric IDs by
+    # renaming that stock account rather than colliding with it or choosing a
+    # different UID. The empty branches keep this valid if a future image has
+    # no pre-created account, and the final modules converge both shapes.
+    - name: Inspect the existing primary group at GID 1000
+      ansible.builtin.command:
+        argv: [getent, group, "1000"]
+      register: walter_gid_1000
+      changed_when: false
+      failed_when: walter_gid_1000.rc not in [0, 2]
+
+    - name: Rename the stock primary group to Ubuntu
+      ansible.builtin.command:
+        argv:
+          - groupmod
+          - --new-name
+          - ubuntu
+          - "{{ walter_gid_1000.stdout.split(':')[0] }}"
+      when:
+        - walter_gid_1000.rc == 0
+        - walter_gid_1000.stdout.split(':')[0] != 'ubuntu'
+
+    - name: Inspect the existing login at UID 1000
+      ansible.builtin.command:
+        argv: [getent, passwd, "1000"]
+      register: walter_uid_1000
+      changed_when: false
+      failed_when: walter_uid_1000.rc not in [0, 2]
+
+    - name: Rename the stock login and move its home to Ubuntu
+      ansible.builtin.command:
+        argv:
+          - usermod
+          - --login
+          - ubuntu
+          - --home
+          - /home/ubuntu
+          - --move-home
+          - "{{ walter_uid_1000.stdout.split(':')[0] }}"
+      when:
+        - walter_uid_1000.rc == 0
+        - walter_uid_1000.stdout.split(':')[0] != 'ubuntu'
+
+    - name: Create the Ubuntu primary group
+      ansible.builtin.group:
+        name: ubuntu
+        gid: 1000
+        state: present
+
+    - name: Create the Ubuntu user
+      ansible.builtin.user:
+        name: ubuntu
+        uid: 1000
+        group: ubuntu
+        groups: sudo
+        append: true
+        shell: /bin/bash
+        create_home: true
+        state: present
+
+    - name: Create the Ubuntu SSH directory
+      ansible.builtin.file:
+        path: /home/ubuntu/.ssh
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: "0700"
+
+    - name: Read the existing root authorized keys
+      ansible.builtin.slurp:
+        src: /root/.ssh/authorized_keys
+      register: walter_root_keys
+      no_log: true
+
+    - name: Require existing keys before closing root SSH
+      ansible.builtin.assert:
+        that: (walter_root_keys.content | b64decode | trim | length) > 0
+      no_log: true
+
+    - name: Preserve external keys for the Ubuntu login
+      ansible.builtin.copy:
+        dest: /home/ubuntu/.ssh/authorized_keys
+        content: "{{ walter_root_keys.content | b64decode }}"
+        owner: ubuntu
+        group: ubuntu
+        mode: "0600"
+      no_log: true
+
+    - name: Grant passwordless sudo to Ubuntu
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/90-walter-ubuntu
+        content: "ubuntu ALL=(ALL:ALL) NOPASSWD: ALL\n"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Disable root and password SSH login
+      ansible.builtin.copy:
+        # OpenSSH takes the first value it sees. Sort before Ubuntu's
+        # 50-cloud-init.conf or its PasswordAuthentication value wins.
+        dest: /etc/ssh/sshd_config.d/00-walter-login.conf
+        content: |
+          PermitRootLogin no
+          PasswordAuthentication no
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload SSH
+
+    - name: Validate SSH configuration before closing bootstrap access
+      ansible.builtin.command: /usr/sbin/sshd -t
+      changed_when: false
+
+  handlers:
+    - name: Reload SSH
+      ansible.builtin.service:
+        name: ssh
+        state: reloaded

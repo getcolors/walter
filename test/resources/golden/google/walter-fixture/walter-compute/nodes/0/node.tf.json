@@ -1,0 +1,91 @@
+{
+  "locals": {
+    "public_key": "ssh-ed25519 PLACEHOLDER managed-by-colors"
+  },
+  "output": {
+    "params": {
+      "value": {
+        "ip": "${google_compute_address.node.address}",
+        "metadata": {
+          "address_id": "${google_compute_address.node.id}",
+          "instance_id": "${google_compute_instance.node.instance_id}",
+          "self_link": "${google_compute_instance.node.self_link}",
+          "subnetwork_id": "projects/colors-example-project/regions/europe-west1/subnetworks/example-network",
+          "zone": "europe-west1-b"
+        },
+        "name": "${google_compute_instance.node.name}",
+        "node_id": "0",
+        "provider": "google",
+        "provider_id": "${google_compute_instance.node.id}",
+        "sudoer": "ubuntu",
+        "user": "ubuntu",
+        "vpc_ip": "${google_compute_instance.node.network_interface[0].network_ip}"
+      }
+    }
+  },
+  "provider": {
+    "google": {
+      "project": "colors-example-project",
+      "region": "europe-west1",
+      "zone": "europe-west1-b"
+    }
+  },
+  "resource": {
+    "google_compute_address": {
+      "node": {
+        "lifecycle": {
+          "prevent_destroy": true
+        },
+        "name": "walter-fixture",
+        "region": "europe-west1"
+      }
+    },
+    "google_compute_instance": {
+      "node": {
+        "boot_disk": [
+          {
+            "initialize_params": [
+              {
+                "image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts",
+                "size": 20,
+                "type": "pd-balanced"
+              }
+            ]
+          }
+        ],
+        "lifecycle": {
+          "prevent_destroy": true
+        },
+        "machine_type": "e2-medium",
+        "metadata": {
+          "block-project-ssh-keys": "true",
+          "enable-oslogin": "false",
+          "ssh-keys": "ubuntu:${trimspace(local.public_key)}"
+        },
+        "name": "walter-fixture",
+        "network_interface": [
+          {
+            "access_config": [
+              {
+                "nat_ip": "${google_compute_address.node.address}"
+              }
+            ],
+            "subnetwork": "projects/colors-example-project/regions/europe-west1/subnetworks/example-network"
+          }
+        ],
+        "tags": [
+          "walter-fixture-network"
+        ],
+        "zone": "europe-west1-b"
+      }
+    }
+  },
+  "terraform": {
+    "required_providers": {
+      "google": {
+        "source": "hashicorp/google",
+        "version": "6.0.0"
+      }
+    }
+  }
+}

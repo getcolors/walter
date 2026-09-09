@@ -5,8 +5,9 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [green.ansible :as ansible]
-   [green.tofu :as tofu]
-   [io.github.getcolors.once.ssh :as once-ssh]
+   [io.github.getcolors.compute-inspection :as inspection]
+   [io.github.getcolors.compute-orchestration :as orchestration]
+   [io.github.getcolors.walter.compute :as compute]
    [io.github.getcolors.walter.tools :as tools]
    [io.github.getcolors.walter.validate :as validate]))
 
@@ -40,105 +41,6 @@
 ;; ---------------------------------------------------------------------------
 ;; specs
 
-(deftest oci-renders-onces-template-plus-walters-output
-  (let [specs (tools/compute-specs {:provider-compute "oci"} "/w")]
-    (is (= 2 (count specs)))
-    (testing "the provider HCL is ONCE's, by classpath keyword"
-      (is (= :io.github.getcolors.once.tools.tofu.oci/main.tf
-             (:template (first specs)))))
-    (testing "the instance-id output is walter's, rendered beside it — OpenTofu
-             merges every .tf in a directory, so no fork of ONCE is needed"
-      (is (= :io.github.getcolors.walter.tools.tofu.oci/outputs.tf
-             (:template (second specs))))
-      (is (= "/w/outputs.tf" (:target (second specs)))))))
-
-(deftest providers-walter-cannot-power-cycle-get-no-extra-output
-  (doseq [provider ["hcloud" "digitalocean" "yandex" "no-infra"]]
-    (let [specs (tools/compute-specs {:provider-compute provider} "/w")]
-      (is (= 1 (count specs)) (str provider " should render main.tf alone"))
-      (is (= (keyword (str "io.github.getcolors.once.tools.tofu." provider) "main.tf")
-             (:template (first specs)))))))
-
-(deftest templates-read-selmer-delimiters-that-leave-jinja-alone
-  (let [spec (first (tools/compute-specs {:provider-compute "oci"} "/w"))]
-    (is (= {:tag-open \< :tag-close \> :filter-open \{ :filter-close \}}
-           (:opts spec)))))
-
-;; ---------------------------------------------------------------------------
-;; fallbacks
-
-(deftest a-build-never-reaches-for-state
-  (testing "OCI's cloud image logs in as ubuntu"
-    (let [p (tools/fallback-compute-params {:provider-compute "oci" :profile "w"})]
-      (is (= "ubuntu" (:user p)))
-      (is (= "ubuntu" (:sudoer p)))
-      (is (= "w" (:name p)))
-      (is (some? (:ip p)))))
-  (testing "Vultr's provider image is root-only, but Walter's bootstrap hands every normal stage ubuntu"
-    (let [p (tools/fallback-compute-params {:provider-compute "vultr" :profile "w"})]
-      (is (= "ubuntu" (:user p)))
-      (is (= "ubuntu" (:sudoer p)))
-      (is (= "1000" (:uid p)))))
-  (testing "no-infra takes what desired state already knows"
-    (let [p (tools/fallback-compute-params {:provider-compute "no-infra"
-                                            :no-infra-compute-ip "198.51.100.10"
-                                            :no-infra-compute-user "dev"
-                                            :profile "w"})]
-      (is (= "198.51.100.10" (:ip p)))
-      (is (= "dev" (:user p)))))
-  (testing "an unknown provider still renders"
-    (is (some? (:ip (tools/fallback-compute-params {:provider-compute "hcloud"}))))))
-
-;; ---------------------------------------------------------------------------
-;; Vultr's one-time root bootstrap
-
-(deftest vultr-bootstrap-probes-the-final-login-before-falling-back-to-root
-  (is (= "root" (tools/vultr-bootstrap-user {:green/event :build})))
-  (with-redefs [once-ssh/home-dir (constantly "/w")]
-    (let [seen (atom nil)
-          opts {:ip "203.0.113.7" :profile "p" :provider-compute "vultr"
-                :green/state-file "/w/colors.yml"}]
-      (is (= "ubuntu" (tools/vultr-bootstrap-user
-                        opts (fn [args _ timeout]
-                               (reset! seen [args timeout])
-                               {:ok? true}))))
-      (is (some #{"ubuntu@203.0.113.7"} (first @seen)))
-      (is (some #{"/w/.ssh/p"} (first @seen))
-          "the probe uses the deployment-owned key in ~/.ssh")
-      (is (= "root" (tools/vultr-bootstrap-user
-                      opts (fn [& _] {:ok? false})))))))
-
-(deftest vultr-bootstrap-renders-root-entry-and-adopts-ubuntu-downstream
-  (let [dir (str (fs/create-temp-dir))
-        result (tools/ansible-bootstrap-step
-                {:provider-compute "vultr"
-                 :compute-pubkey "ssh-ed25519 AAAAfixture"
-                 :green/event :build
-                 :profile "p" :workdir dir :ip "203.0.113.7"})
-        stage #(str dir "/p/walter-ansible-bootstrap/" %)
-        inventory (slurp (stage "inventory.json"))
-        playbook (slurp (stage "main.yml"))]
-    (is (= 0 (:green/exit result)))
-    (is (= "ubuntu" (:user result)))
-    (is (str/includes? inventory "root"))
-    (is (str/includes? playbook "groupmod"))
-    (is (str/includes? playbook "usermod"))
-    (is (str/includes? playbook "PermitRootLogin no"))
-    (is (str/includes? playbook "PasswordAuthentication no"))
-    (is (str/includes? playbook "NOPASSWD: ALL"))
-    (is (str/includes? playbook "ssh-ed25519 AAAAfixture"))))
-
-(deftest non-vultr-providers-render-no-bootstrap-stage
-  (let [dir (str (fs/create-temp-dir))
-        result (tools/ansible-bootstrap-step
-                {:provider-compute "oci" :green/event :build
-                 :profile "p" :workdir dir})]
-    (is (= 0 (:green/exit result)))
-    (is (not (fs/exists? (str dir "/p/walter-ansible-bootstrap"))))))
-
-;; ---------------------------------------------------------------------------
-;; inventory
-
 (deftest the-inventory-is-one-host-under-one-group
   (testing "ONCE's admin/users split and root@host keys serve a fleet; walter
            manages exactly one machine"
@@ -170,34 +72,6 @@
 
 ;; ---------------------------------------------------------------------------
 ;; the instance id
-
-(deftest desired-state-wins-over-opentofu-state
-  (testing "so stop and start keep working when the backend is unreachable — a
-           broken bucket should not strand you with a machine you cannot stop"
-    (with-redefs [tofu/outputs (fn [& _] (throw (ex-info "backend unreachable" {})))]
-      (is (= "ocid1.instance.oc1..fromfile"
-             (tools/instance-id {:provider-compute "oci"
-                                 :oci-instance-id "ocid1.instance.oc1..fromfile"}))))))
-
-(deftest vultr-desired-state-id-wins-over-opentofu-state
-  (with-redefs [tofu/outputs (fn [& _] (throw (ex-info "backend unreachable" {})))]
-    (is (= "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-           (tools/instance-id
-            {:provider-compute "vultr"
-             :vultr-instance-id "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"})))))
-
-(deftest otherwise-it-comes-from-the-compute-stages-output
-  (with-redefs [tofu/outputs (fn [& _] {:instance_id "ocid1.instance.oc1..fromstate"
-                                        :params {"ip" "203.0.113.7"}})]
-    (is (= "ocid1.instance.oc1..fromstate"
-           (tools/instance-id {:profile "p" :workdir "/tmp/x"})))))
-
-(deftest an-unreachable-backend-answers-nil-rather-than-throwing
-  (with-redefs [tofu/outputs (fn [& _] (throw (ex-info "no state" {})))]
-    (is (nil? (tools/instance-id {:profile "p" :workdir "/tmp/x"})))))
-
-;; ---------------------------------------------------------------------------
-;; template data
 
 (deftest ansible-data-always-has-an-address-a-login-and-an-alias
   (let [data (tools/data-fn {:profile "walter-oci"})]
@@ -1006,41 +880,6 @@
           (is (not (fs/exists? sandbox)) "a seeded machine ends the sandbox")
           (is (nil? (:walter/github-token-file result))))))))
 
-(deftest a-delete-is-made-renderable-rather-than-blocked
-  (testing "the templates interpolate the public key through file(), so a
-           destroy has to render the values create did; a missing public half
-           is rederived and a missing keypair regenerated as a throwaway —
-           the cleanup step removes the files once the destroy succeeds"
-    (let [dir (str (fs/create-temp-dir))
-          opts {:profile "p" :provider-compute "oci"
-                :green/state-file (str dir "/colors.yml")}]
-     (with-redefs [once-ssh/home-dir (constantly dir)]
-      (testing "both halves present is a no-op"
-        (fs/create-dirs (str dir "/.ssh"))
-        (spit (str dir "/.ssh/p") "PRIVATE")
-        (spit (str dir "/.ssh/p.pub") "ssh-ed25519 AAAA p")
-        (is (nil? (tools/ensure-renderable!
-                   opts (fn [& _] (is false "must not run") {:ok? false})))))
-      (testing "a missing public half is rederived from the private one"
-        (fs/delete (str dir "/.ssh/p.pub"))
-        (is (nil? (tools/ensure-renderable!
-                   opts (fn [args _ _]
-                          (is (= ["ssh-keygen" "-y" "-f" (str dir "/.ssh/p")] args))
-                          {:ok? true :out "ssh-ed25519 AAAA rederived\n"}))))
-        (is (= "ssh-ed25519 AAAA rederived\n" (slurp (str dir "/.ssh/p.pub")))))
-      (testing "a missing keypair is regenerated as a throwaway"
-        (fs/delete (str dir "/.ssh/p"))
-        (fs/delete (str dir "/.ssh/p.pub"))
-        (is (nil? (tools/ensure-renderable!
-                   opts (fn [args _ _]
-                          (spit (last args) "PRIVATE")
-                          (spit (str (last args) ".pub") "ssh-ed25519 AAAA throwaway")
-                          {:ok? true})))))
-      (testing "opt-out mode touches nothing"
-        (is (nil? (tools/ensure-renderable!
-                   (assoc opts :oci-ssh-authorized-keys "/x.pub")
-                   (fn [& _] (is false) {:ok? false})))))))))
-
 (deftest the-token-path-arrives-as-an-extra-var-not-a-rendered-value
   (testing "the playbook names the variable; the path — let alone the token —
            never lands in a rendered file, which is what the goldens hold still"
@@ -1061,20 +900,6 @@
 ;; ---------------------------------------------------------------------------
 ;; the machine-access keypair
 
-(deftest the-key-resource-now-comes-from-onces-template
-  (testing "walter renders no ssh-key.tf sidecar any more: in keygen mode
-           ONCE's compute templates declare the profile-named key resource
-           themselves, so the specs are main.tf plus — where the power verbs
-           work — the instance-id output, and nothing else"
-    (is (= 2 (count (tools/compute-specs {:provider-compute "vultr"} "/w"))))
-    (is (= 2 (count (tools/compute-specs {:provider-compute "oci"} "/w"))))
-    (doseq [provider ["hcloud" "digitalocean" "yandex" "no-infra"]]
-      (is (= 1 (count (tools/compute-specs {:provider-compute provider} "/w")))
-          (str provider " renders main.tf alone")))
-    (is (not-any? #(str/ends-with? (str (:target %)) "ssh-key.tf")
-                  (mapcat #(tools/compute-specs {:provider-compute %} "/w")
-                          ["hcloud" "digitalocean" "vultr"])))))
-
 (deftest a-build-renders-placeholders-never-key-material
   (testing "generation is a create-time side effect, so a build renders stable
            placeholders — walter commits its goldens, and a real absolute path
@@ -1082,10 +907,7 @@
     (let [filled (tools/with-machine-key {:profile "p"
                                           :provider-compute "oci"
                                           :green/event :build})]
-      (is (true? (:ssh-keygen filled)))
-      (is (= "/home/build-placeholder/.ssh/p" (:ssh-private-key-path filled)))
-      (is (= "/home/build-placeholder/.ssh/p.pub" (:ssh-public-key-path filled)))
-      (is (= "/home/build-placeholder/.ssh/p.pub" (:oci-ssh-authorized-keys filled)))
+      (is (nil? (:oci-ssh-authorized-keys filled)) "the adapter never changes ownership mode")
       (is (= "ssh-ed25519 PLACEHOLDER managed-by-colors" (:compute-pubkey filled))
           "the Vultr bootstrap play interpolates the content on every provider")))
   (testing "opt-out opts pass through untouched"
@@ -1125,14 +947,14 @@
   (testing "in keygen mode, ssh <profile> uses the generated key and nothing
            else — IdentitiesOnly stops the agent offering the operator's own"
     (let [rendered (render-local-playbook {})]
-      (is (str/includes? rendered "IdentityFile ~/.ssh/p")
+      (is (str/includes? rendered "colors_keygen: true")
           "the standard's literal ~ form, never an absolute home path")
       (is (str/includes? rendered "IdentitiesOnly yes"))))
   (testing "opt-out renders no key line at all — the operator supplied the key
            and has their own arrangements for finding it. Matched on the
            config-line form, since the header commentary mentions the word"
     (let [rendered (render-local-playbook {:oci-ssh-authorized-keys "/x.pub"})]
-      (is (not (str/includes? rendered "IdentityFile ~")))))
+      (is (str/includes? rendered "colors_keygen: false"))))
   (testing "the standard's remaining lines render in both modes: ForwardAgent
            is explicitly off — nothing on the machine authenticates with the
            workstation's keys — and accept-new spares a recreate the
@@ -1262,22 +1084,16 @@
       (is (str/includes? rendered "delegate_to: \"p\""))
       (is (str/includes? rendered "run_once: true")))))
 
-(deftest the-local-play-manages-one-block-per-seat
-  (let [rendered (render-local-playbook {:users ["jack" "emma"]})]
-    (is (str/includes? rendered "Host {{ host_alias }}-jack"))
-    (is (str/includes? rendered "User jack"))
-    (is (str/includes? rendered
-                       "# {mark} walter {{ host_alias }}-emma ANSIBLE MANAGED BLOCK")
-        "each seat has its own marker, so removing one removes only its block")
-    (testing "seat blocks pin the same machine key in keygen mode, and carry
-             the standard's full block — matched with the block indentation,
-             since the header commentary also spells the lines out"
-      (is (= 3 (count (re-seq #"IdentityFile ~/\.ssh/p" rendered))))
-      (is (= 3 (count (re-seq #" {14}ForwardAgent no" rendered))))))
-  (testing "without seats the play is exactly the one block"
-    (let [rendered (render-local-playbook {})]
-      (is (not (str/includes? rendered "-jack")))
-      (is (= 1 (count (re-seq #"ansible.builtin.blockinfile" rendered)))))))
+(deftest local-play-receives-normalized-seats-and-legacy-prefix
+  (let [captured (atom nil)]
+    (with-redefs [ansible/ansible-with-spec (fn [opts config _] (reset! captured config) opts)]
+      (tools/ansible-local-step {:profile "p" :provider-compute "oci" :workdir "/tmp/p"
+                                :users ["jack" "emma"] :ip "203.0.113.7" :user "ubuntu"}))
+    (is (= "walter" (get-in @captured [:extra-vars :ssh_legacy_marker_prefix])))
+    (is (= [{:name "p" :ip "203.0.113.7" :user "ubuntu"}
+            {:name "p-jack" :ip "203.0.113.7" :user "jack"}
+            {:name "p-emma" :ip "203.0.113.7" :user "emma"}]
+           (get-in @captured [:extra-vars :ssh_hosts])))))
 
 (deftest the-emacs-packages-inventory-warms-each-seat
   (let [dir (str (fs/create-temp-dir))
@@ -1289,3 +1105,52 @@
     (let [inventory (slurp (str (tools/tool-dir merged tools/emacs-packages-tool)
                                 "/inventory.json"))]
       (is (str/includes? inventory "\"p-jack\"")))))
+
+(def observed-root
+  {:node_id "0" :provider "vultr" :name "p" :ip "203.0.113.7"
+   :vpc_ip nil :user "root" :sudoer "root" :provider_id "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"})
+
+(deftest root-bootstrap-is-selected-from-normalized-user
+  (doseq [provider ["vultr" "digitalocean"]]
+    (let [dir (str (fs/create-temp-dir))
+          opts {:provider-compute provider :profile "p" :workdir dir :green/event :build
+                :ip "203.0.113.7" :colors-compute/cluster {:nodes [(assoc observed-root :provider provider)]}}
+          result (tools/ansible-bootstrap-step opts)
+          play (slurp (str dir "/p/walter-ansible-bootstrap/main.yml"))]
+      (is (= "ubuntu" (:user result)))
+      (is (str/includes? play "PermitRootLogin no")))
+    (let [dir (str (fs/create-temp-dir))
+          result (tools/ansible-bootstrap-step
+                  {:provider-compute provider :profile "p" :workdir dir :green/event :build
+                   :colors-compute/cluster {:nodes [(assoc observed-root :provider provider :user "ubuntu")]}})]
+      (is (= 0 (:green/exit result)))
+      (is (not (fs/exists? (str dir "/p/walter-ansible-bootstrap")))))))
+
+(deftest external-root-bootstrap-preserves-existing-authorized-keys
+  (let [dir (str (fs/create-temp-dir))
+        opts {:provider-compute "vultr" :vultr-ssh-keys "external-account-key"
+              :profile "p" :workdir dir :green/event :build :ip "203.0.113.7"
+              :colors-compute/cluster {:nodes [observed-root]}}
+        result (tools/ansible-bootstrap-step opts)
+        play (slurp (str dir "/p/walter-ansible-bootstrap/main.yml"))]
+    (is (= "ubuntu" (:user result)))
+    (is (str/includes? play "src: /root/.ssh/authorized_keys")))
+  (let [seen (atom nil)]
+    (is (= "ubuntu" (tools/bootstrap-user
+                      {:profile "p" :provider-compute "vultr" :ip "203.0.113.7"
+                       :ssh-private-key-path "/temporary/owned/key"}
+                      (fn [args _ _] (reset! seen args) {:ok? true}))))
+    (is (some #{"/temporary/owned/key"} @seen))))
+
+(deftest missing-owned-state-cannot-become-a-placeholder-host
+  (with-redefs [inspection/read-deployment (fn [_ environment _ _]
+                                            (is (map? environment))
+                                            (throw (ex-info "backend unavailable" {})))]
+    (let [result (tools/load-compute-step {:profile "p" :green/event :delete})]
+      (is (= 1 (:green/exit result)))
+      (is (nil? (:ip result)))))
+  (is (thrown? Exception (compute/node {:profile "p" :provider-compute "vultr"}))))
+
+(deftest compute-json-handles-mixed-library-keys
+  (is (= {"backups" true "region" "ams"}
+         (json/parse-string (#'tools/compute-json {:region "ams" "backups" true} 0)))))

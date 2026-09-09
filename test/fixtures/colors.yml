@@ -7,14 +7,14 @@ profile: walter-fixture
 workdir: .colors
 
 provider-compute: oci
-provider-backend: local
+provider-backend: s3
 
 compute-prevent-destroy: true
 power-wait-seconds: 300
 
 # No machine-key values below, on purpose: their absence selects keygen mode
 # (SSH Keypair Standard, workspace standards/ssh-keypair.md), so every golden
-# renders ONCE's keygen branch — the profile-named key resource on the
+# renders the library's keygen branch — the profile-named key resource on the
 # name-registering providers, the filled path or content elsewhere. A build
 # renders stable placeholders (generation is a create-time side effect), so
 # the goldens stay byte-identical across workstations. The opt-out branch —
@@ -60,10 +60,6 @@ yandex-memory-gb: 8
 yandex-core-fraction: 100
 yandex-disk-size-gb: 50
 
-no-infra-compute-ip: 198.51.100.10
-no-infra-compute-user: root
-no-infra-compute-sudoer: root
-no-infra-compute-uid: 1000
 
 s3-bucket: walter-fixture-state
 s3-region: eu-central-1
@@ -163,3 +159,28 @@ atuin-username: fixture-user
 users:
   - jack
   - emma
+
+# Additional library providers, synthetic offline settings.
+aws-availability-zone: "eu-west-1a"
+aws-image-id: "ami-0123456789abcdef0"
+aws-instance-type: "t3.small"
+aws-region: "eu-west-1"
+aws-root-volume-size-gb: 20
+aws-vpc-cidr: 10.42.0.0/16
+azure-boot-disk-size-gb: 32
+azure-image-offer: "ubuntu-24_04-lts"
+azure-image-publisher: "Canonical"
+azure-image-sku: "server"
+azure-image-version: "latest"
+azure-location: "westeurope"
+azure-resource-group: "example-compute"
+azure-subscription-id: "00000000-0000-0000-0000-000000000001"
+azure-vm-size: "Standard_B2s"
+azure-vnet-cidr: 10.42.0.0/16
+google-boot-disk-size-gb: 20
+google-image-id: "projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts"
+google-machine-type: "e2-medium"
+google-project: "colors-example-project"
+google-region: "europe-west1"
+google-zone: "europe-west1-b"
+google-subnet-cidr: 10.42.0.0/16

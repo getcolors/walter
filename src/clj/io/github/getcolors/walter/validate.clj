@@ -1,67 +1,12 @@
 (ns io.github.getcolors.walter.validate
-  "Walter's desired-state rules, driven by ONCE's provider registry.
+  "Walter application settings; compute and backend contracts belong to colors-compute."
+  (:require [clojure.string :as str]
+            [green.cli :as green-cli]
+            [io.github.getcolors.compute :as library]
+            [io.github.getcolors.compute-ssh :as ssh]))
 
-  The registry is consumed as data rather than reimplemented, then its compute
-  slot is filtered to Walter's deliberately supported providers. It remains the
-  single place recording the keys and credentials each selected template needs,
-  while a new ONCE provider cannot silently become a Walter feature at pin-bump
-  time. Walter drives two of ONCE's four slots: there is no SMTP or DNS here.
-
-  Nothing upstream promises this registry's shape. `scripts/golden.sh` is what
-  actually catches a change to it — see plans/0001."
-  (:require
-   [clojure.string :as str]
-   [green.cli :as green-cli]
-   [io.github.getcolors.once.ssh :as once-ssh]
-   [io.github.getcolors.once.validate :as once-validate]))
-
-(def compute-providers
-  "The ONCE compute templates Walter deliberately supports. New ONCE providers
-  do not become Walter features merely because a dependency pin moves."
-  #{"oci" "hcloud" "digitalocean" "vultr" "yandex" "no-infra"})
-
-(def providers
-  "ONCE's provider registry, filtered to Walter's advertised compute surface."
-  (update once-validate/providers :provider-compute select-keys compute-providers))
-
-(def slots
-  "The provider slots walter fills. ONCE has four; walter provisions a machine
-  and stores state, and does not send mail or manage DNS."
-  [:provider-compute :provider-backend])
-
-(def stoppable
-  "Compute providers walter can power cycle.
-
-  Membership is a fact about the provider's API, not about its OpenTofu
-  template — `stop` and `start` never reach OpenTofu. Every other provider
-  answers \"no\" and the power verbs become a *reported* no-op rather than a
-  silent success: a cost-saving command that quietly does nothing is one you
-  discover on the invoice.
-
-  This lives in walter, not in ONCE. ONCE has no power verb, so a `:stoppable`
-  key there would be carried purely for a downstream consumer — and because it
-  never reaches a generated file it is exactly the blind spot ONCE's own rules
-  call out, needing a three-colour commit and a parity fixture to add honestly."
-  #{"oci" "vultr"})
-
-(defn stoppable?
-  "Whether the selected compute provider supports `stop` and `start`."
-  [opts]
-  (contains? stoppable (str (:provider-compute opts))))
-
-(defn keygen?
-  "Whether walter generates and manages the machine-access keypair.
-
-  The SSH Keypair Standard (workspace standards/ssh-keypair.md) semantics,
-  delegated to ONCE's implementation: an absent machine-key value in desired
-  state selects keygen mode, a present one is opt-out, and there is no flag.
-  The old `compute-keygen: true` opt-in is superseded — with generation the
-  default, the switch is the explicit key itself. ONCE's templates now render
-  the keygen branches (the provider key resource named after the profile, the
-  `private_key` connection), so walter's old `ssh-key.tf` merge trick and its
-  per-run ssh-agent are gone with it."
-  [opts]
-  (once-ssh/keygen? opts))
+(defn keygen? [opts]
+  (and (some? (:provider-compute opts)) (= "managed" (:mode (ssh/mode opts)))))
 
 (def agent-credential-paths
   "Agent CLIs walter can carry a subscription login for, and the one file each
@@ -85,20 +30,6 @@
   {"claude" ".claude/.credentials.json"
    "codex" ".codex/auth.json"
    "pi" ".pi/agent/auth.json"})
-
-(defn- entry
-  [opts slot]
-  (get-in providers [slot (get opts slot)]))
-
-(defn tofu-env
-  "Flat key -> the environment variable OpenTofu reads it from, for the provider
-  selected in `slot`."
-  [opts slot]
-  (:tofu-env (entry opts slot) {}))
-
-(defn- slot-keys
-  [opts field]
-  (mapcat #(get (entry opts %) field []) slots))
 
 (defn placeholder?
   "Whether a value is missing in the ways a hand-edited file produces: absent,
@@ -132,8 +63,7 @@
    :atuin-username
    :seed-agent-credentials
    :clone-orgs
-   :github-account :git-email
-   :oci-image-id])
+   :github-account :git-email])
 
 (defn- leftover-placeholders
   "Gated keys still carrying the scaffold's REPLACE_ME.
@@ -175,10 +105,6 @@
   (when (not-empty (str (get env profile-par)))
     [(str profile-par " is set. Walter takes its profile from colors.yml only — "
           "run from the project directory rather than overriding it.")]))
-
-(def ^:private instance-id-re #"^ocid1\.instance\.[A-Za-z0-9._-]+$")
-(def ^:private vultr-instance-id-re
-  #"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 (def ^:private github-login-re
   "A GitHub account name: alphanumerics and interior hyphens, 39 characters at
@@ -288,17 +214,10 @@
   [opts]
   (vec
    (concat
-    ;; The machine-key keys are no longer in the registry's :required — their
-    ;; absence selects keygen mode (SSH Keypair Standard), so nothing needs
-    ;; waiving here any more.
-    (map #(str % " is required")
-         (missing-keys opts (concat [:profile :workdir]
-                                    (slot-keys opts :required))))
+    (map #(str % " is required") (missing-keys opts [:profile :workdir :provider-compute :provider-backend]))
     (leftover-placeholders opts)
-    (for [slot slots
-          :let [provider (get opts slot)]
-          :when (not (contains? (get providers slot) provider))]
-      (str "unsupported " slot " " (pr-str provider)))
+    (try (library/backend-plan opts (str (:profile opts) "/shared.tfstate")) []
+         (catch Exception e [(ex-message e)]))
     (when-not (boolean? (:compute-prevent-destroy opts))
       [":compute-prevent-destroy must be true or false"])
     ;; The flag is gone: generation is the default and the explicit key is the
@@ -306,30 +225,8 @@
     ;; migration message rather than a silent ignore.
     (when (some? (:compute-keygen opts))
       [":compute-keygen is superseded by the SSH Keypair Standard — remove it; generation is the default, and setting the provider's machine key is the opt-out"])
-    ;; Walter closes Vultr's root-only bootstrap login. Without the generated
-    ;; key's private half there is no way to enter as root and install ubuntu's
-    ;; key before that door closes, so opt-out would create a machine nobody
-    ;; can enter.
-    (when (and (= "vultr" (str (:provider-compute opts)))
-               (not (placeholder? (:vultr-ssh-keys opts))))
-      [":vultr-ssh-keys is not accepted — walter must hold the private key to bootstrap ubuntu before disabling root SSH; leave it unset and the profile-named keypair is generated"])
-    ;; A present :compute-pubkey is Yandex's opt-out; absent selects keygen.
-    ;; Either way a value that is present must look like a public key.
-    (when-not (or (nil? (:compute-pubkey opts))
-                  (placeholder? (:compute-pubkey opts))
-                  (str/starts-with? (str (:compute-pubkey opts)) "ssh-"))
-      [":compute-pubkey must be an SSH public key"])
-    ;; Optional, and the escape hatch that lets stop/start work without reading
-    ;; OpenTofu state — so a malformed one has to fail here rather than as an
-    ;; opaque CLI error half way through a power cycle.
-    (when-not (or (nil? (:oci-instance-id opts))
-                  (placeholder? (:oci-instance-id opts))
-                  (re-matches instance-id-re (str (:oci-instance-id opts))))
-      [":oci-instance-id must be an instance OCID (ocid1.instance....)"])
-    (when-not (or (nil? (:vultr-instance-id opts))
-                  (placeholder? (:vultr-instance-id opts))
-                  (re-matches vultr-instance-id-re (str (:vultr-instance-id opts))))
-      [":vultr-instance-id must be a Vultr instance UUID"])
+    (for [key [:oci-instance-id :vultr-instance-id] :when (contains? opts key)]
+      (str key " is retired; power operations require the owned deployment state"))
     (when-not (or (nil? (:power-wait-seconds opts))
                   (and (integer? (:power-wait-seconds opts))
                        (pos? (:power-wait-seconds opts))))
@@ -463,9 +360,6 @@
                  "ssh key for GitHub — clones authenticate over https with "
                  "the acquired token, so name the https:// form")])))))))
 
-(defn secret-errors
-  "Credentials the selected providers need that no `COLORS_PAR_*` variable
-  supplied."
-  [opts]
-  (map #(str "required credential is not set: " (green-cli/par-name %))
-       (distinct (missing-keys opts (slot-keys opts :secrets)))))
+(defn secret-errors [opts]
+  (try (library/compute-credential-errors opts (into {} (System/getenv)))
+       (catch Exception _ ["invalid compute provider"])))

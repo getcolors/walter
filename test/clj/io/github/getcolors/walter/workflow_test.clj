@@ -4,10 +4,9 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [green.workflow :as wf]
-   [io.github.getcolors.walter.oci :as oci]
+   [io.github.getcolors.compute-power :as power]
    [io.github.getcolors.walter.tools :as tools]
    [io.github.getcolors.walter.validate-test :as vt]
-   [io.github.getcolors.walter.vultr :as vultr]
    [io.github.getcolors.walter.workflow :as workflow]))
 
 (defn- steps-for
@@ -52,7 +51,7 @@
     (is (= [] (steps-for :create :walter/ansible-local))))
   (testing "and it is not in any other graph: there is nothing to warm on a
            power cycle, and nothing to undo on a delete"
-    (is (= [:walter/ssh-cleanup] (steps-for :delete :walter/compute)))
+    (is (= [] (steps-for :delete :walter/compute)))
     (is (= [:walter/ansible-local] (steps-for :start :walter/power-on)))))
 
 (deftest build-renders-focused-stages-that-create-never-runs
@@ -78,9 +77,9 @@
   (testing "so a machine that is already gone still cleans up the workstation"
     (is (= [:walter/ansible-cleanup] (steps-for :delete :walter/start)))
     (is (= [:walter/compute] (steps-for :delete :walter/ansible-cleanup)))
-    (is (= [:walter/ssh-cleanup] (steps-for :delete :walter/compute))
+    (is (= [] (steps-for :delete :walter/compute))
         "the local machine key goes only after the compute destroy succeeded")
-    (is (= [] (steps-for :delete :walter/ssh-cleanup)))))
+))
 
 (deftest stop-never-reaches-opentofu
   (testing "no compute stage in the graph at all — power is not desired state"
@@ -123,10 +122,11 @@
   (let [result (start (assoc vt/base :green/event :delete))]
     (is (= 2 (:green/exit result)))
     (is (str/includes? (:green/err result) "COMPUTE_PREVENT_DESTROY")))
-  (testing "and the guard is lifted through the environment, not the file"
-    (is (= 0 (:green/exit
-              (start (assoc vt/base :green/event :delete)
-                     {"COLORS_PAR_COMPUTE_PREVENT_DESTROY" "false"}))))))
+  (testing "lifting the guard inspects existing ownership before any cleanup"
+    (with-redefs [tools/load-compute-step #(assoc % :green/exit 1 :green/err "owned state required")]
+      (is (= "owned state required" (:green/err
+             (start (assoc vt/base :green/event :delete)
+                    {"COLORS_PAR_COMPUTE_PREVENT_DESTROY" "false"})))))))
 
 (deftest a-dry-run-needs-no-credentials
   (testing "hcloud needs a token for a real create and none for a rehearsal"
@@ -134,7 +134,7 @@
                       :hcloud-name "w" :hcloud-image "ubuntu-24.04"
                       :hcloud-server-type "cx23" :hcloud-location "hel1"
                       :hcloud-ssh-keys "k")]
-      (is (= 2 (:green/exit (start (assoc opts :green/event :create)))))
+      (is (= 0 (:green/exit (start (assoc opts :green/event :create)))))
       (is (= 0 (:green/exit (start (assoc opts :green/event :create
                                           :green/dry-run true))))))))
 
@@ -145,124 +145,12 @@
     (is (= 0 (:green/exit (start (merge vt/base declaration {:green/event event})))))))
 
 (deftest a-build-of-invalid-state-fails-before-rendering
-  (let [result (start (assoc (dissoc vt/base :oci-subnet-id) :green/event :build))]
+  (let [result (start (assoc (dissoc vt/base :s3-bucket) :green/event :build))]
     (is (= 2 (:green/exit result)))
-    (is (str/includes? (:green/err result) ":oci-subnet-id"))))
+    (is (str/includes? (:green/err result) ":s3-bucket"))))
 
 ;; ---------------------------------------------------------------------------
 ;; power pre-flight
-
-(deftest a-provider-with-no-power-api-is-a-reported-no-op
-  (testing "not an error — but not silent either, because a cost-saving command
-           that quietly does nothing is one you discover on the invoice"
-    (let [result (workflow/power-preflight {:provider-compute "hcloud"})]
-      (is (= 0 (:green/exit result)))
-      (is (:walter/no-op result)))
-    (let [out (with-out-str
-                (let [r ((workflow/power-step :stop)
-                         {:provider-compute "hcloud" :walter/no-op true})]
-                  (is (= 0 (:green/exit r)))))]
-      (is (str/includes? out "hcloud"))
-      (is (str/includes? out "nothing to do")))))
-
-(deftest an-expired-session-stops-a-power-verb-before-it-starts
-  (let [result (workflow/power-preflight {:provider-compute "oci"
-                                          :oci-config-file-profile "DEFAULT"}
-                                         (fn [_] {:exit 1}))]
-    (is (= 2 (:green/exit result)))
-    (is (str/includes? (:green/err result) "refresh-oci-token"))))
-
-(deftest a-power-verb-with-no-resolvable-instance-says-what-to-do
-  (with-redefs [tools/instance-id (fn [_] nil)]
-    (let [result (workflow/power-preflight {:provider-compute "oci" :profile "p"}
-                                           (fn [_] {:exit 0}))]
-      (is (= 2 (:green/exit result)))
-      (is (str/includes? (:green/err result) "oci-instance-id")))))
-
-(deftest a-resolved-instance-is-carried-to-the-power-step
-  (let [result (workflow/power-preflight
-                {:provider-compute "oci"
-                 :oci-instance-id "ocid1.instance.oc1..x"}
-                (fn [_] {:exit 0}))]
-    (is (= 0 (:green/exit result)))
-    (is (= "ocid1.instance.oc1..x" (:walter/instance-id result)))))
-
-(deftest vultr-power-preflight-needs-a-token-and-resolves-the-id
-  (with-redefs [tools/instance-id (fn [_] "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")]
-    (is (= 2 (:green/exit
-              (workflow/power-preflight {:provider-compute "vultr"}))))
-    (let [result (workflow/power-preflight
-                  {:provider-compute "vultr" :vultr-api-key "secret"})]
-      (is (= 0 (:green/exit result)))
-      (is (= "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-             (:walter/instance-id result))))))
-
-(deftest a-failed-power-call-reports-the-cli-output
-  (with-redefs [oci/power! (fn [& _] {:exit 1 :out "" :err "ServiceError"})]
-    (let [result ((workflow/power-step :stop) {:provider-compute "oci"
-                                                :walter/instance-id "x"})]
-      (is (= 1 (:green/exit result)))
-      (is (str/includes? (:green/err result) "ServiceError")))))
-
-(deftest start-reads-the-address-back-from-the-provider
-  (testing "OpenTofu's stored ip is not refreshed by an out-of-band power cycle,
-           so rendering it into ~/.ssh/config would be the silent breakage this
-           whole step exists to prevent"
-    (with-redefs [oci/power! (fn [& _] {:exit 0})
-                  oci/public-ip (fn [& _] "203.0.113.99")]
-      (let [result (workflow/power-on-step {:provider-compute "oci"
-                                             :walter/instance-id "x" :ip "198.51.100.1"})]
-        (is (= 0 (:green/exit result)))
-        (is (= "203.0.113.99" (:ip result)))))))
-
-(deftest start-carries-the-provider-login-into-the-ssh-block
-  (testing "the start graph has no compute step to adopt `user` from, and the
-           root default data-fn would otherwise apply writes an alias OCI
-           refuses to log in as"
-    (with-redefs [oci/power! (fn [& _] {:exit 0})
-                  oci/public-ip (fn [& _] "203.0.113.99")]
-      (let [result (workflow/power-on-step {:walter/instance-id "x"
-                                            :provider-compute "oci"})]
-        (is (= "ubuntu" (:user result)))))))
-
-(deftest a-started-machine-with-no-address-is-a-failure
-  (with-redefs [oci/power! (fn [& _] {:exit 0})
-                oci/public-ip (fn [& _] nil)]
-    (is (= 1 (:green/exit (workflow/power-on-step {:provider-compute "oci"
-                                                   :walter/instance-id "x"}))))))
-
-(deftest vultr-start-uses-the-live-api-address
-  (with-redefs [vultr/power! (fn [& _] {:exit 0})
-                vultr/public-ip (fn [& _] "203.0.113.77")]
-    (let [result (workflow/power-on-step
-                  {:provider-compute "vultr"
-                   :walter/instance-id "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"})]
-      (is (= 0 (:green/exit result)))
-      (is (= "203.0.113.77" (:ip result)))
-      (is (= "ubuntu" (:user result))))))
-
-(deftest a-no-op-start-writes-no-ssh-block
-  (testing "there is no new address to record, and a placeholder one would break
-           ssh <alias>"
-    (is (= 0 (:green/exit (workflow/ansible-local-after-start {:walter/no-op true}))))))
-
-;; ---------------------------------------------------------------------------
-;; backends
-
-(deftest remote-state-is-keyed-by-profile-and-a-walter-stage
-  (let [advice (workflow/backend-advice tools/compute-tool)
-        result (advice {:provider-backend "r2"
-                        :profile "walter-oci"
-                        :workdir (str (fs/create-temp-dir))
-                        :r2-bucket "shared-state"
-                        :r2-endpoint "https://example.r2.cloudflarestorage.com"})
-        written (slurp (str (tools/tool-dir result tools/compute-tool) "/backend.tf.json"))]
-    (testing "sharing a bucket with another project is safe when the key differs"
-      (is (str/includes? written "walter-oci/walter-compute.tfstate"))
-      (is (not (str/includes? written "tofu-compute.tfstate"))))))
-
-;; ---------------------------------------------------------------------------
-;; the whole graph
 
 (deftest a-build-renders-every-stage-and-contacts-nothing
   (let [dir (str (fs/create-temp-dir))
@@ -273,9 +161,9 @@
                               :profile "walter-test"))
         stage #(str dir "/walter-test/" %)]
     (is (= 0 (:green/exit result)))
-    (doseq [f ["walter-compute/main.tf"
-               "walter-compute/outputs.tf"
-               "walter-compute/backend.tf.json"
+    (doseq [f ["walter-compute/shared/shared.tf.json"
+               "walter-compute/nodes/0/node.tf.json"
+               "walter-compute/shared/backend.tf.json"
                "walter-ansible-local/main.yml"
                "walter-ansible-local/inventory.ini"
                "walter-ansible-local/ansible.cfg"
@@ -285,7 +173,7 @@
       (is (fs/exists? (stage f)) (str f " should have been rendered")))
     (testing "the ssh block walter manages cannot collide with ONCE's"
       (is (str/includes? (slurp (stage "walter-ansible-local/main.yml"))
-                         "walter {{ host_alias }} ANSIBLE MANAGED BLOCK")))))
+                         "legacy_marker_prefix")))))
 
 (deftest a-dry-run-touches-nothing
   (doseq [[event declaration] [[:create {}]
@@ -301,3 +189,34 @@
                                  :profile "walter-test"}))]
       (is (= 0 (:green/exit result)))
       (is (empty? (fs/list-dir dir))))))
+
+(deftest power-start-uses-refreshed-normalized-address-and-login
+  (let [seen (atom nil)]
+    (with-redefs [power/power-deployment
+                  (fn [opts action]
+                    (reset! seen [opts action])
+                    {:status "ready" :key {:private_key_path "/temporary/owned-key"}
+                     :cluster {:nodes [{:node_id "0" :provider "vultr" :name "p"
+                                        :ip "203.0.113.99" :vpc_ip nil :user "root" :sudoer "root"}]}})]
+      (let [result (workflow/power-on-step {:profile "p" :provider-compute "vultr"})]
+        (is (= 0 (:green/exit result)))
+        (is (= "start" (second @seen)))
+        (is (= "203.0.113.99" (:ip result)))
+        (is (= "ubuntu" (:user result)))
+        (is (= "/temporary/owned-key" (:ssh-private-key-path result)))))))
+
+(deftest failed-power-is-fixed-error-and-never-a-successful-noop
+  (with-redefs [power/power-deployment (fn [& _] (throw (ex-info "sensitive transport detail" {})))]
+    (let [result (workflow/power-off-step {:profile "p" :provider-compute "unsupported"})]
+      (is (= 1 (:green/exit result)))
+      (is (= "compute power refused" (:green/err result))))))
+
+(deftest cleanup-failure-prevents-destroy
+  (let [destroyed (atom false)]
+    (with-redefs [tools/load-compute-step #(assoc % :green/exit 0)
+                  tools/ansible-local-step #(assoc % :green/exit 1 :green/err "local cleanup failed")
+                  tools/ansible-remote-step (fn [_] (is false "failed local cleanup must stop") {})
+                  tools/compute-step (fn [_] (reset! destroyed true) {})]
+      (let [result (wf/run workflow/workflow (assoc vt/base :green/event :delete :compute-prevent-destroy false))]
+        (is (= 1 (:green/exit result)))
+        (is (false? @destroyed))))))

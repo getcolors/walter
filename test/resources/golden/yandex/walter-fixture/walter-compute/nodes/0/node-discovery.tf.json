@@ -1,0 +1,110 @@
+{
+  "data": {
+    "yandex_compute_image": {
+      "ubuntu": {
+        "family": "ubuntu-2404-lts"
+      }
+    }
+  },
+  "locals": {
+    "public_key": "ssh-ed25519 PLACEHOLDER managed-by-colors"
+  },
+  "output": {
+    "params": {
+      "value": {
+        "ip": "${yandex_compute_instance.node.network_interface[0].nat_ip_address}",
+        "metadata": {
+          "address_id": "${yandex_vpc_address.node.id}",
+          "fqdn": "${yandex_compute_instance.node.fqdn}",
+          "instance_id": "${yandex_compute_instance.node.id}",
+          "security_group_ids": [
+            "enp00000000000000000"
+          ],
+          "subnet_id": "e9b00000000000000000",
+          "zone": "ru-central1-a"
+        },
+        "name": "${yandex_compute_instance.node.name}",
+        "node_id": "0",
+        "provider": "yandex",
+        "provider_id": "${yandex_compute_instance.node.id}",
+        "sudoer": "ubuntu",
+        "user": "ubuntu",
+        "vpc_ip": "${yandex_compute_instance.node.network_interface[0].ip_address}"
+      }
+    }
+  },
+  "provider": {
+    "yandex": {
+      "cloud_id": "b1gfixturecloud",
+      "folder_id": "b1gfixturefolder",
+      "zone": "ru-central1-a"
+    }
+  },
+  "resource": {
+    "yandex_compute_instance": {
+      "node": {
+        "allow_stopping_for_update": false,
+        "boot_disk": [
+          {
+            "initialize_params": [
+              {
+                "image_id": "${data.yandex_compute_image.ubuntu.id}",
+                "size": 50
+              }
+            ]
+          }
+        ],
+        "lifecycle": {
+          "ignore_changes": [
+            "boot_disk[0].initialize_params[0].image_id"
+          ],
+          "prevent_destroy": true
+        },
+        "metadata": {
+          "ssh-keys": "ubuntu:${trimspace(local.public_key)}"
+        },
+        "name": "walter-fixture",
+        "network_interface": [
+          {
+            "nat": true,
+            "nat_ip_address": "${yandex_vpc_address.node.external_ipv4_address[0].address}",
+            "security_group_ids": [
+              "enp00000000000000000"
+            ],
+            "subnet_id": "e9b00000000000000000"
+          }
+        ],
+        "platform_id": "standard-v3",
+        "resources": [
+          {
+            "core_fraction": 100,
+            "cores": 2,
+            "memory": 8
+          }
+        ],
+        "zone": "ru-central1-a"
+      }
+    },
+    "yandex_vpc_address": {
+      "node": {
+        "external_ipv4_address": [
+          {
+            "zone_id": "ru-central1-a"
+          }
+        ],
+        "lifecycle": {
+          "prevent_destroy": true
+        },
+        "name": "walter-fixture"
+      }
+    }
+  },
+  "terraform": {
+    "required_providers": {
+      "yandex": {
+        "source": "yandex-cloud/yandex",
+        "version": "0.120.0"
+      }
+    }
+  }
+}

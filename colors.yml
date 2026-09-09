@@ -14,6 +14,9 @@
 # another project's OpenTofu state.
 #
 # Required per provider:
+#   azure          (ambient Azure CLI session)
+#   aws            (ambient AWS credential chain)
+#   google         (Application Default Credentials)
 #   digitalocean   COLORS_PAR_DO_TOKEN
 #   hcloud         COLORS_PAR_HCLOUD_TOKEN
 #   yandex         COLORS_PAR_YANDEX_TOKEN
@@ -38,8 +41,8 @@
 profile: walter-example
 workdir: .colors
 
-provider-compute: oci # digitalocean | hcloud | oci | vultr | yandex | no-infra
-provider-backend: local # local | s3 | r2
+provider-compute: oci # azure | aws | google | digitalocean | hcloud | oci | vultr | yandex
+provider-backend: s3 # s3 | r2
 
 # Renders lifecycle { prevent_destroy = true }. A real delete refuses to start
 # until COLORS_PAR_COMPUTE_PREVENT_DESTROY=false. What lives on a development
@@ -49,17 +52,9 @@ compute-prevent-destroy: true
 
 # --- power ------------------------------------------------------------------
 #
-# `stop` and `start` never reach OpenTofu. Power state is not declared in any
-# template, so nothing drifts when the instance is stopped out of band — there
-# is nothing for OpenTofu to reconcile. Only providers walter knows how to power
-# cycle do anything; the rest report that stop is not supported and exit 0.
-#
-# Optional. Left unset, walter reads the instance id from the compute stage's
-# `instance_id` OpenTofu output, which needs the state backend to be reachable.
-# Set it — `tofu output instance_id` in the stage directory, or the console —
-# and stop/start work with no state access at all.
-# oci-instance-id: ocid1.instance.oc1...
-# vultr-instance-id: 00000000-0000-0000-0000-000000000000
+# Power is library-owned, coordinated and uses immutable IDs from existing
+# deployment state. OCI and Vultr are supported; other providers refuse.
+# The backend must be reachable. Desired instance-ID overrides are retired.
 #
 # How long to wait for a power transition to complete. The OCI CLI returns
 # before the instance has finished stopping or starting, so walter always waits.
@@ -144,10 +139,6 @@ yandex-memory-gb: 8
 yandex-core-fraction: 100
 yandex-disk-size-gb: 50
 
-no-infra-compute-ip: REPLACE_ME
-no-infra-compute-user: REPLACE_ME
-no-infra-compute-sudoer: REPLACE_ME
-no-infra-compute-uid: REPLACE_ME
 
 # --- state backend ----------------------------------------------------------
 s3-bucket: REPLACE_ME

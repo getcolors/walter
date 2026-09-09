@@ -1,0 +1,95 @@
+{
+  "output": {
+    "params": {
+      "value": {
+        "ip": "${azurerm_public_ip.node.ip_address}",
+        "name": "${azurerm_linux_virtual_machine.node.name}",
+        "nic_id": "${azurerm_network_interface.node.id}",
+        "node_id": "0",
+        "provider": "azure",
+        "provider_id": "${azurerm_linux_virtual_machine.node.id}",
+        "ssh_key_id": null,
+        "subnet_id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/example-compute/providers/Microsoft.Network/virtualNetworks/example-network/subnets/example-subnet",
+        "sudoer": "ubuntu",
+        "user": "ubuntu",
+        "vm_id": "${azurerm_linux_virtual_machine.node.id}",
+        "vpc_ip": "${azurerm_network_interface.node.private_ip_address}"
+      }
+    }
+  },
+  "provider": {
+    "azurerm": {
+      "features": {},
+      "subscription_id": "00000000-0000-0000-0000-000000000001"
+    }
+  },
+  "resource": {
+    "azurerm_linux_virtual_machine": {
+      "node": {
+        "admin_ssh_key": {
+          "public_key": "ssh-ed25519 PLACEHOLDER managed-by-colors",
+          "username": "ubuntu"
+        },
+        "admin_username": "ubuntu",
+        "disable_password_authentication": true,
+        "lifecycle": {
+          "prevent_destroy": true
+        },
+        "location": "westeurope",
+        "name": "walter-fixture",
+        "network_interface_ids": [
+          "${azurerm_network_interface.node.id}"
+        ],
+        "os_disk": {
+          "caching": "ReadWrite",
+          "disk_size_gb": 32,
+          "storage_account_type": "Standard_LRS"
+        },
+        "resource_group_name": "example-compute",
+        "size": "Standard_B2s",
+        "source_image_reference": {
+          "offer": "ubuntu-24_04-lts",
+          "publisher": "Canonical",
+          "sku": "server",
+          "version": "latest"
+        }
+      }
+    },
+    "azurerm_network_interface": {
+      "node": {
+        "ip_configuration": {
+          "name": "primary",
+          "private_ip_address_allocation": "Dynamic",
+          "public_ip_address_id": "${azurerm_public_ip.node.id}",
+          "subnet_id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/example-compute/providers/Microsoft.Network/virtualNetworks/example-network/subnets/example-subnet"
+        },
+        "lifecycle": {
+          "prevent_destroy": true
+        },
+        "location": "westeurope",
+        "name": "walter-fixture-nic",
+        "resource_group_name": "example-compute"
+      }
+    },
+    "azurerm_public_ip": {
+      "node": {
+        "allocation_method": "Static",
+        "lifecycle": {
+          "prevent_destroy": true
+        },
+        "location": "westeurope",
+        "name": "walter-fixture-public",
+        "resource_group_name": "example-compute",
+        "sku": "Standard"
+      }
+    }
+  },
+  "terraform": {
+    "required_providers": {
+      "azurerm": {
+        "source": "hashicorp/azurerm",
+        "version": "4.30.0"
+      }
+    }
+  }
+}
