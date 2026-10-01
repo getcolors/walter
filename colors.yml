@@ -55,6 +55,7 @@ nix-packages:
   - oci-cli
   - babashka
   - clojure
+  - clojure-lsp
   - starship
   - zoxide
   - atuin
@@ -91,6 +92,7 @@ dotfiles-checkout: ~/code/getcolors/dotfiles
 
 clone-orgs:
   - getcolors
+  - pocketcontext
 
 atuin-username: amiorin
 
