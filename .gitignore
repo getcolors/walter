@@ -4,3 +4,4 @@
 !.envrc
 
 target/
+__pycache__/

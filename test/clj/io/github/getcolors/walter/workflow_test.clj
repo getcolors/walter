@@ -62,3 +62,11 @@
       (let [result (wf/run workflow/workflow (assoc vt/base :green/event :delete :compute-prevent-destroy false))]
         (is (= 1 (:green/exit result)))
         (is (false? @destroyed))))))
+
+(deftest install-is-read-only-cloud-resolution-without-agent
+  (is (= [:walter/ssh-install] (successors :ssh-install :walter/connection)))
+  (is (= #{:walter/start :walter/ssh-resource :walter/registration :walter/connection :walter/ssh-install}
+         (reachable :ssh-install)))
+  (is (= #{:walter/start :walter/ssh-uninstall} (reachable :ssh-uninstall)))
+  (doseq [event [:ssh-install :ssh-uninstall]]
+    (is (every? (set workflow/side-effecting-steps) (disj (reachable event) :walter/start)))))

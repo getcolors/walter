@@ -3,10 +3,12 @@
    [babashka.fs :as fs]
    [cheshire.core :as json]
    [clojure.string :as str]
+   [clojure.java.io :as io]
    [clojure.java.shell :as sh]
    [clojure.test :refer [deftest is testing]]
    [green.ansible :as ansible]
    [io.github.getcolors.compute-node :as node-api]
+   [io.github.getcolors.walter.access :as access]
    [io.github.getcolors.walter.compute :as compute]
    [io.github.getcolors.walter.tools :as tools]
    [io.github.getcolors.walter.validate :as validate]))
@@ -922,8 +924,17 @@
 
 (deftest local-alias-selects-public-identity-and-disables-ambient-agent
   (let [rendered (render-local-playbook {})]
-    (doseq [text ["identity_file" "IdentityAgent none" "IdentitiesOnly yes" "ForwardAgent no" "StrictHostKeyChecking accept-new"]]
+    (doseq [text ["identity_file" "{{ playbook_dir }}/ssh_config.py" "ssh_installed"]]
       (is (str/includes? rendered text)))))
+
+(deftest local-play-and-operator-commands-share-the-config-updater
+  (let [dir (str (fs/create-temp-dir))
+        opts {:profile "p" :workdir dir :provider-compute "oci" :green/event :build}]
+    (try
+      (tools/ansible-local-step opts)
+      (is (= (slurp (io/resource "io/github/getcolors/walter/ssh_config.py"))
+             (slurp (str (tools/tool-dir opts tools/ansible-local-tool) "/ssh_config.py"))))
+      (finally (fs/delete-tree dir)))))
 
 (deftest ansible-selects-the-scoped-public-identity
   (let [captured (atom nil) dir (str (fs/create-temp-dir))]
@@ -1027,7 +1038,8 @@
 
 (deftest local-play-receives-normalized-seats-and-legacy-prefix
   (let [captured (atom nil)]
-    (with-redefs [ansible/ansible-with-spec (fn [opts config _] (reset! captured config) opts)]
+    (with-redefs [ansible/ansible-with-spec (fn [opts config _] (reset! captured config) opts)
+                  access/installed-identity (constantly nil)]
       (tools/ansible-local-step {:profile "p" :provider-compute "oci" :workdir "/tmp/p"
                                 :users ["jack" "emma"] :ip "203.0.113.7" :user "ubuntu"}))
     (is (= "walter" (get-in @captured [:extra-vars :ssh_legacy_marker_prefix])))
@@ -1035,6 +1047,18 @@
             {:name "p-jack" :ip "203.0.113.7" :user "jack"}
             {:name "p-emma" :ip "203.0.113.7" :user "emma"}]
            (get-in @captured [:extra-vars :ssh_hosts])))))
+
+(deftest create-preserves-the-installed-key-without-changing-scoped-ansible-identity
+  (let [captured (atom nil)
+        opts {:profile "p" :provider-compute "oci" :workdir "/tmp/p"
+              :green/event :create :ssh-private-key-path "/scope/identity.pub"
+              :ip "203.0.113.7" :user "ubuntu"}]
+    (with-redefs [ansible/ansible-with-spec (fn [current config _] (reset! captured config) current)
+                  access/installed-identity (constantly "/home/operator/.ssh/walter/p/identity")]
+      (is (= opts (tools/ansible-local-step opts)))
+      (is (= "/home/operator/.ssh/walter/p/identity" (get-in @captured [:extra-vars :ssh_identity_file])))
+      (is (true? (get-in @captured [:extra-vars :ssh_installed])))
+      (is (= "/scope/identity.pub" (tools/machine-key-file opts))))))
 
 (deftest the-emacs-packages-inventory-warms-each-seat
   (let [dir (str (fs/create-temp-dir))

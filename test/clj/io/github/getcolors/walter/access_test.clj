@@ -120,3 +120,91 @@
             run-fn))
         (catch Exception _)))
     (is (= 2 @stopped))))
+
+(deftest encrypted-install-preflights-config-and-never-starts-agent
+  (with-redefs [access/install-lock! (constantly nil)]
+  (let [calls (atom [])
+        opts {:profile "p" :green/event :ssh-install :users ["seat"]
+              :colors-compute/node {:ip "203.0.113.5" :user "root"}}
+        export (fn [_ op] (swap! calls conj op)
+                 {:status "installed" :private_key_file "/home/me/.ssh/walter/p/identity"})
+        config (fn [payload] (swap! calls conj payload) {:exit 0})
+        result (access/install-step opts export config)]
+    (is (= 0 (:green/exit result)))
+    (is (:check_only (first @calls)))
+    (is (= "install" (second @calls)))
+    (is (= "/home/me/.ssh/walter/p/identity" (:identity_file (last @calls))))
+    (is (= [{:name "p" :ip "203.0.113.5" :user "ubuntu"}
+            {:name "p-seat" :ip "203.0.113.5" :user "seat"}]
+           (:ssh_hosts (last @calls))))
+    (is (:installed (last @calls)))
+    (reset! calls [])
+    (is (= 1 (:green/exit (access/install-step opts export (constantly {:exit 1 :err "collision"})))))
+    (is (empty? @calls)))))
+
+(deftest uninstall-is-local-and-removes-config-before-key
+  (let [calls (atom [])
+        export (fn [_ operation] (swap! calls conj operation)
+                 {:status (if (= operation "inspect") "installed" "removed")})
+        config (fn [payload] (swap! calls conj (:block_state payload)) {:exit 0})]
+    (with-redefs [access/lock! (constantly nil) access/install-lock! (constantly nil)]
+      (is (= 0 (:green/exit (access/uninstall-step {:profile "p"} export config))))
+      (is (= ["inspect" "absent" "remove"] @calls))
+      (reset! calls [])
+      (is (= 1 (:green/exit (access/uninstall-step {:profile "p"} export
+                                                  (constantly {:exit 1 :err "unsafe config"})))))
+      (is (= ["inspect"] @calls)))))
+
+(deftest local-export-identity-is-inspected-only-at-runtime
+  (with-redefs [access/install-lock! (constantly nil)]
+  (with-redefs [access/export-operation
+                (fn [_ operation]
+                  (is (= "inspect" operation))
+                  {:status "installed" :private_key_file "/private/encrypted"})]
+    (is (= "/private/encrypted" (access/installed-identity {:green/event :create})))
+    (is (nil? (access/installed-identity {:green/event :build})))
+    (is (nil? (access/installed-identity {:green/dry-run true}))))
+  (with-redefs [access/export-operation (fn [& _] {:status "absent"})]
+    (is (nil? (access/installed-identity {}))))
+  (with-redefs [access/export-operation (fn [& _] {:status "error" :error {:message "unowned collision"}})]
+    (is (thrown? Exception (access/installed-identity {}))))))
+
+(deftest export-planning-has-no-effects
+  (doseq [opts [{:green/event :build} {:green/dry-run true}]
+          step [access/install-step access/uninstall-step]]
+    (is (= opts (step opts (fn [& _] (throw (Exception. "export called")))
+                          (fn [& _] (throw (Exception. "config called"))))))))
+
+(deftest offline-export-operation-binds-authority-without-cloud-secrets
+  (let [calls (atom []) opts {:profile "p" :workdir "/tmp/walter-test"
+                              :walter/ssh-resource compute/placeholder-resource}]
+    (access/export-operation opts "inspect"
+      (fn [_ request destination operation env]
+        (swap! calls conj [request destination operation env]) {:status "absent"}))
+    (let [[request destination operation env] (first @calls)]
+      (is (= compute/placeholder-resource (:expected request)))
+      (is (= "inspect" operation))
+      (is (.endsWith destination "/.ssh/walter/p"))
+      (is (every? #{"PATH" "HOME" "TMPDIR"} (keys env)))
+      (is (string? (get env "PATH"))))))
+
+(deftest installation-lock-is-shared-across-workdirs-and-released
+  (let [home (str (fs/real-path (fs/create-temp-dir)))]
+    (try
+      (access/scoped
+        #(do (access/install-lock! {:profile "p" :workdir "/one"} home)
+             (is (thrown? Exception
+                   (access/scoped (fn [] (access/install-lock! {:profile "p" :workdir "/two"} home)))))))
+      (is (nil? (access/scoped #(access/install-lock! {:profile "p" :workdir "/two"} home))))
+      (is (thrown? Exception
+            (access/scoped #(do (access/install-lock! {:profile "p"} home) (throw (Exception. "failed"))))))
+      (is (nil? (access/scoped #(access/install-lock! {:profile "p"} home))))
+      (let [lock (fs/path home ".ssh" ".walter-install-p.lock")]
+        (fs/delete lock)
+        (fs/create-sym-link lock (fs/path home "other"))
+        (is (thrown? Exception (access/scoped #(access/install-lock! {:profile "p"} home))))
+        (fs/delete lock)
+        (spit (str (fs/path home "other")) "owned by another purpose")
+        (java.nio.file.Files/createLink lock (fs/path home "other"))
+        (is (thrown? Exception (access/scoped #(access/install-lock! {:profile "p"} home)))))
+      (finally (fs/delete-tree home)))))

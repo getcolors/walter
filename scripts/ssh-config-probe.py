@@ -19,7 +19,7 @@ def main():
     root = Path(__file__).resolve().parents[1]
     source = root / 'src/resources/io/github/getcolors/walter/tools/ansible-local/main.yml'
     with tempfile.TemporaryDirectory(prefix='colors-ssh-ansible-') as directory:
-        work = Path(directory)
+        work = Path(directory).resolve()
         home = work / 'home'
         home.mkdir()
         (home / '.ssh').mkdir(mode=0o700)
@@ -32,7 +32,8 @@ def main():
         inventory.write_text('[local]\nlocalhost ansible_connection=local\n')
         play = work / 'main.yml'
         variables = work / 'vars.json'
-        payload = {'ssh_legacy_marker_prefix': 'walter', 'host_alias': 'probe', 'ssh_hosts': [
+        shutil.copyfile(root / 'src/resources/io/github/getcolors/walter/ssh_config.py', work / 'ssh_config.py')
+        payload = {'ssh_identity_file': str(home / 'identity.pub'), 'ssh_legacy_marker_prefix': 'walter', 'host_alias': 'probe', 'ssh_hosts': [
             {'name': 'probe', 'ip': '203.0.113.10', 'user': 'ubuntu'},
             {'name': 'probe-worker-0', 'ip': '203.0.113.11', 'user': 'root'}], 'block_state': 'present'}
         environment = {**os.environ, 'HOME': str(home), 'ANSIBLE_LOCAL_TEMP': str(work / 'ansible-tmp'), 'ANSIBLE_NOCOLOR': '1'}
@@ -52,7 +53,7 @@ def main():
             assert 'probe-retired' not in value
             if state == 'present':
                 assert value.count('# BEGIN probe ANSIBLE MANAGED BLOCK') == 1
-                assert ('IdentityFile ~/.ssh/probe' in value) is keygen
+                assert (('IdentityFile \"' + str(home / 'identity.pub') + '\"') in value) is keygen
                 assert ('IdentitiesOnly yes' in value) is keygen
                 assert 'Host probe-worker-0\n    HostName 203.0.113.11\n    User root' in value
             else:

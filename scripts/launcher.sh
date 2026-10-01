@@ -131,9 +131,17 @@ out=$( (cd "$copy" && WALTER_LIB_ROOT="$root" ./green frobnicate 2>&1) || true )
 echo "$out" | grep -q 'Usage:' || fail "an unknown verb should print usage; got: $out"
 ok "an unknown verb prints usage"
 
-for verb in build create delete stop start; do
+for verb in build create delete stop start ssh ssh-install ssh-uninstall converge-nix converge-asdf; do
   grep -q "\"$verb\"" "$launcher" || fail "the launcher no longer accepts $verb"
 done
 ok "every verb the workflow implements is dispatchable"
+
+for verb in ssh-install ssh-uninstall; do
+  out=$( (cd "$copy" && WALTER_LIB_ROOT="$root" ./green "$verb" --dry-run 2>&1) ) ||
+    fail "$verb dry-run failed from a copied payload: $out"
+  echo "$out" | grep -q "dry-run: would run :walter/$verb" ||
+    fail "$verb did not dispatch to its workflow: $out"
+done
+ok "SSH installation verbs dispatch without credentials in dry-run"
 
 echo "launcher: $checks checks passed"

@@ -6,9 +6,9 @@ making changes.
 ## Current v2 integration (supersedes legacy compute details below)
 
 Walter consumes colors-compute's Green library at published commit
-`59acb202029ea1061c2c68d0a6ad2bb509eccad4` in `deps.edn`. Green's scoped-process
+`1cb040ae8c80ae477b8fdda90419a3a8560e7461` in `deps.edn`. Green's scoped-process
 SDK is pinned to `7f1f94463ac7914598db419ac221546fb7e3cbec`.
-Launcher contract is 6. Use `bb pin` after committing and pushing changes.
+Launcher contract is 7. Use `bb pin` after committing and pushing changes.
 
 Desired state must explicitly contain `compute-api-version: 2`. Existing v1
 profiles must keep their original launcher: this is not a state migration.
@@ -37,6 +37,12 @@ sections below describe v1 history, not the current API.
   login with explicit SSH options and `-F /dev/null`. It needs backend/provider
   credentials and OpenTofu, not a local alias. Bare aliases have `IdentityAgent none`.
   Focused convergence opens a scoped agent without reading compute state.
+- `ssh-install` exports the existing encrypted keypair to `~/.ssh/walter/<profile>`
+  and installs primary/seat aliases using a live address. Never decrypt to disk.
+  Ordinary SSH prompts for the passphrase; agent/Keychain caching is disabled.
+  Create preserves valid installed identities. `ssh-uninstall` removes owned
+  local aliases and exports without backend/provider credentials, retaining remote
+  authority. Delete drops aliases but leaves the export for explicit uninstall.
 - V2 has no power API. `start` and `stop` explicitly refuse without mutation.
 - Builds render under `<workdir>/build/<profile>` with placeholder public
   identity, isolated from runtime `<workdir>/<profile>` authority and state.

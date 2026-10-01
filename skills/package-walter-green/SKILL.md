@@ -17,6 +17,15 @@ aliases. `start` and `stop` refuse. Backend buckets must already exist. Encrypte
 SSH authority survives compute deletion and requires the runtime binding
 `COLORS_PAR_WALTER_SSH_PASSPHRASE` for create and access.
 
+`green ssh-install` explicitly exports the existing encrypted OpenSSH keypair
+under `~/.ssh/walter/<profile>/` and creates primary and seat SSH aliases using
+the live address. Ordinary SSH prompts for the key passphrase and does not cache
+it in an agent or Keychain. Rerun to refresh the address and seats. Create
+preserves this installed identity. `green ssh-uninstall` removes the owned local
+aliases and export without cloud credentials; remote authority is retained.
+Neither command writes a decrypted private key. Delete removes aliases and
+retains the exported key until explicit uninstall.
+
 The following instructions document the historical v1 release.
 
 # A remote development machine, with Walter

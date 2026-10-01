@@ -9,7 +9,8 @@
   launcher calls — and bump `launcher-contract` in the bundled launcher to
   match. The handshake turns a stale pin into an actionable exit 2 rather than
   a confusing resolution failure. History in the comment below."
-  6)
+  7)
+;; 7: durable encrypted SSH export install/uninstall commands.
 ;; 6: v2 public-identity compute and scoped encrypted SSH resources.
 ;; 5: colors-compute owns split remote state, keys and coordinated power.
 ;;    Legacy monolithic state requires explicit migration.

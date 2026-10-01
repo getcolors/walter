@@ -418,8 +418,11 @@
                (template-spec (walter-template "ansible-local" "inventory.ini")
                               (str dir "/inventory.ini") data)
                (template-spec (walter-template "ansible-local" "main.yml")
-                              (str dir "/main.yml") data)]
+                              (str dir "/main.yml") data)
+               (raw-spec (str dir "/ssh_config.py")
+                         (slurp (io/resource "io/github/getcolors/walter/ssh_config.py")))]
         delete? (= :delete (:green/event opts))
+        installed (when-not delete? (access/installed-identity opts))
         config {:dir dir
                 :inventory "inventory.ini"
                 :playbooks {:create "main.yml" :delete "main.yml"}
@@ -427,7 +430,8 @@
                              :ssh_hosts (vec (cons {:name (:host-alias data) :ip (:ip data) :user (:user data)}
                                                    (map (fn [seat] {:name (str (:host-alias data) "-" seat) :ip (:ip data) :user seat}) (users opts))))
                              :ssh_legacy_marker_prefix "walter"
-                             :ssh_identity_file (or (machine-key-file opts) "")
+                             :ssh_identity_file (or installed (machine-key-file opts) "")
+                             :ssh_installed (boolean installed)
                              :block_state (if delete? "absent" "present")}}]
     (ansible/ansible-with-spec opts config specs)))
 

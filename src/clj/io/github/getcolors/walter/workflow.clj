@@ -106,6 +106,19 @@
       :walter/agent [access/agent-step :walter/ssh]
       :walter/ssh [access/ssh-step])
 
+    :ssh-install
+    (case step
+      :walter/start [start-step :walter/ssh-resource]
+      :walter/ssh-resource [access/resource-step :walter/registration]
+      :walter/registration [access/registration-step :walter/connection]
+      :walter/connection [access/connection-step :walter/ssh-install]
+      :walter/ssh-install [access/install-step])
+
+    :ssh-uninstall
+    (case step
+      :walter/start [start-step :walter/ssh-uninstall]
+      :walter/ssh-uninstall [access/uninstall-step])
+
     :converge-nix
     (case step
       :walter/start [start-step :walter/ssh-resource]
@@ -158,7 +171,7 @@
 ;; backends
 
 (def side-effecting-steps
-  [:walter/connection :walter/ssh :walter/ssh-resource :walter/registration :walter/registration-delete :walter/agent :walter/load-compute
+  [:walter/ssh-install :walter/ssh-uninstall :walter/connection :walter/ssh :walter/ssh-resource :walter/registration :walter/registration-delete :walter/agent :walter/load-compute
    :walter/github-token
    :walter/compute :walter/ansible-bootstrap :walter/ansible-seats
    :walter/ansible-local :walter/ansible-remote

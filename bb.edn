@@ -16,7 +16,9 @@
                             'io.github.getcolors.walter.tools-test
                             'io.github.getcolors.walter.workflow-test
                             'io.github.getcolors.walter.access-test)]
-           (System/exit (if (pos? (+ fail error)) 1 0)))}
+           (if (pos? (+ fail error))
+             (System/exit 1)
+             (shell "python3" "-m" "unittest" "discover" "-s" "test/python" "-v")))}
 
   golden
   {:doc "Render every provider variant and diff against the committed goldens"

@@ -37,6 +37,26 @@ passphrase, but no generated alias. SSH retains known-host verification
 (`StrictHostKeyChecking=accept-new`), rejects changed host keys, and disables
 agent forwarding and connection multiplexing. Missing state, a destroyed machine,
 or an unavailable public address refuses the connection before unlocking the key.
+For ordinary SSH, SCP, and editors, run `./green ssh-install`. It retrieves the
+existing encrypted OpenSSH private key and public key into
+`~/.ssh/walter/<profile>/`, verifies their fingerprint, and installs managed
+aliases for the primary login and configured seats at the start of
+`~/.ssh/config`. It refuses unrelated keys and unmanaged exact host aliases.
+Ordinary `ssh <profile>` prompts for the key passphrase; it does not consume
+`COLORS_PAR_WALTER_SSH_PASSPHRASE` or automatically cache the key in an agent or
+Keychain. Agent forwarding stays disabled; user clipboard forwarding, keepalive,
+and multiplexing settings remain available.
+Repeat installation to refresh the live address or seat list. Later creates
+preserve the installed identity. `./green ssh` still resolves live and opens its
+own scoped agent independently of these files.
+
+`./green ssh-uninstall` removes only owned local aliases and the exported keypair.
+It works without backend/provider credentials or a passphrase and never removes
+the remote encrypted authority. Machine deletion removes aliases but retains
+local exported keys until uninstall. Backend passphrase changes do not invalidate
+an existing exported copy of the same underlying key. Failed config installation
+can leave an owned encrypted keypair, which a retry reuses or uninstall removes.
+
 Focused convergence and the GitHub-login probe still use managed aliases.
 `stop` and `start` are currently
 unavailable because the v2 library has no power API; both refuse explicitly.
