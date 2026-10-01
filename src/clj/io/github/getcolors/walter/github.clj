@@ -26,7 +26,7 @@
   Scopes are gh's own defaults plus `workflow`, so pushes that touch
   .github/workflows are not refused — the one default gh omits that a
   development machine predictably needs."
-  (:require
+  (:require [io.github.getcolors.walter.access :as access]
    [clojure.string :as str]
    [green.process :as process]
    [io.github.getcolors.walter.utils :as utils])
@@ -50,8 +50,8 @@
   instead of prompting; the full nix-profile path because a non-login shell
   over `ssh host cmd` has never heard of the profile."
   [opts]
-  ["ssh" "-o" "BatchMode=yes" "-o" "ConnectTimeout=5" (utils/host-alias opts)
-   "~/.nix-profile/bin/gh auth status --hostname github.com"])
+  (into ["ssh"] (concat (access/identity-args opts) ["-o" "BatchMode=yes" "-o" "ConnectTimeout=5" (utils/host-alias opts)
+   "~/.nix-profile/bin/gh auth status --hostname github.com"])))
 
 (defn machine-logged-in?
   "Whether the machine already has a working gh login. Any failure — no

@@ -1,11 +1,6 @@
-;; Development inside this checkout. Walter itself resolves to the working tree;
-;; `colors-compute` and `green` stay on the same SHAs deps.edn pins, so a fresh clone
-;; renders exactly what CI renders and the goldens mean something. Point
-;; COLORS_COMPUTE_LIB_ROOT or GREEN_LIB_ROOT at a sibling checkout to work across repos —
-;; that is a deliberate act, not the default.
-;;
-;; The launcher a user copies has no bb.edn beside it and resolves the pins
-;; itself, which is the path scripts/launcher.sh covers.
+;; Local v2 development: Walter and ../colors-compute/green are working trees.
+;; Green stays pinned to the scoped-process SDK. Release consumers need published
+;; library pins and a repinned launcher; do not distribute this relative dependency.
 {:paths ["test/clj" "test/resources"]
  :deps  {io.github.getcolors/walter {:local/root "."}}
  :tasks
@@ -15,12 +10,14 @@
               [io.github.getcolors.walter.validate-test]
               [io.github.getcolors.walter.github-test]
               [io.github.getcolors.walter.tools-test]
-              [io.github.getcolors.walter.workflow-test])
+              [io.github.getcolors.walter.workflow-test]
+              [io.github.getcolors.walter.access-test])
    :task (let [{:keys [fail error]}
                (t/run-tests 'io.github.getcolors.walter.validate-test
                             'io.github.getcolors.walter.github-test
                             'io.github.getcolors.walter.tools-test
-                            'io.github.getcolors.walter.workflow-test)]
+                            'io.github.getcolors.walter.workflow-test
+                            'io.github.getcolors.walter.access-test)]
            (System/exit (if (pos? (+ fail error)) 1 0)))}
 
   golden

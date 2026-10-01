@@ -3,6 +3,54 @@
 This file describes the `walter` codebase for AI assistants. Read it before
 making changes.
 
+## Current v2 integration (supersedes legacy compute details below)
+
+Walter now consumes the local `../colors-compute/green` checkout directly in
+`deps.edn`, at the user's request. Green's scoped-process SDK is pinned to
+`7f1f94463ac7914598db419ac221546fb7e3cbec`. Launcher contract is 6; its SHA has
+not been repinned. Do not publish the relative dependency as a release.
+
+Desired state must explicitly contain `compute-api-version: 2`. Existing v1
+profiles must keep their original launcher: this is not a state migration.
+The old split/shared lifecycle, workstation keypair and coordinated power
+sections below describe v1 history, not the current API.
+
+- One public-only node: `compute/request` supplies node id `walter-compute`,
+  state filename `walter-node-0.tfstate`, and a public SSH resource identity.
+- SSH authority is the encrypted `machine-access` resource in the selected
+  backend, unlocked with `COLORS_PAR_WALTER_SSH_PASSPHRASE`. Never render that
+  passphrase or write a decrypted private key. V2 needs an existing backend bucket.
+- AWS, DigitalOcean, hcloud and Vultr own a separate public registration in
+  `walter-ssh-registration.tfstate`. Google, Azure, OCI and Yandex use public
+  key material directly. External workstation key inputs are refused.
+- The workflow scope owns one renewing temporary agent, and a controller-local
+  profile lock serializes runtime operations in the same workdir. Native backend
+  locks protect OpenTofu. SSH uses a public IdentityFile and explicit
+  IdentityAgent; forwarding and connection multiplexing are disabled.
+- Create orders resource, agent, GitHub token, registration, compute, bootstrap,
+  seats, local aliases, remote application, and asynchronous Emacs packages.
+- Delete inspects authority and registration without unlocking, removes aliases,
+  destroys compute, then deletes registration. It retains encrypted SSH authority
+  and persistent OpenTofu roots. It never regenerates a missing key.
+- `./green ssh` opens a scoped login; bare aliases have `IdentityAgent none`.
+  Focused convergence opens a scoped agent without reading compute state.
+- V2 has no power API. `start` and `stop` explicitly refuse without mutation.
+- Builds render under `<workdir>/build/<profile>` with placeholder public
+  identity, isolated from runtime `<workdir>/<profile>` authority and state.
+- Google N4A configuration uses `google-boot-disk-type: hyperdisk-balanced`,
+  `google-nic-type: GVNIC`, and an ARM64 image supporting IDPF.
+- `agent-tools: [pi, codex, claude]` uses official per-user curl installers,
+  after asdf. Do not install these agents through Nix. Pi requires Node.js.
+- `asdf-tools` accepts exact versions or `latest`, resolved once per run before
+  installation and `asdf set --home`. Python uses the `python` plugin. Runtime
+  prerequisites are installed once through the primary sudoer; seats remain
+  unprivileged. Corepack is installed when the selected Node doesn't bundle it.
+
+Run `bb test`, `bb golden`, and `scripts/launcher.sh`. After intended rendering
+changes, regenerate and review goldens. Check colors-compute's three-color
+parity and provider schema tests when changing its templates. Do not commit,
+push, repin, deploy or migrate an existing deployment without authorization.
+
 ## What this is
 
 `walter` provisions and operates one remote **development machine** with

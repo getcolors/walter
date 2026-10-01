@@ -3,6 +3,8 @@
 # `converge-nix` additionally advances only those entries to the current
 # nixpkgs-unstable revision. User-installed profile elements are never touched.
 - name: Install the project's nix packages
+  # Each login evaluates the same large flake; serialize to bound VM memory use.
+  throttle: 1
   ansible.builtin.command:
     cmd: nix profile add --impure github:NixOS/nixpkgs/nixpkgs-unstable#asdf-vm github:NixOS/nixpkgs/nixpkgs-unstable#ripgrep github:NixOS/nixpkgs/nixpkgs-unstable#fish github:NixOS/nixpkgs/nixpkgs-unstable#babashka github:NixOS/nixpkgs/nixpkgs-unstable#atuin
   environment:
@@ -51,6 +53,7 @@
   changed_when: false
 
 - name: Upgrade only Walter's declared Nix profile elements
+  throttle: 1
   when:
     - walter_nix_upgrade | default(false) | bool
     - walter_nix_elements.stdout | from_json | length > 0

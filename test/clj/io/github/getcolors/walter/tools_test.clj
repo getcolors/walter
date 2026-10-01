@@ -3,10 +3,10 @@
    [babashka.fs :as fs]
    [cheshire.core :as json]
    [clojure.string :as str]
+   [clojure.java.shell :as sh]
    [clojure.test :refer [deftest is testing]]
    [green.ansible :as ansible]
-   [io.github.getcolors.compute-inspection :as inspection]
-   [io.github.getcolors.compute-orchestration :as orchestration]
+   [io.github.getcolors.compute-node :as node-api]
    [io.github.getcolors.walter.compute :as compute]
    [io.github.getcolors.walter.tools :as tools]
    [io.github.getcolors.walter.validate :as validate]))
@@ -385,8 +385,8 @@
     (let [rendered (render-remote-playbook {:nix-packages ["atuin"]
                                             :atuin-username "someone"})]
       (is (str/includes? rendered "-u someone"))
-      (is (str/includes? rendered "lookup('env', 'COLORS_PAR_ATUIN_PASSWORD')"))
-      (is (str/includes? rendered "lookup('env', 'COLORS_PAR_ATUIN_KEY')"))
+      (is (str/includes? rendered "lookup('env', 'WALTER_ATUIN_PASSWORD')"))
+      (is (str/includes? rendered "lookup('env', 'WALTER_ATUIN_KEY')"))
       (testing "no key named atuin-password or atuin-key is interpolated at all"
         (is (not (str/includes? rendered "atuin-password")))
         (is (not (str/includes? rendered "atuin-key")))))))
@@ -900,37 +900,14 @@
 ;; ---------------------------------------------------------------------------
 ;; the machine-access keypair
 
-(deftest a-build-renders-placeholders-never-key-material
-  (testing "generation is a create-time side effect, so a build renders stable
-           placeholders — walter commits its goldens, and a real absolute path
-           or a fresh key every build would break them across workstations"
-    (let [filled (tools/with-machine-key {:profile "p"
-                                          :provider-compute "oci"
-                                          :green/event :build})]
-      (is (nil? (:oci-ssh-authorized-keys filled)) "the adapter never changes ownership mode")
-      (is (= "ssh-ed25519 PLACEHOLDER managed-by-colors" (:compute-pubkey filled))
-          "the Vultr bootstrap play interpolates the content on every provider")))
-  (testing "opt-out opts pass through untouched"
-    (let [opts {:profile "p" :provider-compute "oci"
-                :oci-ssh-authorized-keys "/x.pub" :green/event :build}]
-      (is (= opts (tools/with-machine-key opts))))))
+(deftest build-renders-only-placeholder-public-identity
+  (let [opts {:profile "p" :provider-compute "oci" :green/event :build}]
+    (is (= (:public_key compute/placeholder-resource) (:compute-pubkey (tools/with-machine-key opts))))
+    (is (= (compute/placeholder-key opts) (:machine-key-path (tools/data-fn opts))))))
 
-(deftest the-managed-block-names-the-key-only-in-keygen-mode
-  (testing "the SSH Config Standard's literal ~ form, on every event — ssh
-           expands it, the line survives the config travelling to another
-           workstation, and builds need no placeholder; in opt-out mode
-           nothing"
-    (is (= "~/.ssh/p"
-           (:machine-key-path (tools/data-fn {:profile "p"
-                                              :provider-compute "oci"
-                                              :green/event :build}))))
-    (is (= "~/.ssh/p"
-           (:machine-key-path (tools/data-fn {:profile "p"
-                                              :provider-compute "oci"
-                                              :green/event :create}))))
-    (is (nil? (:machine-key-path
-               (tools/data-fn {:profile "p" :provider-compute "oci"
-                               :oci-ssh-authorized-keys "/x.pub"}))))))
+(deftest runtime-identity-comes-only-from-scoped-access
+  (is (nil? (tools/machine-key-file {:profile "p" :green/event :create})))
+  (is (= "/owned/identity.pub" (tools/machine-key-file {:ssh-private-key-path "/owned/identity.pub"}))))
 
 (defn- render-local-playbook
   [opts]
@@ -943,56 +920,20 @@
     (tools/ansible-local-step merged)
     (slurp (str (tools/tool-dir merged tools/ansible-local-tool) "/main.yml"))))
 
-(deftest the-local-playbook-writes-identityfile-only-in-keygen-mode
-  (testing "in keygen mode, ssh <profile> uses the generated key and nothing
-           else — IdentitiesOnly stops the agent offering the operator's own"
-    (let [rendered (render-local-playbook {})]
-      (is (str/includes? rendered "colors_keygen: true")
-          "the standard's literal ~ form, never an absolute home path")
-      (is (str/includes? rendered "IdentitiesOnly yes"))))
-  (testing "opt-out renders no key line at all — the operator supplied the key
-           and has their own arrangements for finding it. Matched on the
-           config-line form, since the header commentary mentions the word"
-    (let [rendered (render-local-playbook {:oci-ssh-authorized-keys "/x.pub"})]
-      (is (str/includes? rendered "colors_keygen: false"))))
-  (testing "the standard's remaining lines render in both modes: ForwardAgent
-           is explicitly off — nothing on the machine authenticates with the
-           workstation's keys — and accept-new spares a recreate the
-           interactive host-key prompt while still refusing a changed key"
-    (doseq [rendered [(render-local-playbook {})
-                      (render-local-playbook {:oci-ssh-authorized-keys "/x.pub"})]]
-      (is (str/includes? rendered "ForwardAgent no"))
-      (is (not (str/includes? rendered "ForwardAgent yes")))
-      (is (str/includes? rendered "StrictHostKeyChecking accept-new")))))
+(deftest local-alias-selects-public-identity-and-disables-ambient-agent
+  (let [rendered (render-local-playbook {})]
+    (doseq [text ["identity_file" "IdentityAgent none" "IdentitiesOnly yes" "ForwardAgent no" "StrictHostKeyChecking accept-new"]]
+      (is (str/includes? rendered text)))))
 
-(deftest the-ansible-steps-connect-with-the-generated-key
-  (testing "green's runner already supports --private-key; walter passes it
-           exactly when it generated the key"
-    (let [captured (atom nil)]
-      (with-redefs [ansible/ansible-step (fn [opts config]
-                                           (reset! captured config)
-                                           (assoc opts :green/exit 0))]
-        (let [dir (str (fs/create-temp-dir))]
-          (tools/ansible-remote-step {:profile "p"
-                                      :workdir dir
-                                      :provider-compute "oci"
-                                      :green/event :create})))
-      (is (str/ends-with? (str (:private-key @captured)) "/.ssh/p")))
-    (let [captured (atom nil)]
-      (with-redefs [ansible/ansible-step (fn [opts config]
-                                           (reset! captured config)
-                                           (assoc opts :green/exit 0))]
-        (let [dir (str (fs/create-temp-dir))]
-          (tools/ansible-remote-step {:profile "p"
-                                      :workdir dir
-                                      :provider-compute "oci"
-                                      :oci-ssh-authorized-keys "/x.pub"
-                                      :green/event :create})))
-      (is (nil? (:private-key @captured))
-          "in opt-out mode, ssh picks its identity as it always did"))))
-
-;; ---------------------------------------------------------------------------
-;; seats
+(deftest ansible-selects-the-scoped-public-identity
+  (let [captured (atom nil) dir (str (fs/create-temp-dir))]
+    (with-redefs [ansible/ansible-step (fn [opts config] (reset! captured config) (assoc opts :green/exit 0))]
+      (tools/ansible-remote-step {:profile "p" :workdir dir :provider-compute "oci" :green/event :create
+                                 :ssh-private-key-path "/owned/identity.pub" :walter/agent-socket "/owned/agent.sock"}))
+    (is (= "/owned/identity.pub" (:private-key @captured)))
+    (let [config (slurp (str dir "/p/walter-ansible-remote/ansible.cfg"))]
+      (is (str/includes? config "IdentityAgent=/owned/agent.sock")))
+    (fs/delete-tree dir)))
 
 (deftest the-inventory-gains-one-host-per-seat
   (let [raw (tools/inventory {:ip "203.0.113.7" :user "ubuntu" :host-alias "dev"}
@@ -1114,7 +1055,7 @@
   (doseq [provider ["vultr" "digitalocean"]]
     (let [dir (str (fs/create-temp-dir))
           opts {:provider-compute provider :profile "p" :workdir dir :green/event :build
-                :ip "203.0.113.7" :colors-compute/cluster {:nodes [(assoc observed-root :provider provider)]}}
+                :ip "203.0.113.7" :colors-compute/node (assoc observed-root :provider provider)}
           result (tools/ansible-bootstrap-step opts)
           play (slurp (str dir "/p/walter-ansible-bootstrap/main.yml"))]
       (is (= "ubuntu" (:user result)))
@@ -1122,7 +1063,7 @@
     (let [dir (str (fs/create-temp-dir))
           result (tools/ansible-bootstrap-step
                   {:provider-compute provider :profile "p" :workdir dir :green/event :build
-                   :colors-compute/cluster {:nodes [(assoc observed-root :provider provider :user "ubuntu")]}})]
+                   :colors-compute/node (assoc observed-root :provider provider :user "ubuntu")})]
       (is (= 0 (:green/exit result)))
       (is (not (fs/exists? (str dir "/p/walter-ansible-bootstrap")))))))
 
@@ -1130,11 +1071,11 @@
   (let [dir (str (fs/create-temp-dir))
         opts {:provider-compute "vultr" :vultr-ssh-keys "external-account-key"
               :profile "p" :workdir dir :green/event :build :ip "203.0.113.7"
-              :colors-compute/cluster {:nodes [observed-root]}}
+              :colors-compute/node observed-root}
         result (tools/ansible-bootstrap-step opts)
         play (slurp (str dir "/p/walter-ansible-bootstrap/main.yml"))]
     (is (= "ubuntu" (:user result)))
-    (is (str/includes? play "src: /root/.ssh/authorized_keys")))
+    (is (str/includes? play "ssh-ed25519")))
   (let [seen (atom nil)]
     (is (= "ubuntu" (tools/bootstrap-user
                       {:profile "p" :provider-compute "vultr" :ip "203.0.113.7"
@@ -1143,14 +1084,35 @@
     (is (some #{"/temporary/owned/key"} @seen))))
 
 (deftest missing-owned-state-cannot-become-a-placeholder-host
-  (with-redefs [inspection/read-deployment (fn [_ environment _ _]
-                                            (is (map? environment))
-                                            (throw (ex-info "backend unavailable" {})))]
-    (let [result (tools/load-compute-step {:profile "p" :green/event :delete})]
-      (is (= 1 (:green/exit result)))
-      (is (nil? (:ip result)))))
+  (let [result (tools/load-compute-step
+                {:profile "p" :workdir "/tmp/p" :green/event :delete
+                 :walter/ssh-resource compute/placeholder-resource}
+                (fn [& _] {:status "error" :error {:message "backend unavailable"}}))]
+    (is (= 1 (:green/exit result)))
+    (is (nil? (:ip result))))
   (is (thrown? Exception (compute/node {:profile "p" :provider-compute "vultr"}))))
 
 (deftest compute-json-handles-mixed-library-keys
   (is (= {"backups" true "region" "ams"}
          (json/parse-string (#'tools/compute-json {:region "ams" "backups" true} 0)))))
+
+(deftest standalone-agents-follow-runtime-installation
+  (let [play (render-remote-playbook {:agent-tools ["pi" "codex" "claude"]
+                                     :nix-packages ["asdf-vm"]
+                                     :asdf-tools [{:name "nodejs" :version "latest"}]})]
+    (is (< (.indexOf play "include_tasks: asdf.yml") (.indexOf play "include_tasks: agents.yml")))))
+
+(deftest only-explicit-application-secrets-reach-ansible
+  (let [captured (atom nil)
+        env (tools/ansible-secret-env {:atuin-username "someone"}
+              {"COLORS_PAR_ATUIN_PASSWORD" "test-password"
+               "COLORS_PAR_ATUIN_KEY" "test-key"
+               "COLORS_PAR_R2_SECRET_ACCESS_KEY" "must-not-pass"})]
+    (with-redefs [sh/sh (fn [& args]
+                         (reset! captured (last args))
+                         {:exit 0 :out "" :err ""})]
+      (ansible/ansible-step {:green/event :create} {:dir "/tmp" :env env}))
+    (is (= "test-password" (get @captured "WALTER_ATUIN_PASSWORD")))
+    (is (= "test-key" (get @captured "WALTER_ATUIN_KEY")))
+    (is (not-any? #(str/starts-with? % "COLORS_PAR_") (keys @captured)))
+    (is (nil? (tools/ansible-secret-env {} {"COLORS_PAR_ATUIN_KEY" "test-key"})))))

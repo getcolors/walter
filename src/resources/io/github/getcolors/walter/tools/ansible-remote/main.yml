@@ -276,6 +276,7 @@
     - name: Converge the declared Nix profile
       ansible.builtin.include_tasks: nix-packages.yml
 <% endif %>
+
 <% if login-shell|not-empty %>
     # Changing the login shell is the one task here that can lock a machine out
     # of its own toolchain, so it is guarded before it is applied.
@@ -367,6 +368,11 @@
     - name: Converge the declared asdf runtimes
       ansible.builtin.include_tasks: asdf.yml
 <% endif %>
+<% if agent-tools|not-empty %>
+    - name: Install the standalone coding agents
+      ansible.builtin.include_tasks: agents.yml
+<% endif %>
+
 <% if emacs-config-repo|not-empty %>
     # Ordering below is deliberate: Emacs from nix, then the configuration.
     # Cloning a config for an Emacs that is not installed leaves a machine that
@@ -702,8 +708,8 @@
     - name: Refuse to log in to atuin without its credentials
       ansible.builtin.assert:
         that:
-          - lookup('env', 'COLORS_PAR_ATUIN_PASSWORD') | length > 0
-          - lookup('env', 'COLORS_PAR_ATUIN_KEY') | length > 0
+          - lookup('env', 'WALTER_ATUIN_PASSWORD') | length > 0
+          - lookup('env', 'WALTER_ATUIN_KEY') | length > 0
         fail_msg: >-
           atuin-username is set, but COLORS_PAR_ATUIN_PASSWORD and
           COLORS_PAR_ATUIN_KEY are not both in the environment. They belong in
@@ -739,8 +745,8 @@
         cmd: >-
           atuin login
           -u <{ atuin-username }>
-          -p "{{ lookup('env', 'COLORS_PAR_ATUIN_PASSWORD') }}"
-          -k "{{ lookup('env', 'COLORS_PAR_ATUIN_KEY') }}"
+          -p "{{ lookup('env', 'WALTER_ATUIN_PASSWORD') }}"
+          -k "{{ lookup('env', 'WALTER_ATUIN_KEY') }}"
         creates: "{{ ansible_env.HOME }}/.local/state/walter/atuin-<{ atuin-username }>"
       environment:
         PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"

@@ -42,7 +42,7 @@
   "Minimum io.github.getcolors/walter contract this launcher requires. Guarded at
   run time so a stale pin fails loudly instead of rendering templates from an
   older commit."
-  5)
+  6)
 
 ;; Managed by `bb pin` — do not edit by hand.
 ;;
@@ -157,17 +157,18 @@
 ;; CLI
 
 (def commands #{"build" "create" "delete" "stop" "start"
-                "converge-nix" "converge-asdf"})
+                "converge-nix" "converge-asdf" "ssh"})
 
 (def usage
-  (str "Usage: green <build|create|delete|stop|start|converge-nix|converge-asdf> "
+  (str "Usage: green <build|create|delete|stop|start|converge-nix|converge-asdf|ssh> "
        "[-f|--file colors.yml] [--dry-run]\n"
        "\n"
        "  build    render the work directory only — no provider is contacted\n"
        "  create   provision the machine and record it in ~/.ssh/config\n"
        "  delete   destroy it, dropping the ssh block first\n"
-       "  stop     power it off  (OCI/Vultr; unsupported providers refuse)\n"
-       "  start    power it on and refresh its address\n"
+       "  stop     unavailable in v2; refuses without mutation\n"
+       "  start    unavailable in v2; refuses without mutation\n"
+       "  ssh [seat]  connect through a temporary scoped SSH agent\n"
        "  converge-nix   update declared Nix packages on every login\n"
        "  converge-asdf  install declared asdf versions on every login"))
 
@@ -182,9 +183,8 @@
       ;; resolved rather than aliased: neither namespace is known to have loaded
       ;; until contract-error has passed
       (or (contract-error)
-          ((requiring-resolve 'green.cli/run-cli)
-           @(requiring-resolve 'io.github.getcolors.walter.workflow/workflow)
-           args))
+          ((requiring-resolve 'io.github.getcolors.walter.access/run-cli)
+           @(requiring-resolve 'io.github.getcolors.walter.workflow/workflow) args))
       :else {:green/exit 2 :green/err usage})))
 
 (defn -main

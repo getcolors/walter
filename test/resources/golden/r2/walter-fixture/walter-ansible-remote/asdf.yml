@@ -1,6 +1,16 @@
 ---
-# Exact language runtime versions from colors.yml. This task file is shared by
+# Exact versions or latest stable language runtimes from colors.yml. This task file is shared by
 # the full create and the focused converge-asdf event.
+- name: Install runtime build and download prerequisites
+  ansible.builtin.apt:
+    name: [curl, git, unzip, xz-utils, ca-certificates, gnupg]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+  run_once: true
+  delegate_to: "{{ groups['all'][0] }}"
+
 - name: Add the asdf plugins
   ansible.builtin.command:
     cmd: asdf plugin add {{ item.name }} {{ item.plugin | default('', true) }}
@@ -10,19 +20,55 @@
   register: walter_asdf_plugins
   changed_when: "'already added' not in walter_asdf_plugins.stdout + walter_asdf_plugins.stderr"
 
+# Refresh latest-tracking plugins before asking for the current stable release.
+- name: Update plugins tracking latest
+  ansible.builtin.command:
+    argv: [asdf, plugin, update, "{{ item.name }}"]
+  loop: [{"name":"nodejs","version":"24.18.1","plugin":"https://github.com/asdf-vm/asdf-nodejs.git"}]
+  when: item.version == 'latest'
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+  changed_when: false
+
+- name: Resolve latest versions once per convergence
+  ansible.builtin.command:
+    argv: [asdf, latest, "{{ item.name }}"]
+  loop: [{"name":"nodejs","version":"24.18.1","plugin":"https://github.com/asdf-vm/asdf-nodejs.git"}]
+  when: item.version == 'latest'
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+  register: walter_asdf_latest
+  changed_when: false
+
+- name: Initialize resolved runtime versions
+  ansible.builtin.set_fact:
+    walter_asdf_resolved: []
+
+- name: Record the exact runtime versions for installation and selection
+  ansible.builtin.set_fact:
+    walter_asdf_resolved: "{{ walter_asdf_resolved + [item.item | combine({'version': (item.stdout | trim) if item.item.version == 'latest' else item.item.version})] }}"
+  loop: "{{ walter_asdf_latest.results }}"
+
+- name: Check that latest resolved to a stable version
+  ansible.builtin.assert:
+    that:
+      - item.version | length > 0
+      - item.version != 'latest'
+  loop: "{{ walter_asdf_resolved }}"
+
 - name: Install the asdf versions
   ansible.builtin.command:
     cmd: asdf install {{ item.name }} {{ item.version }}
-  loop: [{"name":"nodejs","version":"24.18.1","plugin":"https://github.com/asdf-vm/asdf-nodejs.git"}]
+  loop: "{{ walter_asdf_resolved }}"
   environment:
-    PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+    PATH: "/usr/bin:/bin:{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
   register: walter_asdf_installs
   changed_when: "'already installed' not in walter_asdf_installs.stdout + walter_asdf_installs.stderr"
 
 - name: Set the home asdf versions
   ansible.builtin.command:
     cmd: asdf set --home {{ item.name }} {{ item.version }}
-  loop: [{"name":"nodejs","version":"24.18.1","plugin":"https://github.com/asdf-vm/asdf-nodejs.git"}]
+  loop: "{{ walter_asdf_resolved }}"
   environment:
     PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
   changed_when: false
@@ -52,6 +98,31 @@
 
 # Corepack's shims belong to the selected Node installation, so changing Node
 # without repeating these two tasks can make pnpm disappear.
+- name: Check whether the selected Node has Corepack
+  ansible.builtin.command:
+    argv: [asdf, which, corepack]
+    chdir: "{{ ansible_env.HOME }}"
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.asdf/shims:{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+  register: walter_corepack
+  changed_when: false
+  failed_when: false
+
+- name: Install Corepack when Node does not bundle it
+  ansible.builtin.command:
+    argv: [asdf, exec, npm, install, --global, corepack]
+    chdir: "{{ ansible_env.HOME }}"
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.asdf/shims:{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+  when: walter_corepack.rc != 0
+
+- name: Refresh shims after installing Corepack
+  ansible.builtin.command:
+    argv: [asdf, reshim, nodejs]
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+  changed_when: false
+
 - name: Enable the corepack package managers
   ansible.builtin.command:
     cmd: corepack enable {{ item }}

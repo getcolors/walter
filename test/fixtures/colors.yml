@@ -1,3 +1,5 @@
+compute-api-version: 2
+agent-tools: [pi, codex, claude]
 # One fixture, every provider variant. scripts/golden.sh renders this file with
 # COLORS_PAR_* overrides for the keys that select a provider, so the goldens all
 # describe the same desired state and cannot quietly drift apart from each other.

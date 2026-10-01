@@ -1,0 +1,114 @@
+---
+# Official per-user installers. pipefail catches a failed download before an
+# empty script can appear successful. Existing standalone binaries are retained.
+- name: Ensure standalone installer prerequisites exist
+  ansible.builtin.apt:
+    name: [curl, ca-certificates, tar, gzip, unzip]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+  run_once: true
+  delegate_to: "{{ groups['all'][0] }}"
+
+- name: Ensure the local binary directory exists
+  ansible.builtin.file:
+    path: "{{ ansible_env.HOME }}/.local/bin"
+    state: directory
+    mode: "0755"
+
+
+- name: Install pi with its standalone installer
+  ansible.builtin.shell: |
+    set -o pipefail
+
+    curl -fsSL https://pi.dev/install.sh | sh
+
+
+
+  args:
+    executable: /bin/bash
+    chdir: "{{ ansible_env.HOME }}"
+    creates: "{{ ansible_env.HOME }}/.local/bin/pi"
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.local/bin:{{ ansible_env.HOME }}/.asdf/shims:{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+
+- name: Verify the standalone pi executable
+  ansible.builtin.command:
+    argv: ["{{ ansible_env.HOME }}/.local/bin/pi", --version]
+    chdir: "{{ ansible_env.HOME }}"
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.local/bin:{{ ansible_env.HOME }}/.asdf/shims:{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+  changed_when: false
+
+- name: Install codex with its standalone installer
+  ansible.builtin.shell: |
+    set -o pipefail
+
+
+    curl -fsSL https://chatgpt.com/codex/install.sh | sh
+
+
+  args:
+    executable: /bin/bash
+    chdir: "{{ ansible_env.HOME }}"
+    creates: "{{ ansible_env.HOME }}/.local/bin/codex"
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.local/bin:{{ ansible_env.HOME }}/.asdf/shims:{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+
+- name: Verify the standalone codex executable
+  ansible.builtin.command:
+    argv: ["{{ ansible_env.HOME }}/.local/bin/codex", --version]
+    chdir: "{{ ansible_env.HOME }}"
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.local/bin:{{ ansible_env.HOME }}/.asdf/shims:{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+  changed_when: false
+
+- name: Install claude with its standalone installer
+  ansible.builtin.shell: |
+    set -o pipefail
+
+
+
+    curl -fsSL https://claude.ai/install.sh | bash
+
+  args:
+    executable: /bin/bash
+    chdir: "{{ ansible_env.HOME }}"
+    creates: "{{ ansible_env.HOME }}/.local/bin/claude"
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.local/bin:{{ ansible_env.HOME }}/.asdf/shims:{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+
+- name: Verify the standalone claude executable
+  ansible.builtin.command:
+    argv: ["{{ ansible_env.HOME }}/.local/bin/claude", --version]
+    chdir: "{{ ansible_env.HOME }}"
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.local/bin:{{ ansible_env.HOME }}/.asdf/shims:{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+  changed_when: false
+
+
+- name: Put standalone agents on PATH for POSIX shells
+  ansible.builtin.blockinfile:
+    path: "{{ ansible_env.HOME }}/.profile"
+    create: true
+    mode: "0644"
+    marker: "# {mark} walter agent tools"
+    block: |
+      case ":$PATH:" in
+        *":$HOME/.local/bin:"*) ;;
+        *) PATH="$HOME/.local/bin:$PATH"; export PATH ;;
+      esac
+
+- name: Ensure the fish configuration directory exists
+  ansible.builtin.file:
+    path: "{{ ansible_env.HOME }}/.config/fish/conf.d"
+    state: directory
+    mode: "0755"
+
+- name: Put standalone agents on PATH for fish
+  ansible.builtin.copy:
+    dest: "{{ ansible_env.HOME }}/.config/fish/conf.d/agent-tools.fish"
+    mode: "0644"
+    content: |
+      fish_add_path --prepend {{ ansible_env.HOME }}/.local/bin

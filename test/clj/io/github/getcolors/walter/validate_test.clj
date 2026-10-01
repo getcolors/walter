@@ -6,7 +6,7 @@
 
 (def base
   "A minimal renderable desired state: OCI compute, local backend."
-  {:profile "walter-test"
+  {:compute-api-version 2 :profile "walter-test"
    :workdir ".colors"
    :provider-compute "oci"
    :provider-backend "s3"
@@ -21,8 +21,7 @@
    :oci-ocpus 2
    :oci-memory-in-gbs 12
    :oci-boot-volume-size-in-gbs 100
-   :oci-boot-volume-vpus-per-gb 30
-   :oci-ssh-authorized-keys "/home/example/.ssh/id_ed25519.pub"})
+   :oci-boot-volume-vpus-per-gb 30})
 
 (def github-identity
   "The two keys the clone-bearing features now depend on: every clone in the
@@ -278,7 +277,7 @@
     (is (= [] (validate/state-errors (dissoc base :oci-ssh-authorized-keys))))
     (is (= [] (validate/state-errors base)))
     (is (validate/keygen? (dissoc base :oci-ssh-authorized-keys)))
-    (is (not (validate/keygen? base)))))
+    (is (validate/keygen? base))))
 
 ;; ---------------------------------------------------------------------------
 ;; seats
@@ -352,4 +351,14 @@
   (doseq [key [:oci-instance-id :vultr-instance-id]]
     (is (seq (errors-matching (assoc base key "valid-looking-id") #"retired")))))
 (deftest backend-is-library-owned-and-remote
-  (is (seq (validate/state-errors (assoc base :provider-backend "local")))))
+  (is (empty? (validate/state-errors (assoc base :provider-backend "local")))))
+
+(deftest old-deployment-configurations-are-not-implicitly-adopted
+  (is (seq (errors-matching (dissoc base :compute-api-version) #"compute-api-version"))))
+(deftest agents-use-standalone-installers
+  (is (seq (errors-matching (assoc base :nix-packages ["codex"]) #"agent-tools")))
+  (is (seq (errors-matching (assoc base :agent-tools ["unknown"]) #"unsupported")))
+  (is (seq (errors-matching (assoc base :agent-tools ["pi"]) #"nodejs")))
+  (is (empty? (validate/state-errors (assoc base :agent-tools ["pi" "codex" "claude"]
+                                               :nix-packages ["asdf-vm"]
+                                               :asdf-tools [{:name "nodejs" :version "latest"}])))))

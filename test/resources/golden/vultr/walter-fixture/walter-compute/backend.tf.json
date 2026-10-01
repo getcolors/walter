@@ -1,0 +1,1 @@
+{"terraform":{"backend":{"s3":{"key":"walter-fixture/walter-node-0.tfstate","use_lockfile":true,"bucket":"walter-fixture-state","region":"eu-central-1"}}}}

@@ -1,330 +1,100 @@
-# Desired state for a walter development machine. Non-secret values only.
-#
-# Found by walking up from the working directory, and the work directory walter
-# renders into is resolved next to this file rather than next to the caller.
-#
-# Secrets and tokens are never written here: export them as COLORS_PAR_* and
-# they are overlaid onto the matching flat key at run time. The variable name is
-# the key uppercased with hyphens as underscores, so do-token comes from
-# COLORS_PAR_DO_TOKEN.
-#
-# COLORS_PAR_PROFILE is the one exception: walter refuses to run when it is set.
-# The profile names this project, and this project is the directory you are
-# standing in — overriding it from the environment can only point walter at
-# another project's OpenTofu state.
-#
-# Required per provider:
-#   azure          (ambient Azure CLI session)
-#   aws            (ambient AWS credential chain)
-#   google         (Application Default Credentials)
-#   digitalocean   COLORS_PAR_DO_TOKEN
-#   hcloud         COLORS_PAR_HCLOUD_TOKEN
-#   yandex         COLORS_PAR_YANDEX_TOKEN
-#   vultr          COLORS_PAR_VULTR_API_KEY
-#   oci            (none — uses oci-config-file-profile from ~/.oci/config)
-#   r2 backend     COLORS_PAR_R2_ACCESS_KEY_ID COLORS_PAR_R2_SECRET_ACCESS_KEY
-#   s3 backend     (none — OpenTofu uses the ambient AWS credential chain)
-#
-# Required by an optional feature, rather than by a provider:
-#   atuin-username COLORS_PAR_ATUIN_PASSWORD COLORS_PAR_ATUIN_KEY
-#
-# Everything below marked optional is commented out rather than set to
-# REPLACE_ME, and that is not a style choice. A key that is absent is absent,
-# and its block does not render. A key holding REPLACE_ME is *present*, so the
-# block renders the placeholder verbatim — `repo: "REPLACE_ME"`. Walter now
-# refuses to build in that state rather than letting it reach the machine, but
-# the shape of this file is what stops it happening at all.
-
-# Names the work directory, the OpenTofu state keys, and the ~/.ssh/config Host
-# alias. Keep it unique across every project on this machine: it is the only
-# thing separating this machine's state from another project's.
-profile: walter-example
+# Desired state for a new Walter v2 development machine on Google Cloud.
+# Credentials stay in COLORS_PAR_* environment variables. Never set COLORS_PAR_PROFILE.
+profile: walter-google
 workdir: .colors
+compute-api-version: 2
+users: [rose, jack]
 
-provider-compute: oci # azure | aws | google | digitalocean | hcloud | oci | vultr | yandex
-provider-backend: s3 # s3 | r2
-
-# Renders lifecycle { prevent_destroy = true }. A real delete refuses to start
-# until COLORS_PAR_COMPUTE_PREVENT_DESTROY=false. What lives on a development
-# machine is uncommitted work, so this matters more here than it does on a
-# server whose state is in git.
+provider-compute: google
+provider-backend: r2
 compute-prevent-destroy: true
 
-# --- power ------------------------------------------------------------------
-#
-# Power is library-owned, coordinated and uses immutable IDs from existing
-# deployment state. OCI and Vultr are supported; other providers refuse.
-# The backend must be reachable. Desired instance-ID overrides are retired.
-#
-# How long to wait for a power transition to complete. The OCI CLI returns
-# before the instance has finished stopping or starting, so walter always waits.
-power-wait-seconds: 300
+# N4A requires ARM64, Hyperdisk and gVNIC. Image verified with IDPF support.
+google-project: pocketcontext
+google-region: europe-west4
+google-zone: europe-west4-b
+google-machine-type: n4a-highmem-1
+google-boot-disk-type: hyperdisk-balanced
+google-nic-type: GVNIC
+google-image-project: ubuntu-os-cloud
+google-image-family: ubuntu-2404-lts-arm64
+google-image-id: projects/ubuntu-os-cloud/global/images/ubuntu-2404-noble-arm64-v20260918
+google-subnet-cidr: 10.43.0.0/24
+google-boot-disk-size-gb: 100
 
-# --- machine access ---------------------------------------------------------
-#
-# By default walter generates and owns the machine-access keypair (SSH Keypair
-# Standard, workspace standards/ssh-keypair.md): leave every machine-key value
-# below unset and the first real create makes an ed25519 keypair named after
-# the profile in ~/.ssh, feeds the public half to the
-# selected provider — OCI and Yandex take the material directly; hcloud,
-# DigitalOcean, and Vultr get a key resource named after the profile, declared
-# by the compute template itself — and delete removes it after a successful
-# destroy. The managed ~/.ssh/config block pins `ssh <profile>` to that key
-# with IdentityFile + IdentitiesOnly, and Ansible connects with it too.
-#
-# An existing ~/.ssh/<profile> without deployment state, or a provider-side key
-# named after the profile outside the deployment's state, stops the create
-# instead of being overwritten or adopted; the error names the recovery.
-#
-# Setting the provider's machine-key value (oci-ssh-authorized-keys,
-# hcloud-ssh-keys, digitalocean-ssh-keys, compute-pubkey) switches generation
-# off and behaves exactly as before — keep that key's private half in
-# ssh-agent. Vultr is the exception and accepts no explicit key: walter must
-# hold the private half to create ubuntu before it disables the image's root
-# SSH login.
+# Existing R2 bucket; credentials are supplied through .envrc.private.
+r2-bucket: walter-google-state
+r2-endpoint: https://319271fed8bc6d2d9059362be1165f37.eu.r2.cloudflarestorage.com
 
-# --- oci --------------------------------------------------------------------
-oci-config-file-profile: REPLACE_ME
-oci-subnet-id: REPLACE_ME
-oci-compartment-id: REPLACE_ME
-oci-availability-domain: REPLACE_ME
-oci-display-name: walter
-oci-shape: VM.Standard.A1.Flex
-# Optional. Pins the boot image. Left unset, the newest Canonical Ubuntu 24.04
-# image compatible with oci-shape is used — convenient for a first create, and a
-# moving target afterwards: the image id forces replacement, so an apply months
-# later proposes destroying the instance because Canonical published a new one.
-# With compute-prevent-destroy true that apply fails rather than destroying
-# anything, which is safe and confusing. Pin it once the machine is real.
-# oci-image-id: ocid1.image.oc1...
-oci-ocpus: 2
-oci-memory-in-gbs: 12
-oci-boot-volume-size-in-gbs: 100
-oci-boot-volume-vpus-per-gb: 30
-oci-ssh-authorized-keys: REPLACE_ME
+# Encrypted SSH resource: supply COLORS_PAR_WALTER_SSH_PASSPHRASE at runtime.
+# Create/delete retain this named authority; each access scope owns an agent.
+# This is a new deployment. No v1 resources or state are adopted.
 
-# --- other compute providers ------------------------------------------------
-# Only the keys for the selected provider-compute are required.
+# --- GitHub identity --------------------------------------------------------
+# A real create starts GitHub's device flow before provisioning. The resulting
+# machine-owned token is used for HTTPS clones; no GitHub SSH key or forwarded
+# workstation agent reaches the server.
+github-account: amiorin
+git-email: 32617+amiorin@users.noreply.github.com
 
-compute-pubkey: REPLACE_ME # required by Yandex Cloud
+emacs-config-repo: https://github.com/amiorin/.emacs.d.git
+emacs-config-dest: ~/.config/neoemacs
 
-hcloud-name: walter
-hcloud-image: ubuntu-24.04
-hcloud-server-type: cx23
-hcloud-location: hel1
-hcloud-ssh-keys: REPLACE_ME
+# --- Tooling ---------------------------------------------------------------
+nix-packages:
+  - asdf-vm
+  - ripgrep
+  - fd
+  - fish
+  - fzf
+  - gh
+  - caddy
+  - awscli2
+  - azure-cli
+  - google-cloud-sdk
+  - oci-cli
+  - babashka
+  - clojure
+  - starship
+  - zoxide
+  - atuin
+  - direnv
+  - eza
+  - zellij
+  - gcc
+  - devenv
+  - age
 
-digitalocean-name: walter
-digitalocean-region: ams3
-digitalocean-size: s-1vcpu-1gb-35gb-intel
-digitalocean-image: ubuntu-25-10-x64
-digitalocean-vpc-uuid: REPLACE_ME
-digitalocean-ssh-keys: REPLACE_ME
+agent-tools: [pi, codex, claude]
 
-vultr-name: walter
-vultr-region: ams
-vultr-plan: vc2-2c-4gb
-vultr-os-id: 2284
-vultr-ssh-keys: REPLACE_ME
+login-shell: fish
 
-yandex-cloud-id: REPLACE_ME
-yandex-folder-id: REPLACE_ME
-yandex-zone: ru-central1-a
-yandex-image-family: ubuntu-2404-lts
-yandex-name: walter
-yandex-subnet-cidr: 10.0.0.0/24
-yandex-platform-id: standard-v3
-yandex-cores: 2
-yandex-memory-gb: 8
-yandex-core-fraction: 100
-yandex-disk-size-gb: 50
+asdf-tools:
+  - name: nodejs
+    version: latest
+    plugin: https://github.com/asdf-vm/asdf-nodejs.git
+  - name: uv
+    version: latest
+    plugin: https://github.com/asdf-community/asdf-uv.git
+  - name: bun
+    version: latest
+    plugin: https://github.com/cometkim/asdf-bun.git
 
+  - name: python
+    version: latest
+    plugin: https://github.com/asdf-community/asdf-python.git
 
-# --- state backend ----------------------------------------------------------
-s3-bucket: REPLACE_ME
-s3-region: REPLACE_ME
-r2-bucket: REPLACE_ME
-r2-endpoint: REPLACE_ME
+corepack-packages:
+  - pnpm
 
-# ============================================================================
-# Everything below is optional. Uncomment a block to turn that feature on; a
-# machine that names none of it still gets nix and a working terminfo, which is
-# what walter treats as the floor for a development machine.
-# ============================================================================
+dotfiles-checkout: ~/code/getcolors/dotfiles
 
-# --- toolchain --------------------------------------------------------------
-#
-# Installed with one `nix profile add` on top of the nix every walter machine
-# gets. Names are nixpkgs attribute paths, resolved against nixpkgs-unstable.
-#
-# That ref is a channel branch and not a revision, so these track upstream: two
-# creates months apart do not produce the same versions. Deliberate for a
-# development machine, and it is what makes asdf 0.20 reachable at all.
-#
-# This list is the machine's baseline, not an inventory of it. Anything
-# installed by hand there is invisible here and does not survive a delete;
-# adding a name is what makes it come back.
-#
-# nix-packages:
-#   - ripgrep
-#   - fd
+clone-orgs:
+  - getcolors
 
-# The login shell, resolved under ~/.nix-profile/bin — so it has to be one of
-# nix-packages above, and walter refuses to build if it is not.
-#
-# Switching this is not merely a passwd(5) write. nix reaches a login shell
-# through /etc/profile.d/nix.sh, which is sh-only: fish does not read it, and a
-# nix-built fish does not read /etc/fish/conf.d either, since its sysconfdir is
-# inside the store. A fish login would otherwise start unable to find nix
-# itself, which is a hole you cannot climb out of from inside that shell — so
-# the playbook writes ~/.config/fish/conf.d/nix.fish before it changes the
-# shell, never after.
-#
-# Note that `ssh <alias> <command>` then runs this shell. Anything scripted
-# against the machine gets its syntax, not bash's.
-#
-# login-shell: fish
+atuin-username: amiorin
 
-# --- language runtimes ------------------------------------------------------
-#
-# Through asdf, which is itself just an entry in nix-packages — so asking for
-# tools without "asdf-vm" there is refused at build time.
-#
-# nixpkgs-unstable ships asdf 0.20, the Go rewrite, so the playbook uses
-# `asdf set --home`. 0.16 removed `asdf global` outright — it answers "invalid
-# command provided" rather than warning — so a nixpkgs ref carrying 0.15 would
-# need the playbook changed in the same commit.
-#
-# `plugin` is optional; asdf resolves a bare name against its own index.
-#
-# asdf-tools:
-#   - name: nodejs
-#     version: 24.18.1
-#     plugin: https://github.com/asdf-vm/asdf-nodejs.git
-
-# Package managers enabled through Node's own corepack, which is why this needs
-# a nodejs entry in asdf-tools rather than being a package in its own right.
-#
-# corepack installs its shims into that Node's bin directory, which asdf does
-# not expose until `asdf reshim` — without it `corepack enable pnpm` reports
-# success and `pnpm` stays command-not-found. The playbook reshims.
-#
-# corepack downloads the package manager itself on first use, so the first run
-# is slow and needs a network. That is corepack's design, not a failure.
-#
-# corepack-packages:
-#   - pnpm
-
-# --- github -----------------------------------------------------------------
-#
-# The machine's GitHub identity: gh logged in as this account, git cloning and
-# pushing over https through it, and user.name/user.email configured. Both
-# keys travel together, and the clone-bearing features below (editor,
-# organisation checkouts, dotfiles) refuse to build without them — their
-# clones authenticate through this.
-#
-# No token lives anywhere in desired state. The create *mints* one: its first
-# action, before any provider is touched, is GitHub's device flow — a one-time
-# code and a URL to approve it from any browser, and once approved everything
-# after runs unattended. The token carries gh's default scopes plus
-# `workflow`, is seeded straight into the machine's own gh
-# (~/.config/gh/hosts.yml), and the temporary copy on this workstation is
-# deleted before the create returns. Your own gh login here is never touched.
-#
-# A machine that already holds a login is left exactly as it is — re-creates
-# stay non-interactive — and a create that fails part-way keeps the minted
-# token under ~/.local/state/walter/github-token-<profile>, so the retry
-# reuses it instead of asking for a second code; it is deleted the moment a
-# create seeds the machine. Deleting the machine does not revoke the token:
-# do that under GitHub Settings → Applications → GitHub CLI when you want it
-# gone.
-#
-# github-account: you
-# git-email: you@example.com
-
-# --- editor -----------------------------------------------------------------
-#
-# Adds Emacs on top of nix and clones a configuration for it. Ordering is
-# handled for you: cloning a config for an Emacs that is not installed leaves a
-# machine that looks provisioned and is not.
-#
-# An https:// URL, cloned through the machine's own gh login above — so
-# nothing of this workstation's is involved, a private repository works, and
-# the checkout can push back. The old ssh:// form is refused: the machine
-# holds no ssh key for GitHub and no agent is forwarded to it.
-#
-# The clone happens once. A later create leaves an existing checkout alone, so
-# uncommitted work on the machine survives; `git pull` there is how it moves.
-#
-# Packages are not pre-fetched. The first interactive launch pulls from
-# ELPA/MELPA and native-compiles, which takes minutes and is not a provisioning
-# failure.
-#
-# emacs-config-repo: https://github.com/you/emacs.d.git
-#
-# Defaults to ~/.config/emacs, the XDG path Emacs 29+ reads on its own. Name
-# another and you must launch with `emacs --init-directory <path>`.
-# emacs-config-dest: ~/.config/emacs
-
-# --- dotfiles ---------------------------------------------------------------
-#
-# Runs the existing `./green create` launcher in a getcolors/dotfiles checkout.
-# The checkout owns its colors.yml, including the selected profile and target;
-# walter supplies only COLORS_PAR_DOTFILES_PREVENT_OVERWRITE=false for the one
-# authorized create. It never overrides profile — COLORS_PAR_PROFILE remains
-# forbidden.
-#
-# Normally clone-orgs below creates the checkout first, which is why this
-# needs github-account above like every clone-bearing feature. The launcher is
-# a Babashka script, so "babashka" has to be in nix-packages. Walter stamps a
-# successful run under ~/.local/state/walter and does not reapply it on later
-# creates, preserving edits made in $HOME.
-#
-# dotfiles-checkout: ~/code/getcolors/dotfiles
-
-# --- organisation checkouts --------------------------------------------------
-#
-# Clones every source repository of the named GitHub organisations to
-# ~/code/<org>/<repo>, so a rebuilt machine comes back with the working copies
-# on it rather than fifteen `git clone`s to type.
-#
-# Only the organisation is desired state. The repository list is read from
-# GitHub's API on the machine at create time, so one added upstream arrives on
-# the next create with nothing here to keep in step — which is the whole reason
-# this key names an org rather than repositories.
-#
-# Authenticated through the machine's gh login (github-account above is
-# required), so the listing sees what the account sees — private repositories
-# included — and gh paginates it itself, so an organisation past 100
-# repositories clones completely. `type=sources` skips forks and archived
-# repositories are skipped at the clone.
-#
-# Same https reasoning as the editor above, and the same clone-once rule: the
-# checkouts authenticate with the machine's own token so they can push back,
-# and a later create leaves an existing one alone. `git pull` on the machine
-# is how one moves.
-#
-# clone-orgs:
-#   - your-org
-
-# --- shell history ----------------------------------------------------------
-#
-# Adopts an existing atuin account, so a rebuilt machine can still see the
-# history of the one it replaced. Needs "atuin" in nix-packages.
-#
-# Only the username belongs here. The password and the encryption key are
-# COLORS_PAR_ATUIN_PASSWORD and COLORS_PAR_ATUIN_KEY: this file is committed,
-# and that key decrypts the account's history on every machine it reaches. The
-# playbook reads them from the environment at create time and refuses to run
-# without them. `build` never needs them, which is why they are not checked at
-# validation time.
-#
-# Logging in replaces whatever key atuin generated locally, so history written
-# on the machine beforehand becomes unreadable. That is what adopting an
-# existing account means, and it is why the login runs once — guarded by
-# ~/.local/state/walter/atuin-<username>, a stamp walter writes, because atuin
-# keeps its session inside meta.db and offers no file to watch.
-#
-# `atuin sync` runs after it, on every create, and is not guarded.
-#
-# atuin-username: you
+seed-agent-credentials:
+  - claude
+  - codex
+  - pi

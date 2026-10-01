@@ -3,10 +3,9 @@
   (:require [clojure.string :as str]
             [green.cli :as green-cli]
             [io.github.getcolors.compute :as library]
-            [io.github.getcolors.compute-ssh :as ssh]))
+            [io.github.getcolors.walter.compute :as compute]))
 
-(defn keygen? [opts]
-  (and (some? (:provider-compute opts)) (= "managed" (:mode (ssh/mode opts)))))
+(defn keygen? [_] true)
 
 (def agent-credential-paths
   "Agent CLIs walter can carry a subscription login for, and the one file each
@@ -57,7 +56,7 @@
   These are the ones where a placeholder is not harmless. Adding a gated feature
   means adding its key here, which is the same discipline its own rule below
   already needs."
-  [:nix-packages :login-shell
+  [:nix-packages :agent-tools :login-shell
    :emacs-config-repo :emacs-config-dest
    :dotfiles-checkout
    :atuin-username
@@ -208,6 +207,10 @@
          (remove str/blank?)
          vec)))
 
+(defn agent-tools [opts]
+  (let [values (:agent-tools opts)]
+    (vec (distinct (remove str/blank? (map str (if (sequential? values) values (str/split (str values) #"\s+"))))))))
+
 (defn state-errors
   "Everything wrong with `opts` that does not depend on credentials, as a vector
   of messages. Empty means the desired state is renderable."
@@ -216,7 +219,19 @@
    (concat
     (map #(str % " is required") (missing-keys opts [:profile :workdir :provider-compute :provider-backend]))
     (leftover-placeholders opts)
-    (try (library/backend-plan opts (str (:profile opts) "/shared.tfstate")) []
+    (when-not (= 2 (:compute-api-version opts))
+      [":compute-api-version must be 2 for a new deployment; existing v1 deployments must retain their pinned launcher"])
+    (when (and (some #{"pi"} (agent-tools opts))
+               (not (some #(= "nodejs" (:name %)) (asdf-tools opts))))
+      [":agent-tools pi requires nodejs in :asdf-tools for its installer"])
+    (for [agent (agent-tools opts) :when (not (contains? #{"pi" "codex" "claude"} agent))]
+      (str "unsupported :agent-tools entry " (pr-str agent)))
+    (for [package (nix-package-names opts) :when (contains? #{"pi" "pi-coding-agent" "codex" "claude-code"} package)]
+      (str package " must be installed through :agent-tools, not :nix-packages"))
+    (when (= "managed" (:gcs-bucket-mode opts))
+      ["colors-compute v2 requires an existing GCS bucket; remove :gcs-bucket-mode managed"])
+
+    (try (compute/plan opts) []
          (catch Exception e [(ex-message e)]))
     (when-not (boolean? (:compute-prevent-destroy opts))
       [":compute-prevent-destroy must be true or false"])

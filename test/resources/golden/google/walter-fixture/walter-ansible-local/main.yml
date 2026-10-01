@@ -143,7 +143,10 @@
                           for host in hosts:
                               block.extend(['Host ' + host['name'], '    HostName ' + host['ip'], '    User ' + host['user'], '    Port 22'])
                               if payload['keygen']:
-                                  block.extend(['    IdentityFile ~/.ssh/' + profile, '    IdentitiesOnly yes'])
+                                  identity = payload.get('identity_file', '')
+                                  if not identity.startswith('/') or any(c in identity for c in '\r\n\x00\"'):
+                                      raise ValueError('invalid public identity path')
+                                  block.extend(['    IdentityFile \"' + identity + '\"', '    IdentitiesOnly yes', '    IdentityAgent none', '    ForwardAgent no'])
                               block.extend(['    StrictHostKeyChecking accept-new', '    ForwardAgent no'])
                           new = '\n'.join(block + [end, '']) + remainder
                       else:
@@ -172,7 +175,7 @@
                   except Exception as error:
                       print(str(error), file=sys.stderr)
                       sys.exit(1)
-        stdin: "{{ {'host_alias': host_alias, 'ssh_hosts': ssh_hosts, 'block_state': block_state, 'keygen': colors_keygen, 'legacy_marker_prefix': ssh_legacy_marker_prefix | default('')} | to_json }}"
+        stdin: "{{ {'host_alias': host_alias, 'ssh_hosts': ssh_hosts, 'block_state': block_state, 'keygen': colors_keygen, 'identity_file': ssh_identity_file | default(''), 'legacy_marker_prefix': ssh_legacy_marker_prefix | default('')} | to_json }}"
       environment:
         HOME: "{{ lookup('env', 'HOME') }}"
       register: colors_ssh_update

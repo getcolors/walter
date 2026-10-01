@@ -81,6 +81,7 @@ fi
 # above is escaped in a project that has not been able to pin yet.
 
 cat >"$copy/colors.yml" <<'EOF'
+compute-api-version: 2
 profile: launcher-check
 workdir: .colors
 provider-compute: vultr
@@ -95,7 +96,7 @@ EOF
 
 out=$( (cd "$copy" && WALTER_LIB_ROOT="$root" ./green build 2>&1) ) ||
   fail "WALTER_LIB_ROOT did not resolve the working tree: $out"
-[ -f "$copy/.colors/launcher-check/walter-compute/nodes/0/backend.tf.json" ] ||
+[ -f "$copy/.colors/build/launcher-check/walter-compute/backend.tf.json" ] ||
   fail "the override resolved but rendered nothing"
 ok "WALTER_LIB_ROOT resolves a working tree from a copied payload"
 
@@ -108,7 +109,7 @@ ok "WALTER_LIB_ROOT resolves a working tree from a copied payload"
 mkdir -p "$copy/deep/nested"
 out=$( (cd "$copy/deep/nested" && WALTER_LIB_ROOT="$root" ./../../green build 2>&1) ) ||
   fail "running from a subdirectory failed: $out"
-[ -f "$copy/.colors/launcher-check/walter-compute/nodes/0/backend.tf.json" ] ||
+[ -f "$copy/.colors/build/launcher-check/walter-compute/backend.tf.json" ] ||
   fail "a subdirectory run rendered somewhere other than beside colors.yml"
 ok "finds colors.yml by walking up, and renders beside it"
 

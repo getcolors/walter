@@ -1,8 +1,6 @@
-.colors/
-.cpcache/
-.clj-kondo/.cache/
-.lsp/.cache/
+.*
+!.gitignore
+!.nojekyll
+!.envrc
+
 target/
-.direnv/
-.devenv/
-.envrc.private

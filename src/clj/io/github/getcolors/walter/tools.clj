@@ -11,10 +11,8 @@
    [green.scaffold :as sc]
    [green.workflow :as wf]
    [io.github.getcolors.compute :as library]
-   [io.github.getcolors.compute-planning :as planning]
-   [io.github.getcolors.compute-orchestration :as orchestration]
-   [io.github.getcolors.compute-inspection :as inspection]
-   [io.github.getcolors.compute-ssh :as ssh]
+   [io.github.getcolors.compute-node :as node-api]
+   [io.github.getcolors.walter.access :as access]
    [io.github.getcolors.walter.compute :as compute]
    [io.github.getcolors.walter.github :as github]
    [io.github.getcolors.walter.utils :as utils]
@@ -76,60 +74,39 @@
                               (str "[\n" (str/join ",\n" (map #(str (padding (+ indent 2)) (compute-json % (+ indent 2))) value)) "\n" (padding indent) "]"))
       :else (json/generate-string value))))
 
-(defn compute-step [opts]
-  (try
-    (let [planning? (or (= :build (:green/event opts)) (:green/dry-run opts))
-          result (if planning?
-                   (planning/plan-deployment opts (compute/topology opts) (compute/requirements opts))
-                   (orchestration/orchestrate opts (compute/topology opts) (compute/requirements opts)))]
-      (when planning?
-        (doseq [[stage key] (cons ["shared" (get-in result [:state_keys :shared])]
-                                 (map (fn [[id key]] [(str "nodes/" (name id)) key]) (get-in result [:state_keys :nodes]))) ]
-          (let [target (io/file (tool-dir opts compute-tool) stage "backend.tf.json")]
-            (io/make-parents target)
-            (spit target (str (compute-json (:config (library/backend-plan opts key)) 0) "\n"))))
-        (doseq [[stage documents] (cons ["shared" (get-in result [:documents :shared])]
-                                      (map (fn [[id documents]] [(str "nodes/" id) documents]) (get-in result [:documents :nodes])))
-                [filename document] documents]
-          (let [target (io/file (tool-dir opts compute-tool) stage filename)]
-            (io/make-parents target)
-            (spit target (str (compute-json document 0) "\n")))))
-      (if-not (contains? #{"ready" "planned" "destroyed"} (:status result))
-        (assoc opts :green/exit 1 :green/err (if (seq (:errors result)) (str/join "\n" (:errors result)) "compute lifecycle refused; inspect state ownership and configuration"))
-        (cond-> (assoc opts :green/exit 0)
-          (:shared result) (assoc :colors-compute/shared (:shared result))
-          (:cluster result) (assoc :colors-compute/cluster (:cluster result) :ip (get-in result [:cluster :nodes 0 :ip]) :user (get-in result [:cluster :nodes 0 :user]))
-          (get-in result [:key :private_key_path])
-          (assoc :ssh-private-key-path (if planning? (str/replace (get-in result [:key :private_key_path]) "$HOME/.ssh" "/home/build-placeholder/.ssh") (get-in result [:key :private_key_path]))))))
-    (catch Exception _ (assoc opts :green/exit 1 :green/err "compute lifecycle refused; legacy monolithic state requires explicit migration"))))
+(defn compute-step
+  ([opts] (compute-step opts node-api/compute-node!))
+  ([opts run-fn]
+   (let [result (if (compute/planning? opts)
+                  (node-api/build-node! (compute/library-options opts) (compute/request opts))
+                  (run-fn (compute/library-options opts) (compute/request opts)
+                          (if (= :delete (:green/event opts)) "delete" "create")))]
+     (case (:status result)
+       "built" (let [node (compute/placeholder-node opts)]
+                 (assoc opts :colors-compute/node node :ip (:ip node) :user (:user node) :green/exit 0))
+       "ready" (let [node (:params result)]
+                 (assoc opts :colors-compute/node node :ip (:ip node) :user (:user node) :green/exit 0))
+       "destroyed" (assoc opts :green/exit 0)
+       (access/failed-result opts result)))))
 
-(defn load-compute-step [opts]
-  (try
-    (let [result (inspection/read-deployment opts (into {} (System/getenv)) {} (compute/requirements opts))]
-      (case (:status result)
-        "present" (let [node (first (get-in result [:cluster :nodes]))]
-                    (cond-> (assoc opts :colors-compute/cluster (:cluster result)
-                                       :colors-compute/shared (:shared result)
-                                       :ip (:ip node) :user (compute/login node) :green/exit 0)
-                      (:ssh_identity_file node) (assoc :ssh-private-key-path (:ssh_identity_file node))))
-        "destroyed" (if (= :delete (:green/event opts)) (assoc opts :walter/already-destroyed true :green/exit 0)
-                        (assoc opts :green/exit 1 :green/err "compute deployment is destroyed"))
-        (assoc opts :green/exit 1 :green/err "compute inspection refused; existing owned state is required")))
-    (catch Exception _ (assoc opts :green/exit 1 :green/err "compute inspection refused; existing owned state is required"))))
-
+(defn load-compute-step
+  ([opts] (load-compute-step opts node-api/compute-node!))
+  ([opts run-fn]
+   (let [result (run-fn (compute/library-options opts) (compute/request opts) "inspect")]
+     (case (:status result)
+       "ready" (let [node (:params result)]
+                 (assoc opts :colors-compute/node node :ip (:ip node) :user (compute/login node) :green/exit 0))
+       "destroyed" (if (= :delete (:green/event opts))
+                     (assoc opts :walter/already-destroyed true :green/exit 0)
+                     (assoc opts :green/exit 1 :green/err "compute node is destroyed"))
+       (access/failed-result opts result)))))
 
 (defn fallback-compute-params [opts] (compute/node opts))
 (defn machine-key-file [opts]
-  (or (:ssh-private-key-path opts)
-      (when (validate/keygen? opts)
-        (str (io/file (if (= :build (:green/event opts)) "/home/build-placeholder" (System/getProperty "user.home")) ".ssh" (:profile opts))))))
-(defn machine-key-ssh-path [opts]
-  (when (validate/keygen? opts) (str "~/.ssh/" (:profile opts))))
+  (or (:ssh-private-key-path opts) (when (compute/planning? opts) (compute/placeholder-key opts))))
+(defn machine-key-ssh-path [opts] (machine-key-file opts))
 (defn with-machine-key [opts]
-  (if-not (validate/keygen? opts) opts
-    (assoc opts :compute-pubkey
-      (if (= :build (:green/event opts)) ssh/placeholder-public
-        (str/trim (slurp (str (machine-key-file opts) ".pub")))))))
+  (assoc opts :compute-pubkey (:public_key (compute/resource opts))))
 
 (defn users
   "The `users` entries — seat logins provisioned beside the primary one, each
@@ -269,7 +246,8 @@
   one — and so an `--init-directory` to reach it — says so in colors.yml."
   [opts]
   (assoc opts
-         :ssh-keygen (validate/keygen? opts)
+         :ssh-keygen true
+         :agent-socket (or (:walter/agent-socket opts) "none")
          :ip (or (not-empty (str (:ip opts))) "192.168.0.1")
          :user (or (not-empty (str (:user opts))) "root")
          :host-alias (utils/host-alias opts)
@@ -286,6 +264,8 @@
          ;; a valid YAML flow sequence, so the playbook keeps one task with an
          ;; Ansible `loop` instead of N generated ones, and the indentation
          ;; cannot drift.
+         :asdf-python (boolean (some #(= "python" (:name %)) (validate/asdf-tools opts)))
+         :agent-tools (validate/agent-tools opts)
          :asdf-tools-json (let [tools (validate/asdf-tools opts)]
                             (when (seq tools) (json/generate-string tools)))
          :corepack-packages-json (let [pkgs (validate/corepack-packages opts)]
@@ -313,10 +293,8 @@
                             (when (seq orgs) (json/generate-string orgs)))
          :emacs-config-dest (or (not-empty (str (:emacs-config-dest opts)))
                                 "~/.config/emacs")
-         ;; The rendered ssh-config block names the generated key by its
-         ;; literal ~ form, so the playbook stays byte-identical across
-         ;; workstations; ssh_config expands the tilde itself. nil when
-         ;; compute-keygen is off, which is what gates the IdentityFile lines.
+         ;; Public identity cache selected by the scoped agent. The persistent
+         ;; alias disables ambient agents; runtime commands select their socket.
          :machine-key-path (machine-key-ssh-path opts)
          ;; Normalised in place, so the templates never re-parse the raw key:
          ;; the local play loops over it with Selmer, and the seats play takes
@@ -345,8 +323,7 @@
    (if (= :build (:green/event opts))
      "root"
      (let [result (run-fn (vec (concat ["ssh" "-o" "BatchMode=yes" "-o" "StrictHostKeyChecking=no" "-o" "UserKnownHostsFile=/dev/null"]
-                                  (when (machine-key-file opts) ["-i" (machine-key-file opts)])
-                                  (when (validate/keygen? opts) ["-o" "IdentitiesOnly=yes"])
+                                  (access/identity-args opts)
                                   [(str "ubuntu@" (:ip opts)) "true"]))
                           {} bootstrap-probe-timeout-ms)]
        (if (:ok? result) "ubuntu" "root")))))
@@ -450,8 +427,17 @@
                              :ssh_hosts (vec (cons {:name (:host-alias data) :ip (:ip data) :user (:user data)}
                                                    (map (fn [seat] {:name (str (:host-alias data) "-" seat) :ip (:ip data) :user seat}) (users opts))))
                              :ssh_legacy_marker_prefix "walter"
+                             :ssh_identity_file (or (machine-key-file opts) "")
                              :block_state (if delete? "absent" "present")}}]
     (ansible/ansible-with-spec opts config specs)))
+
+(defn ansible-secret-env
+  "Explicit application credentials for Ansible; the SDK strips COLORS_PAR_*."
+  ([opts] (ansible-secret-env opts (System/getenv)))
+  ([opts env]
+   (when (not-empty (:atuin-username opts))
+     {"WALTER_ATUIN_PASSWORD" (get env "COLORS_PAR_ATUIN_PASSWORD")
+      "WALTER_ATUIN_KEY" (get env "COLORS_PAR_ATUIN_KEY")})))
 
 (defn ansible-remote-step
   "Reach the machine, then provision it: nix always, and Emacs plus a cloned
@@ -489,7 +475,9 @@
                (template-spec (walter-template "tasks" "nix-packages.yml")
                               (str dir "/nix-packages.yml") data)
                (template-spec (walter-template "tasks" "asdf.yml")
-                              (str dir "/asdf.yml") data)]
+                              (str dir "/asdf.yml") data)
+               (template-spec (walter-template "tasks" "agents.yml")
+                              (str dir "/agents.yml") data)]
         rendered (sc/scaffold opts specs)]
     (if (or (= :build (:green/event opts))
             (= :delete (:green/event opts)))
@@ -500,6 +488,7 @@
                              :inventory "inventory.json"
                              :playbooks {:create "main.yml"}
                              :host-key-checking false
+                             :env (ansible-secret-env opts)
                              :extra-vars {:github_token_file
                                           (str (:walter/github-token-file opts))}}
                       (machine-key-file opts)
@@ -511,7 +500,8 @@
 (defn- converge-step
   "Run one focused, existing-machine convergence through managed SSH aliases.
 
-  No provider or backend is consulted. The alias is the prerequisite and the
+  No compute state or provider is consulted. SSH authority is opened by the
+  preceding access stage. The alias is the prerequisite and the
   dedicated playbook checks the per-login binary before including the same task
   source the full create uses. Host-key checking is deliberately left enabled:
   focused convergence trusts the alias already established by create."
@@ -549,6 +539,7 @@
                             {:dir dir
                              :inventory "inventory.json"
                              :playbooks {:create "main.yml"}
+                             :private-key (machine-key-file opts)
                              :extra-vars (when (= kind :nix)
                                            {:walter_nix_upgrade true})}))))
 

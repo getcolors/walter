@@ -22,6 +22,8 @@ build_variant() {
     cd "$root"
     env COLORS_PAR_WORKDIR="$tmp/$variant" "$@" ./green build -f "$state" >/dev/null
   )
+  mv "$tmp/$variant/build/walter-fixture" "$tmp/$variant/walter-fixture"
+  rmdir "$tmp/$variant/build"
   # No rendered artefact may carry a real secret into a committed golden.
   # Checked before --accept copies anything. POSIX grep on purpose: a missing
   # binary inside `if` is simply false, so the guard must not depend on one
@@ -58,7 +60,7 @@ build_variant hcloud COLORS_PAR_PROVIDER_COMPUTE=hcloud
 build_variant digitalocean COLORS_PAR_PROVIDER_COMPUTE=digitalocean
 build_variant vultr COLORS_PAR_PROVIDER_COMPUTE=vultr
 build_variant yandex COLORS_PAR_PROVIDER_COMPUTE=yandex
-build_variant vultr-external COLORS_PAR_PROVIDER_COMPUTE=vultr COLORS_PAR_VULTR_SSH_KEYS=fixture-account-key
+build_variant google-n4a COLORS_PAR_PROVIDER_COMPUTE=google COLORS_PAR_GOOGLE_MACHINE_TYPE=n4a-highmem-1 COLORS_PAR_GOOGLE_BOOT_DISK_TYPE=hyperdisk-balanced COLORS_PAR_GOOGLE_NIC_TYPE=GVNIC COLORS_PAR_GOOGLE_IMAGE_ID=projects/ubuntu-os-cloud/global/images/ubuntu-2404-noble-arm64-fixture
 build_variant s3 COLORS_PAR_PROVIDER_BACKEND=s3
 build_variant r2 COLORS_PAR_PROVIDER_BACKEND=r2
 
@@ -67,7 +69,7 @@ build_variant r2 COLORS_PAR_PROVIDER_BACKEND=r2
 # host, and on host vars that appear anywhere in the file. Duplicate keys are
 # not checkable here — a JSON object collapses them before any reader sees
 # them — so `alias-inventory` deduplicates at the source instead.
-for v in aws azure google oci oci-pinned hcloud digitalocean vultr yandex vultr-external s3 r2; do
+for v in aws azure google oci oci-pinned hcloud digitalocean vultr yandex google-n4a s3 r2; do
   for stage in walter-converge-nix walter-converge-asdf; do
     inventory="$tmp/$v/walter-fixture/$stage/inventory.json"
     [ -f "$inventory" ] || {
@@ -89,13 +91,13 @@ done
 echo "  ok — focused stages use exactly the managed aliases and no host vars"
 
 # The library owns split state and all provider resource addresses.
-for v in aws azure google oci oci-pinned hcloud digitalocean vultr yandex vultr-external s3 r2; do
-  for artifact in shared/backend.tf.json nodes/0/backend.tf.json; do
+for v in aws azure google oci oci-pinned hcloud digitalocean vultr yandex google-n4a s3 r2; do
+  for artifact in compute.tf.json backend.tf.json; do
     test -f "$tmp/$v/walter-fixture/walter-compute/$artifact"
   done
 done
 # Every root-login image uses the same application bootstrap.
-for v in hcloud digitalocean vultr vultr-external; do
+for v in hcloud digitalocean vultr; do
   bootstrap="$tmp/$v/walter-fixture/walter-ansible-bootstrap"
   test -f "$bootstrap/main.yml"
   for setting in 'PermitRootLogin no' 'PasswordAuthentication no' 'NOPASSWD: ALL'; do
@@ -104,8 +106,9 @@ for v in hcloud digitalocean vultr vultr-external; do
   grep -q '"ansible_user" : "ubuntu"' "$tmp/$v/walter-fixture/walter-ansible-remote/inventory.json"
 done
 test ! -d "$tmp/oci/walter-fixture/walter-ansible-bootstrap"
-grep -q 'src: /root/.ssh/authorized_keys' "$tmp/vultr-external/walter-fixture/walter-ansible-bootstrap/main.yml"
-echo "  ok — split state, normalized login bootstrap, managed and external keys"
+grep -q 'hyperdisk-balanced' "$tmp/google-n4a/walter-fixture/walter-compute/compute.tf.json"
+grep -q 'GVNIC' "$tmp/google-n4a/walter-fixture/walter-compute/compute.tf.json"
+echo "  ok — v2 compute state, normalized login bootstrap, public SSH identity and N4A"
 
 # --------------------------------------------------------------------------
 # Seats: real unix logins beside the primary one, isolated by file

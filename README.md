@@ -1,5 +1,45 @@
 # walter
 
+The current checkout targets **colors-compute v2** and uses the sibling
+`../colors-compute/green` directly. It is for a new deployment, not an upgrade
+of an existing v1 machine. The copied launcher has not been repinned.
+
+```sh
+./green build             # credential-free output under .colors/build/<profile>
+./green create --dry-run
+./green create            # explicitly authorized provisioning only
+./green ssh               # primary login with an isolated temporary agent
+./green ssh rose          # or jack: same scoped access, isolated home
+./green converge-nix
+./green converge-asdf
+```
+
+The supplied `colors.yml` defines `walter-google`, N4A highmem with Hyperdisk,
+gVNIC and Ubuntu ARM64, seats `rose` and `jack`, and the software configuration
+from `walter-vultr`. Pi, Codex and Claude use their official standalone
+installers. Bun, Node.js, uv and Python resolve the latest stable version on
+each create or `converge-asdf`; asdf records the resolved exact versions.
+
+V2 needs an existing state bucket and `COLORS_PAR_WALTER_SSH_PASSPHRASE` for
+the encrypted SSH resource. Atuin also needs `COLORS_PAR_ATUIN_PASSWORD` and
+`COLORS_PAR_ATUIN_KEY`. Google provisioning uses ADC; SSH resource access uses
+the active gcloud account. Credentials never belong in `colors.yml`.
+
+Compute and provider registration receive only public identity. Deleting the
+machine retains the encrypted SSH resource and persistent OpenTofu roots.
+Managed aliases select public keys and disable the ambient agent; use
+`./green ssh` to open an authenticated scope. `stop` and `start` are currently
+unavailable because the v2 library has no power API; both refuse explicitly.
+
+`compute-api-version: 2` is required. Existing deployments retain their old
+launcher and state. Do not copy this local-development launcher into an
+existing deployment. See [AGENTS.md](AGENTS.md) for current architecture,
+checks and release constraints. `python3 scripts/tooling-smoke.py` exercises
+the rendered runtime and installer tasks using local mocks, without downloads
+or privileged changes.
+
+The following describes the **historical v1 release**, not this checkout.
+
 A remote development machine, as a Package Skill.
 
 Walter provisions one machine, writes it into `~/.ssh/config` so `ssh <profile>`

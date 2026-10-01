@@ -4,6 +4,18 @@ description: Creates and operates a remote development machine with Green, OpenT
 license: MIT
 ---
 
+# Current checkout: v2 development
+
+This checkout requires `compute-api-version: 2` and the sibling colors-compute
+checkout. Its launcher is not repinned for distribution. Do not use the v1
+instructions below to create or upgrade a deployment with this checkout.
+Use the current repository README and AGENTS.md. `green ssh` opens a scoped
+agent; `start` and `stop` refuse. Backend buckets must already exist. Encrypted
+SSH authority survives compute deletion and requires the runtime binding
+`COLORS_PAR_WALTER_SSH_PASSPHRASE` for create and access.
+
+The following instructions document the historical v1 release.
+
 # A remote development machine, with Walter
 
 Use this skill to initialize or operate a walter project in the user's current

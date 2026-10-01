@@ -83,7 +83,7 @@
     - name: Authorize Walter's dedicated machine key
       ansible.builtin.copy:
         dest: /home/ubuntu/.ssh/authorized_keys
-        content: "ssh-ed25519 PLACEHOLDER managed-by-colors\n"
+        content: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
         owner: ubuntu
         group: ubuntu
         mode: "0600"
