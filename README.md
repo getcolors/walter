@@ -1,8 +1,9 @@
 # walter
 
-The current checkout targets **colors-compute v2** and uses the sibling
-`../colors-compute/green` directly. It is for a new deployment, not an upgrade
-of an existing v1 machine. The copied launcher has not been repinned.
+The current checkout targets **colors-compute v2**, pinned to a published
+commit in `deps.edn`. The launcher resolves Walter and its pinned dependencies
+without sibling checkouts. It is for a new deployment, not an upgrade of an
+existing v1 machine.
 
 ```sh
 ./green build             # credential-free output under .colors/build/<profile>
@@ -32,7 +33,7 @@ Managed aliases select public keys and disable the ambient agent; use
 unavailable because the v2 library has no power API; both refuse explicitly.
 
 `compute-api-version: 2` is required. Existing deployments retain their old
-launcher and state. Do not copy this local-development launcher into an
+launcher and state. Do not copy this v2 launcher into an
 existing deployment. See [AGENTS.md](AGENTS.md) for current architecture,
 checks and release constraints. `python3 scripts/tooling-smoke.py` exercises
 the rendered runtime and installer tasks using local mocks, without downloads

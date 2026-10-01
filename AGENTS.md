@@ -5,10 +5,10 @@ making changes.
 
 ## Current v2 integration (supersedes legacy compute details below)
 
-Walter now consumes the local `../colors-compute/green` checkout directly in
-`deps.edn`, at the user's request. Green's scoped-process SDK is pinned to
-`7f1f94463ac7914598db419ac221546fb7e3cbec`. Launcher contract is 6; its SHA has
-not been repinned. Do not publish the relative dependency as a release.
+Walter consumes colors-compute's Green library at published commit
+`c01142801121f0ad7ed7f2f9e3b7cd5d61f65a8e` in `deps.edn`. Green's scoped-process
+SDK is pinned to `7f1f94463ac7914598db419ac221546fb7e3cbec`.
+Launcher contract is 6. Use `bb pin` after committing and pushing changes.
 
 Desired state must explicitly contain `compute-api-version: 2`. Existing v1
 profiles must keep their original launcher: this is not a state migration.

@@ -4,10 +4,10 @@ description: Creates and operates a remote development machine with Green, OpenT
 license: MIT
 ---
 
-# Current checkout: v2 development
+# Current release: v2
 
-This checkout requires `compute-api-version: 2` and the sibling colors-compute
-checkout. Its launcher is not repinned for distribution. Do not use the v1
+This checkout requires `compute-api-version: 2` and resolves colors-compute
+from its published SHA in `deps.edn`. No sibling checkout is required. Do not use the v1
 instructions below to create or upgrade a deployment with this checkout.
 Use the current repository README and AGENTS.md. `green ssh` opens a scoped
 agent; `start` and `stop` refuse. Backend buckets must already exist. Encrypted

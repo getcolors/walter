@@ -1,6 +1,4 @@
-;; Local v2 development: Walter and ../colors-compute/green are working trees.
-;; Green stays pinned to the scoped-process SDK. Release consumers need published
-;; library pins and a repinned launcher; do not distribute this relative dependency.
+;; Develop Walter locally; deps.edn pins Green and colors-compute to published SHAs.
 {:paths ["test/clj" "test/resources"]
  :deps  {io.github.getcolors/walter {:local/root "."}}
  :tasks
