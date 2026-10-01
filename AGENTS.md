@@ -6,7 +6,7 @@ making changes.
 ## Current v2 integration (supersedes legacy compute details below)
 
 Walter consumes colors-compute's Green library at published commit
-`b0432bceb4c62ab15060174dac166629b3ebfab9` in `deps.edn`. Green's scoped-process
+`59acb202029ea1061c2c68d0a6ad2bb509eccad4` in `deps.edn`. Green's scoped-process
 SDK is pinned to `7f1f94463ac7914598db419ac221546fb7e3cbec`.
 Launcher contract is 6. Use `bb pin` after committing and pushing changes.
 
