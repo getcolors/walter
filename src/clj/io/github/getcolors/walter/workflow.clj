@@ -100,7 +100,9 @@
     :ssh
     (case step
       :walter/start [start-step :walter/ssh-resource]
-      :walter/ssh-resource [access/resource-step :walter/agent]
+      :walter/ssh-resource [access/resource-step :walter/registration]
+      :walter/registration [access/registration-step :walter/connection]
+      :walter/connection [access/connection-step :walter/agent]
       :walter/agent [access/agent-step :walter/ssh]
       :walter/ssh [access/ssh-step])
 
@@ -156,7 +158,7 @@
 ;; backends
 
 (def side-effecting-steps
-  [:walter/ssh :walter/ssh-resource :walter/registration :walter/registration-delete :walter/agent :walter/load-compute
+  [:walter/connection :walter/ssh :walter/ssh-resource :walter/registration :walter/registration-delete :walter/agent :walter/load-compute
    :walter/github-token
    :walter/compute :walter/ansible-bootstrap :walter/ansible-seats
    :walter/ansible-local :walter/ansible-remote

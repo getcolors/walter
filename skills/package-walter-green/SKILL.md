@@ -10,7 +10,10 @@ This checkout requires `compute-api-version: 2` and resolves colors-compute
 from its published SHA in `deps.edn`. No sibling checkout is required. Do not use the v1
 instructions below to create or upgrade a deployment with this checkout.
 Use the current repository README and AGENTS.md. `green ssh` opens a scoped
-agent; `start` and `stop` refuse. Backend buckets must already exist. Encrypted
+agent and connects to the owned machine's live public address without reading
+`~/.ssh/config`. It requires backend and provider credentials plus OpenTofu;
+known-host checking remains enabled. Focused convergence still uses managed
+aliases. `start` and `stop` refuse. Backend buckets must already exist. Encrypted
 SSH authority survives compute deletion and requires the runtime binding
 `COLORS_PAR_WALTER_SSH_PASSPHRASE` for create and access.
 

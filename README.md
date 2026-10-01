@@ -29,7 +29,16 @@ the active gcloud account. Credentials never belong in `colors.yml`.
 Compute and provider registration receive only public identity. Deleting the
 machine retains the encrypted SSH resource and persistent OpenTofu roots.
 Managed aliases select public keys and disable the ambient agent; use
-`./green ssh` to open an authenticated scope. `stop` and `start` are currently
+`./green ssh` to open an authenticated scope. It resolves the owned machine's
+current public address with a read-only provider refresh, then connects directly
+with an explicit login and port. It does not read `~/.ssh/config`; a fresh
+controller needs backend and provider credentials, OpenTofu, and the SSH resource
+passphrase, but no generated alias. SSH retains known-host verification
+(`StrictHostKeyChecking=accept-new`), rejects changed host keys, and disables
+agent forwarding and connection multiplexing. Missing state, a destroyed machine,
+or an unavailable public address refuses the connection before unlocking the key.
+Focused convergence and the GitHub-login probe still use managed aliases.
+`stop` and `start` are currently
 unavailable because the v2 library has no power API; both refuse explicitly.
 
 `compute-api-version: 2` is required. Existing deployments retain their old

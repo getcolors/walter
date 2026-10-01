@@ -72,17 +72,38 @@
     ["-i" identity "-o" "IdentitiesOnly=yes" "-o" (str "IdentityAgent=" (or (:walter/agent-socket opts) "none"))
      "-o" "ForwardAgent=no" "-o" "ControlMaster=no" "-o" "ControlPersist=no" "-S" "none"]))
 
+(defn connection-step
+  "Resolve an owned machine's live address before unlocking its SSH identity."
+  ([opts] (connection-step opts library/resolve-connection!))
+  ([opts run-fn]
+   (if (compute/planning? opts) opts
+     (let [result (run-fn (compute/library-options opts) (compute/request opts))]
+       (if (= "ready" (:status result))
+         (assoc opts :colors-compute/node (:params result) :green/exit 0)
+         (failed-result opts result))))))
+
 (defn ssh-step
   ([opts] (ssh-step opts process/run-inherit))
   ([opts run-fn]
    (let [seats (:users opts)
-         seats (if (sequential? seats) seats (str/split (str seats) #"\s+"))]
-     (if (and *seat* (not (some #{*seat*} seats)))
+         seats (if (sequential? seats) seats (str/split (str seats) #"\s+"))
+         node (:colors-compute/node opts)
+         login (or *seat* (compute/login node))]
+     (cond
+       (and *seat* (not (some #{*seat*} seats)))
        (assoc opts :green/exit 2 :green/err "SSH seat must be one of the configured users")
-       (let [alias (str (:profile opts) (when *seat* (str "-" *seat*)))
-             result (run-fn (into ["ssh"] (concat (identity-args opts) [alias])) {})]
-         (assoc opts :green/exit (or (:exit result) 1)))))))
 
+       (compute/planning? opts) opts
+
+       (some #(or (not (string? %)) (str/blank? %))
+             [(:ip node) login (:ssh-private-key-path opts) (:walter/agent-socket opts)])
+       (assoc opts :green/exit 1 :green/err "SSH requires a resolved address, login and scoped identity")
+
+       :else
+       (let [result (run-fn (into ["ssh" "-F" "/dev/null" "-p" "22" "-l" login
+                                  "-o" "StrictHostKeyChecking=accept-new" "-o" "IdentityFile=none"]
+                                 (concat (identity-args opts) ["--" (:ip node)])) {})]
+         (assoc opts :green/exit (or (:exit result) 1)))))))
 (defn run-cli [workflow args]
   (let [seat (when (and (= "ssh" (first args)) (second args)
                         (not (str/starts-with? (second args) "-"))) (second args))

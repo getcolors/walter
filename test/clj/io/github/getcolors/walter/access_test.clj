@@ -49,19 +49,74 @@
         (is (= opts (access/registration-step opts)))
         (is (= opts (access/registration-delete-step opts)))))))
 
-(deftest interactive-ssh-selects-only-the-scoped-identity
-  (let [seen (atom nil) result (access/ssh-step
-          {:profile "walter-google" :ssh-private-key-path "/public/identity.pub" :walter/agent-socket "/private/agent.sock"}
+(def connection-opts
+  {:profile "walter-google" :provider-compute "google" :workdir "/tmp"
+   :green/event :ssh :users ["rose" "jack"]
+   :walter/ssh-resource compute/placeholder-resource
+   :colors-compute/node {:ip "203.0.113.8" :user "root"}
+   :ssh-private-key-path "/public/identity.pub" :walter/agent-socket "/private/agent.sock"})
+
+(deftest interactive-ssh-uses-live-address-and-only-the-scoped-identity
+  (let [seen (atom nil) result (access/ssh-step connection-opts
           (fn [argv _] (reset! seen argv) {:exit 7}))]
     (is (= 7 (:green/exit result)))
-    (is (= "walter-google" (last @seen)))
-    (is (some #{"IdentityAgent=/private/agent.sock"} @seen))
-    (is (some #{"ForwardAgent=no"} @seen))))
+    (is (= ["ssh" "-F" "/dev/null" "-p" "22" "-l" "ubuntu"
+            "-o" "StrictHostKeyChecking=accept-new" "-o" "IdentityFile=none"
+            "-i" "/public/identity.pub" "-o" "IdentitiesOnly=yes"
+            "-o" "IdentityAgent=/private/agent.sock" "-o" "ForwardAgent=no"
+            "-o" "ControlMaster=no" "-o" "ControlPersist=no" "-S" "none"
+            "--" "203.0.113.8"] @seen))))
 
 (deftest scoped-ssh-selects-configured-seats-only
-  (let [opts {:profile "walter-google" :users ["rose" "jack"]} seen (atom nil)]
+  (let [seen (atom nil)]
     (binding [access/*seat* "rose"]
-      (is (= 0 (:green/exit (access/ssh-step opts (fn [argv _] (reset! seen argv) {:exit 0}))))))
-    (is (= "walter-google-rose" (last @seen)))
+      (is (= 0 (:green/exit (access/ssh-step connection-opts (fn [argv _] (reset! seen argv) {:exit 0}))))))
+    (is (= ["-l" "rose"] (subvec @seen 5 7)))
+    (is (= "203.0.113.8" (last @seen)))
     (binding [access/*seat* "stranger"]
-      (is (= 2 (:green/exit (access/ssh-step opts (fn [& _] (throw (ex-info "must not connect" {}))))))))))
+      (is (= 2 (:green/exit (access/ssh-step connection-opts (fn [& _] (throw (ex-info "must not connect" {}))))))))))
+
+(deftest ssh-refuses-incomplete-connection-and-identity
+  (doseq [opts [(dissoc connection-opts :colors-compute/node)
+               (assoc-in connection-opts [:colors-compute/node :ip] "")
+               (assoc-in connection-opts [:colors-compute/node :user] nil)
+               (dissoc connection-opts :ssh-private-key-path)
+               (dissoc connection-opts :walter/agent-socket)]]
+    (is (= 1 (:green/exit (access/ssh-step opts (fn [& _] (throw (ex-info "must not connect" {})))))))))
+
+(deftest connection-resolution-propagates-live-params-and-fails-closed
+  (let [seen (atom nil)
+        result (access/connection-step connection-opts
+                 (fn [opts request]
+                   (reset! seen [opts request])
+                   {:status "ready" :params {:ip "203.0.113.9" :user "admin"}}))]
+    (is (= {:ip "203.0.113.9" :user "admin"} (:colors-compute/node result)))
+    (is (= "walter-compute" (get-in @seen [1 :node_id])))
+    (is (= compute/placeholder-resource (get-in @seen [1 :ssh_resource]))))
+  (doseq [message ["missing state" "destroyed machine" "ownership mismatch" "no public address"]]
+    (let [result (access/connection-step connection-opts
+                   (fn [& _] {:status "error" :error {:message message}}))]
+      (is (= 1 (:green/exit result)))
+      (is (= message (:green/err result))))))
+
+(deftest ssh-planning-never-resolves-or-connects
+  (let [opts (assoc connection-opts :green/dry-run true)
+        unexpected (fn [& _] (throw (ex-info "unexpected effect" {})))]
+    (is (= opts (access/connection-step opts unexpected)))
+    (is (= opts (access/ssh-step opts unexpected)))))
+
+(deftest ssh-process-failure-cleans-up-scoped-agent
+  (let [stopped (atom 0)]
+    (doseq [run-fn [(fn [& _] {:exit 255})
+                   (fn [& _] (throw (ex-info "ssh could not start" {})))]]
+      (try
+        (access/scoped
+          #(access/ssh-step
+            (access/agent-step connection-opts
+              (fn [_ _ register!]
+                (register! :resource (fn [] (swap! stopped inc)))
+                {:socket "/private/agent.sock"
+                 :identities {(:reference compute/placeholder-resource) "/public/identity.pub"}}))
+            run-fn))
+        (catch Exception _)))
+    (is (= 2 @stopped))))

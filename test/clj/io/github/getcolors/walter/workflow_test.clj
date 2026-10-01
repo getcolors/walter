@@ -27,6 +27,14 @@
   (doseq [event [:converge-nix :converge-asdf :ssh]]
     (is ((reachable event) :walter/agent))
     (is (not ((reachable event) :walter/compute)))))
+(deftest ssh-resolves-owned-connection-before-unlocking
+  (doseq [[a b] [[:walter/ssh-resource :walter/registration]
+                 [:walter/registration :walter/connection]
+                 [:walter/connection :walter/agent]
+                 [:walter/agent :walter/ssh]]]
+    (is (= [b] (successors :ssh a))))
+  (doseq [event [:converge-nix :converge-asdf]]
+    (is (not ((reachable event) :walter/connection)))))
 (deftest build-adds-only-focused-rendering
   (is (= (into (reachable :create) [:walter/converge-nix :walter/converge-asdf]) (reachable :build))))
 (deftest dry-run-skips-all-effects
