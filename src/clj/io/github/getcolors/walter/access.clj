@@ -12,9 +12,24 @@
 (defn scoped [f]
   (scope/with-scope (fn [register!] (binding [*register!* register!] (f)))))
 (defn failed-result [opts result]
-  (assoc opts :green/exit 1 :green/err
-         (str (or (get-in result [:error :message]) "Compute operation refused")
-              (when-let [detail (get-in result [:error :stderr])] (str "\n" detail)))))
+  (let [{:keys [message stage command command_reason executable exit_code credential stderr]} (:error result)]
+    ;; These diagnostics are bounded and redacted by colors-compute. Do not
+    ;; print raw process arguments, stdout, or the surrounding result/options.
+    (assoc opts :green/exit 1 :green/err
+           (str (or message "Compute operation refused")
+                (when stage (str "\nCompute stage: " stage))
+                (when (seq command) (str "\nCommand: " (str/join " " command)))
+                (when command_reason
+                  (str "\nReason: " (case command_reason
+                                       "executable_not_found" "executable not found"
+                                       "process_start_failed" "process could not start"
+                                       "timeout" "command timed out"
+                                       command_reason)))
+                (when executable (str "\nExecutable: " executable))
+                (when (or (seq command) (some? exit_code))
+                  (str "\nExit status: " (if (some? exit_code) exit_code "unavailable")))
+                (when credential (str "\nRequired credential: " credential))
+                (when stderr (str "\n" stderr))))))
 (defn lock! [opts]
   (when-not *register!* (throw (ex-info "Walter runtime requires an access scope" {})))
   (let [root (compute/sdk-workdir opts)

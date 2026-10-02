@@ -2,6 +2,7 @@
   (:require [babashka.fs :as fs] [clojure.test :refer [deftest is]]
             [io.github.getcolors.compute-ssh :as ssh]
             [io.github.getcolors.compute-node :as node-api]
+            [io.github.getcolors.compute-diagnostics :as diagnostics]
             [io.github.getcolors.walter.compute :as compute]
             [io.github.getcolors.walter.access :as access]))
 
@@ -98,6 +99,22 @@
                    (fn [& _] {:status "error" :error {:message message}}))]
       (is (= 1 (:green/exit result)))
       (is (= message (:green/err result))))))
+
+(deftest connection-command-errors-retain-safe-diagnostics
+  (doseq [[process-result expected]
+          [[{:command_reason "executable_not_found"}
+            "Required command failed.\nCompute stage: init\nCommand: tofu init\nReason: executable not found\nExit status: unavailable"]
+           [{:exit 1 :err "token=private-token" :out "private state"}
+            "Required command failed.\nCompute stage: init\nCommand: tofu init\nExit status: 1\ntoken=[REDACTED]"]]]
+    (let [result (access/connection-step connection-opts
+                   (fn [& _]
+                     (binding [diagnostics/*context* (atom {:stage "init"})]
+                       ((diagnostics/wrap-runner (fn [& _] process-result))
+                        ["tofu" "init" "-backend-config=private-argument"] "/tmp" {"PATH" ""} 10)
+                       (try (diagnostics/command-error!)
+                            (catch Exception error (diagnostics/failure error))))))]
+      (is (= 1 (:green/exit result)))
+      (is (= expected (:green/err result))))))
 
 (deftest ssh-planning-never-resolves-or-connects
   (let [opts (assoc connection-opts :green/dry-run true)
