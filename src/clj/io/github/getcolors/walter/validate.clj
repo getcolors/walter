@@ -224,9 +224,9 @@
     (when (and (some #{"pi"} (agent-tools opts))
                (not (some #(= "nodejs" (:name %)) (asdf-tools opts))))
       [":agent-tools pi requires nodejs in :asdf-tools for its installer"])
-    (for [agent (agent-tools opts) :when (not (contains? #{"pi" "codex" "claude"} agent))]
+    (for [agent (agent-tools opts) :when (not (contains? #{"pi" "codex" "claude" "antigravity"} agent))]
       (str "unsupported :agent-tools entry " (pr-str agent)))
-    (for [package (nix-package-names opts) :when (contains? #{"pi" "pi-coding-agent" "codex" "claude-code"} package)]
+    (for [package (nix-package-names opts) :when (contains? #{"pi" "pi-coding-agent" "codex" "claude-code" "antigravity"} package)]
       (str package " must be installed through :agent-tools, not :nix-packages"))
     (when (= "managed" (:gcs-bucket-mode opts))
       ["colors-compute v2 requires an existing GCS bucket; remove :gcs-bucket-mode managed"])

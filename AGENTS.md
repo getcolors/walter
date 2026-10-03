@@ -48,7 +48,7 @@ sections below describe v1 history, not the current API.
   identity, isolated from runtime `<workdir>/<profile>` authority and state.
 - Google N4A configuration uses `google-boot-disk-type: hyperdisk-balanced`,
   `google-nic-type: GVNIC`, and an ARM64 image supporting IDPF.
-- `agent-tools: [pi, codex, claude]` uses official per-user curl installers,
+- `agent-tools: [pi, codex, claude, antigravity]` uses official per-user curl installers,
   after asdf. Do not install these agents through Nix. Pi requires Node.js.
 - `asdf-tools` accepts exact versions or `latest`, resolved once per run before
   installation and `asdf set --home`. Python uses the `python` plugin. Runtime

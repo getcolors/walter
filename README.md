@@ -17,8 +17,9 @@ existing v1 machine.
 
 The supplied `colors.yml` defines `walter-google`, N4A highmem with Hyperdisk,
 gVNIC and Ubuntu ARM64, seats `rose` and `jack`, and the software configuration
-from `walter-vultr`. Pi, Codex and Claude use their official standalone
-installers. Bun, Node.js, uv and Python resolve the latest stable version on
+from `walter-vultr`. Pi, Codex, Claude and Antigravity use their official standalone
+installers. Antigravity is selected with `agent-tools: [antigravity]` and runs
+as `agy`. Bun, Node.js, uv and Python resolve the latest stable version on
 each create or `converge-asdf`; asdf records the resolved exact versions.
 
 V2 needs an existing state bucket and `COLORS_PAR_WALTER_SSH_PASSPHRASE` for

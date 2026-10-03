@@ -26,6 +26,7 @@
 
 
 
+
   args:
     executable: /bin/bash
     chdir: "{{ ansible_env.HOME }}"
@@ -49,6 +50,7 @@
     curl -fsSL https://chatgpt.com/codex/install.sh | sh
 
 
+
   args:
     executable: /bin/bash
     chdir: "{{ ansible_env.HOME }}"
@@ -70,6 +72,7 @@
 
 
 
+
     curl -fsSL https://claude.ai/install.sh | bash
 
   args:
@@ -82,6 +85,30 @@
 - name: Verify the standalone claude executable
   ansible.builtin.command:
     argv: ["{{ ansible_env.HOME }}/.local/bin/claude", --version]
+    chdir: "{{ ansible_env.HOME }}"
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.local/bin:{{ ansible_env.HOME }}/.asdf/shims:{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+  changed_when: false
+
+- name: Install antigravity with its standalone installer
+  ansible.builtin.shell: |
+    set -o pipefail
+
+
+
+    curl -fsSL https://antigravity.google/cli/install.sh | bash
+
+
+  args:
+    executable: /bin/bash
+    chdir: "{{ ansible_env.HOME }}"
+    creates: "{{ ansible_env.HOME }}/.local/bin/agy"
+  environment:
+    PATH: "{{ ansible_env.HOME }}/.local/bin:{{ ansible_env.HOME }}/.asdf/shims:{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
+
+- name: Verify the standalone antigravity executable
+  ansible.builtin.command:
+    argv: ["{{ ansible_env.HOME }}/.local/bin/agy", --version]
     chdir: "{{ ansible_env.HOME }}"
   environment:
     PATH: "{{ ansible_env.HOME }}/.local/bin:{{ ansible_env.HOME }}/.asdf/shims:{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"

@@ -47,7 +47,7 @@ import os, pathlib, sys
 home = pathlib.Path(os.environ['HOME'])
 if os.environ.get('FAIL_DOWNLOAD'): sys.exit(22)
 url = sys.argv[-1]
-name = 'pi' if 'pi.dev/' in url else 'codex' if 'chatgpt.com/' in url else 'claude'
+name = 'pi' if 'pi.dev/' in url else 'codex' if 'chatgpt.com/' in url else 'agy' if 'antigravity.google/' in url else 'claude'
 with (home / 'downloads').open('a') as f: f.write(name + '\\n')
 print('mkdir -p "$HOME/.local/bin"')
 print("printf '#!/bin/sh\\\\necho test-version\\\\n' > \\\"$HOME/.local/bin/" + name + "\\\"")
@@ -75,10 +75,10 @@ print('chmod +x "$HOME/.local/bin/' + name + '"')
         assert calls.count(['latest', name]) == 2
         assert calls.count(['install', name, version]) == 2
         assert calls.count(['set', '--home', name, version]) == 2
-    assert (home / 'downloads').read_text().splitlines() == ['pi', 'codex', 'claude']
+    assert (home / 'downloads').read_text().splitlines() == ['pi', 'codex', 'claude', 'agy']
     assert calls.count(['exec', 'npm', 'install', '--global', 'corepack']) == 1
-    (home / '.local/bin/pi').unlink()
+    (home / '.local/bin/agy').unlink()
     failed = subprocess.run(command, env=dict(env, FAIL_DOWNLOAD='1'), text=True, capture_output=True)
     assert failed.returncode != 0, 'a failed curl must fail the play'
-    assert not (home / '.local/bin/pi').exists()
+    assert not (home / '.local/bin/agy').exists()
     print('Tooling smoke: exact latest resolution, Corepack, installer guards and download failure passed')

@@ -356,9 +356,11 @@
 (deftest old-deployment-configurations-are-not-implicitly-adopted
   (is (seq (errors-matching (dissoc base :compute-api-version) #"compute-api-version"))))
 (deftest agents-use-standalone-installers
+  (is (empty? (validate/state-errors (assoc base :agent-tools ["antigravity"]))))
+  (is (seq (errors-matching (assoc base :nix-packages ["antigravity"]) #"agent-tools")))
   (is (seq (errors-matching (assoc base :nix-packages ["codex"]) #"agent-tools")))
   (is (seq (errors-matching (assoc base :agent-tools ["unknown"]) #"unsupported")))
   (is (seq (errors-matching (assoc base :agent-tools ["pi"]) #"nodejs")))
-  (is (empty? (validate/state-errors (assoc base :agent-tools ["pi" "codex" "claude"]
+  (is (empty? (validate/state-errors (assoc base :agent-tools ["pi" "codex" "claude" "antigravity"]
                                                :nix-packages ["asdf-vm"]
                                                :asdf-tools [{:name "nodejs" :version "latest"}])))))

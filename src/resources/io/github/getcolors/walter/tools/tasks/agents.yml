@@ -27,19 +27,22 @@
 <% ifequal agent "codex" %>
     curl -fsSL https://chatgpt.com/codex/install.sh | sh
 <% endifequal %>
+<% ifequal agent "antigravity" %>
+    curl -fsSL https://antigravity.google/cli/install.sh | bash
+<% endifequal %>
 <% ifequal agent "claude" %>
     curl -fsSL https://claude.ai/install.sh | bash
 <% endifequal %>
   args:
     executable: /bin/bash
     chdir: "{{ ansible_env.HOME }}"
-    creates: "{{ ansible_env.HOME }}/.local/bin/<{ agent }>"
+    creates: "{{ ansible_env.HOME }}/.local/bin/<% ifequal agent "antigravity" %>agy<% else %><{ agent }><% endifequal %>"
   environment:
     PATH: "{{ ansible_env.HOME }}/.local/bin:{{ ansible_env.HOME }}/.asdf/shims:{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
 
 - name: Verify the standalone <{ agent }> executable
   ansible.builtin.command:
-    argv: ["{{ ansible_env.HOME }}/.local/bin/<{ agent }>", --version]
+    argv: ["{{ ansible_env.HOME }}/.local/bin/<% ifequal agent "antigravity" %>agy<% else %><{ agent }><% endifequal %>", --version]
     chdir: "{{ ansible_env.HOME }}"
   environment:
     PATH: "{{ ansible_env.HOME }}/.local/bin:{{ ansible_env.HOME }}/.asdf/shims:{{ ansible_env.HOME }}/.nix-profile/bin:{{ ansible_env.PATH }}"
