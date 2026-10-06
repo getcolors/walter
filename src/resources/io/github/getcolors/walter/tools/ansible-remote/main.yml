@@ -26,7 +26,10 @@
     # things most likely to be wrong in a new project. It does not prove the
     # machine is up: the explicit connection wait above establishes that.
     - name: Ping
-      ansible.builtin.ping:
+      ansible.builtin.ping:<% if local-ssd-scratch %>
+
+    - name: Configure disposable Local SSD storage
+      ansible.builtin.import_tasks: local-ssd.yml<% endif %>
 
     # Machine-scoped tasks below run once, delegated to the primary host — the
     # only login holding sudo. A seat host cannot become root, and that is the

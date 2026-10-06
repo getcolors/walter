@@ -103,6 +103,23 @@ restricts that ingress; the selected provider's legacy ssh-sources setting is
 accepted by the library helper. Root-login images share the same ubuntu
 bootstrap; provider names do not select application behavior.
 
+## Google Local SSD scratch storage
+
+C4A `standard` and `highmem` `-lssd` shapes require an explicit
+`google-local-ssd-count` matching the shape: 4 cores → 1 disk, 8 → 2,
+16 → 4, 32 → 6, 48 → 10, 64 → 14, and 72 → 16. Each disk is 375 GiB NVMe.
+Set `local-ssd-scratch: true` to mount it at `/scratch`. One disk uses ext4;
+multiple disks form RAID 0 with one ext4 filesystem.
+
+Walter creates private scratch directories for every login and configures
+npm, uv, compiler caches and temporary files there. Source checkouts, `/nix`,
+credentials and agent history remain persistent. Existing caches are not moved.
+RAID ownership is recorded on the root disk; reboot reassembles that identity.
+Blank replacement disks can recreate scratch storage. Partial loss, unknown
+filesystems, mismatched members, or missing ownership are refused for operator
+review. Local SSD data is disposable and RAID 0 has no redundancy.
+Neither disk creation nor Walter purchases a Google commitment.
+
 ## Editor
 
 | Key | Meaning |

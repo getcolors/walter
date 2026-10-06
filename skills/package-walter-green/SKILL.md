@@ -26,6 +26,12 @@ aliases and export without cloud credentials; remote authority is retained.
 Neither command writes a decrypted private key. Delete removes aliases and
 retains the exported key until explicit uninstall.
 
+Google C4A `-lssd` machines support `google-local-ssd-count` and the optional
+`local-ssd-scratch: true` setup: a single ext4 volume, or RAID 0 for multiple
+disks, mounted at `/scratch`. See the current Local SSD section in
+[references/configuration.md](references/configuration.md). Scratch data is
+disposable; no commitment purchase is performed.
+
 The following instructions document the historical v1 release.
 
 # A remote development machine, with Walter

@@ -162,7 +162,18 @@
            (when (seq (:nix-packages merged))
              (slurp (str stage "/nix-packages.yml")))
            (when (seq (:asdf-tools merged))
-             (slurp (str stage "/asdf.yml")))))))
+             (slurp (str stage "/asdf.yml")))
+           (when (:local-ssd-scratch merged)
+             (slurp (str stage "/local-ssd.yml")))))))
+
+(deftest local-ssd-setup-is-explicit-and-precedes-tool-installation
+  (is (not (str/includes? (render-remote-playbook {}) "import_tasks: local-ssd.yml")))
+  (let [play (render-remote-playbook {:local-ssd-scratch true :google-local-ssd-count 2})]
+    (is (str/includes? play "import_tasks: local-ssd.yml"))
+    (is (str/includes? play "'disk_count': 2"))
+    (is (str/includes? play "python3, mdadm"))
+    (is (< (.indexOf play "import_tasks: local-ssd.yml")
+           (.indexOf play "install.determinate.systems/nix")))))
 
 (deftest the-remote-playbook-installs-nix-unconditionally
   (testing "nix is the one thing walter treats as part of what a development

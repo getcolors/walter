@@ -1,0 +1,94 @@
+---
+- name: Install scratch filesystem utilities
+  run_once: true
+  delegate_to: "<{ host-alias }>"
+  become: true
+  ansible.builtin.apt:
+    name: [e2fsprogs, util-linux, python3, mdadm]
+    state: present
+    update_cache: true
+
+- name: Install guarded Local SSD initializer
+  run_once: true
+  delegate_to: "<{ host-alias }>"
+  become: true
+  ansible.builtin.copy:
+    src: local_ssd.py
+    dest: /usr/local/sbin/walter-local-ssd
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure scratch users
+  run_once: true
+  delegate_to: "<{ host-alias }>"
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/walter-scratch.json
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ {'disk_count': <{ google-local-ssd-count }>, 'users': groups['all'] | map('extract', hostvars, 'ansible_user') | list} | to_nice_json }}\n"
+
+- name: Install scratch boot service
+  run_once: true
+  delegate_to: "<{ host-alias }>"
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/walter-local-ssd.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Initialize Walter disposable Local SSD
+      After=local-fs.target systemd-udev-trigger.service
+      Before=ssh.service ssh.socket nix-daemon.service nix-daemon.socket
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/walter-local-ssd
+      RemainAfterExit=yes
+      TimeoutStartSec=120
+      Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Initialize or verify scratch storage before installing tools
+  run_once: true
+  delegate_to: "<{ host-alias }>"
+  become: true
+  ansible.builtin.systemd_service:
+    name: walter-local-ssd.service
+    enabled: true
+    daemon_reload: true
+    state: restarted
+
+- name: Write POSIX shell cache locations
+  ansible.builtin.blockinfile:
+    path: "{{ ansible_env.HOME }}/.profile"
+    create: true
+    mode: "0644"
+    marker: "# {mark} WALTER LOCAL SSD"
+    block: |
+      export NPM_CONFIG_CACHE="/scratch/{{ ansible_user }}/npm"
+      export UV_CACHE_DIR="/scratch/{{ ansible_user }}/uv"
+      export CCACHE_DIR="/scratch/{{ ansible_user }}/ccache"
+      export TMPDIR="/scratch/{{ ansible_user }}/tmp"
+
+- name: Create Fish configuration directory
+  ansible.builtin.file:
+    path: "{{ ansible_env.HOME }}/.config/fish/conf.d"
+    state: directory
+    mode: "0755"
+
+- name: Write Fish cache locations
+  ansible.builtin.copy:
+    dest: "{{ ansible_env.HOME }}/.config/fish/conf.d/walter-local-ssd.fish"
+    mode: "0644"
+    content: |
+      set -gx NPM_CONFIG_CACHE /scratch/{{ ansible_user }}/npm
+      set -gx UV_CACHE_DIR /scratch/{{ ansible_user }}/uv
+      set -gx CCACHE_DIR /scratch/{{ ansible_user }}/ccache
+      set -gx TMPDIR /scratch/{{ ansible_user }}/tmp

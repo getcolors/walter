@@ -4,6 +4,21 @@
    [clojure.test :refer [deftest is testing]]
    [io.github.getcolors.walter.validate :as validate]))
 
+(deftest scratch-storage-rejects-unsupported-machines-and-nonbooleans
+  (doseq [opts [{:local-ssd-scratch "true"}
+               {:local-ssd-scratch true :provider-compute "oci"}
+               {:local-ssd-scratch true :provider-compute "google"
+                :google-machine-type "c4a-standard-8-lssd" :google-local-ssd-count 1}]]
+    (is (some #(str/includes? % "local-ssd-scratch") (validate/state-errors opts)))))
+
+(deftest scratch-storage-accepts-c4a-single-disk-and-raid-shapes
+  (doseq [[cores disks] [[4 1] [8 2] [16 4] [32 6] [48 10] [64 14] [72 16]]
+          family ["standard" "highmem"]]
+    (let [errors (validate/state-errors {:local-ssd-scratch true :provider-compute "google"
+                                       :google-machine-type (str "c4a-" family "-" cores "-lssd")
+                                       :google-local-ssd-count disks})]
+      (is (not-any? #(str/includes? % "local-ssd-scratch") errors)))))
+
 (def base
   "A minimal renderable desired state: OCI compute, local backend."
   {:compute-api-version 2 :profile "walter-test"

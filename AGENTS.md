@@ -6,8 +6,11 @@ making changes.
 ## Current v2 integration (supersedes legacy compute details below)
 
 Walter consumes colors-compute's Green library at published commit
-`0ad66afc13afca18e1fc66c048f174e20d379804` in `deps.edn`. Green's scoped-process
+`48327f487df09fe84a1fb2722b1b90cc1dc782b3` in `deps.edn`. Green's scoped-process
 SDK is pinned to `7f1f94463ac7914598db419ac221546fb7e3cbec`.
+The Local SSD release pins the reviewed `walter-local-ssd-20261006` lineage;
+newer compute main commits require an SSH fresh-identity attestation integration
+before Walter can adopt them.
 Launcher contract is 7. Use `bb pin` after committing and pushing changes.
 
 Desired state must explicitly contain `compute-api-version: 2`. Existing v1

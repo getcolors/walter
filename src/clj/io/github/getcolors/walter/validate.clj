@@ -219,6 +219,16 @@
    (concat
     (map #(str % " is required") (missing-keys opts [:profile :workdir :provider-compute :provider-backend]))
     (leftover-placeholders opts)
+    (when (and (contains? opts :local-ssd-scratch) (not (boolean? (:local-ssd-scratch opts))))
+      [":local-ssd-scratch must be true or false"])
+    (when (and (true? (:local-ssd-scratch opts))
+               (not (let [shape (when (string? (:google-machine-type opts))
+                                 (re-matches #"c4a-(?:standard|highmem)-(4|8|16|32|48|64|72)-lssd" (:google-machine-type opts)))
+                          expected (get {"4" 1 "8" 2 "16" 4 "32" 6 "48" 10 "64" 14 "72" 16} (second shape))]
+                      (and (= "google" (:provider-compute opts)) shape
+                           (integer? (:google-local-ssd-count opts))
+                           (= expected (:google-local-ssd-count opts))))))
+      [":local-ssd-scratch requires a C4A -lssd machine with its matching :google-local-ssd-count"])
     (when-not (= 2 (:compute-api-version opts))
       [":compute-api-version must be 2 for a new deployment; existing v1 deployments must retain their pinned launcher"])
     (when (and (some #{"pi"} (agent-tools opts))

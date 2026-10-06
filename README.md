@@ -69,6 +69,43 @@ checks and release constraints. `python3 scripts/tooling-smoke.py` exercises
 the rendered runtime and installer tasks using local mocks, without downloads
 or privileged changes.
 
+## Disposable Local SSD caches
+
+For new Google C4A `standard` or `highmem` `-lssd` deployments, declare the
+shape's fixed number of 375 GiB NVMe disks with `google-local-ssd-count`.
+Opt into `local-ssd-scratch: true` to mount scratch storage at `/scratch`
+before installing tools. One disk uses ext4 directly; multiple disks use an
+`mdadm` RAID 0 array with one ext4 filesystem. For example:
+
+```yaml
+google-machine-type: c4a-standard-8-lssd
+google-local-ssd-count: 2
+local-ssd-scratch: true
+```
+
+This provides 750 GiB raw scratch capacity, less metadata/filesystem overhead.
+The pinned colors-compute dependency supplies the matching disk declarations.
+
+The boot service checks the exact configured device count. It only creates a
+new RAID array when all disks are blank, records its UUID and member count in
+`/var/lib/walter/local-ssd-raid.json` on the persistent root, and reassembles
+that identity on reboot (including arrays already assembled under another
+device name by udev). It never force-assembles or wipes surviving RAID members.
+Partial disk loss, unknown arrays, missing ownership records, unfamiliar
+filesystems, conflicting mounts and unsafe symlinks are refused. A missing
+ownership record after an interrupted first creation requires operator review.
+All-blank replacement disks can recreate scratch storage; partial loss requires
+an explicit recovery operation. RAID 0 has no redundancy: losing one member
+loses the array's usable data.
+
+After initialization, the service recreates private `npm`, `uv`, `ccache`, `tmp` and `build`
+directories for each login. Fish and POSIX login-shell configuration sends
+npm/uv/compiler caches and temporary files there. Use `/scratch/$USER/build`
+for explicitly disposable build outputs. Existing caches are not migrated.
+Source checkouts, agent history, credentials and `/nix` remain persistent.
+Local SSD loss is expected on stop/start or unrecoverable host failure; never
+place the only copy of work there. No Google commitment is purchased by Walter.
+
 The following describes the **historical v1 release**, not this checkout.
 
 A remote development machine, as a Package Skill.

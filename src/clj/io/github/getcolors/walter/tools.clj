@@ -482,6 +482,12 @@
                               (str dir "/asdf.yml") data)
                (template-spec (walter-template "tasks" "agents.yml")
                               (str dir "/agents.yml") data)]
+        specs (cond-> specs
+                (:local-ssd-scratch opts)
+                (into [(template-spec (walter-template "tasks" "local-ssd.yml")
+                                      (str dir "/local-ssd.yml") data)
+                       (raw-spec (str dir "/local_ssd.py")
+                                 (slurp (io/resource "io/github/getcolors/walter/local_ssd.py")))]))
         rendered (sc/scaffold opts specs)]
     (if (or (= :build (:green/event opts))
             (= :delete (:green/event opts)))
