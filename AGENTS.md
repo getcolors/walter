@@ -6,9 +6,9 @@ making changes.
 ## Current v2 integration (supersedes legacy compute details below)
 
 Walter consumes colors-compute's Green library at published commit
-`48327f487df09fe84a1fb2722b1b90cc1dc782b3` in `deps.edn`. Green's scoped-process
+`fb3b3d3e859b7006dbe5f3786ea14ad489972039` in `deps.edn`. Green's scoped-process
 SDK is pinned to `7f1f94463ac7914598db419ac221546fb7e3cbec`.
-The Local SSD release pins the reviewed `walter-local-ssd-20261006` lineage;
+The retry fix pins the reviewed `walter-empty-state-retry-20261006` lineage;
 newer compute main commits require an SSH fresh-identity attestation integration
 before Walter can adopt them.
 Launcher contract is 7. Use `bb pin` after committing and pushing changes.
