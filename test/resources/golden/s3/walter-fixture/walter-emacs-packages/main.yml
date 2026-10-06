@@ -72,7 +72,11 @@
             "$HOME/.nix-profile/bin/emacs" \
               --init-directory {{ walter_emacs_dest | quote }} \
               --batch \
-              -l {{ (walter_emacs_dest ~ '/init.el') | quote }}
+              --eval '(progn (defvar walter-emacs-bootstrap-failed nil) (advice-add (quote display-warning) :before (lambda (_type _message &optional level &rest _) (when (memq level (quote (:error :emergency))) (setq walter-emacs-bootstrap-failed t)))))' \
+              -l {{ (walter_emacs_dest ~ '/init.el') | quote }} \
+              --eval '(when walter-emacs-bootstrap-failed (kill-emacs 1))'
+            # use-package can report an error-level warning and still exit 0.
+            # Record those warnings across init and turn them into a failed job.
             # Saved before anything else runs. `$?` in the line below would
             # otherwise report the status of the `$(date)` substitution, which
             # bash expands first and which always succeeds — so the log would

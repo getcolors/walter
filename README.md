@@ -168,9 +168,13 @@ delete. Set the provider's machine-key value instead and you supply the key
 yourself, exactly as before the standard.
 
 Set `emacs-config-repo` (an https URL) and the remote playbook also installs
-Emacs from a pinned nixpkgs and clones that configuration with the machine's
-own token. Leave the key out and the rendered playbook does not mention Emacs
-at all. Packages are not pre-fetched: the first interactive launch does that.
+Emacs and GNU coreutils from nixpkgs and clones that configuration with the
+machine's own token. Coreutils provides the profile-local GNU `ls` neoemacs
+requires. Leave the key out and the rendered playbook does not mention Emacs
+at all. A separate asynchronous stage warms the configuration's package cache;
+its log at `~/.local/state/walter/emacs-packages.log` records a nonzero status
+for error-level warnings as well as uncaught errors. Archive retry policy and
+the package list belong to the Emacs configuration.
 
 No agent forwarding, anywhere. Nothing on the machine authenticates with your
 workstation's keys: GitHub work rides the machine's own token, and the only

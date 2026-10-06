@@ -399,6 +399,14 @@
       environment:
         PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
 
+    # Neoemacs uses this exact GNU ls path even when the system has another ls.
+    - name: Install GNU coreutils for Emacs directory listings
+      ansible.builtin.command:
+        cmd: nix profile install github:NixOS/nixpkgs/nixpkgs-unstable#coreutils
+        creates: "{{ ansible_env.HOME }}/.nix-profile/bin/ls"
+      environment:
+        PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+
     # Over https, authenticated by the gh credential helper configured above —
     # the machine's own token is what clones and can push back, so nothing of
     # the workstation's is involved and no agent is forwarded. validate.clj
@@ -413,10 +421,8 @@
         dest: "~/.config/fixture-emacs"
         update: false
 
-    # Packages are deliberately not pre-fetched. The first interactive launch
-    # pulls from ELPA/MELPA, native-compiles and clones tree-sitter grammars on
-    # its own; doing that here would add minutes to every create and turn a
-    # transient MELPA failure into a failed provision.
+    # The separate asynchronous emacs-packages stage warms ELPA/MELPA after
+    # this play finishes. Tree-sitter grammars remain a first-use operation.
 
 
     # Where the steps below record that a once-only action has been done.

@@ -240,6 +240,13 @@ the ability to fail a create on an ELPA outage, which the remote play already
 refused when it left packages unfetched; what moves is *when* the wait happens,
 off the first interactive launch where Emacs shows nothing for minutes.
 
+The remote Emacs block also installs GNU coreutils into each user's Nix
+profile, supplying neoemacs's required `~/.nix-profile/bin/ls`. The batch job
+records `display-warning` calls at `:error`/`:emergency` and exits nonzero after
+loading init when any occurred: use-package can otherwise swallow failed
+installs and return success. Package declarations and mirror policy stay in
+the Emacs configuration.
+
 Two traps live in that stage. `--batch` implies `-q`, so an `--init-directory`
 without an explicit `-l init.el` sets `user-emacs-directory`, leaves
 `user-init-file` nil, installs nothing and exits 0 in under a tenth of a

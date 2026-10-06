@@ -325,11 +325,14 @@
           at #(str/index-of rendered %)]
       (is (str/includes? rendered "nixpkgs-unstable#emacs")
           "from the same nixpkgs ref as everything else here")
+      (is (str/includes? rendered "nixpkgs-unstable#coreutils")
+          "neoemacs requires GNU ls in the user's Nix profile")
+      (is (str/includes? rendered "creates: \"{{ ansible_env.HOME }}/.nix-profile/bin/ls\""))
       (is (str/includes? rendered "repo: \"https://github.com/me/emacs.d.git\""))
       (is (str/includes? rendered "dest: \"~/.config/neoemacs\""))
       (is (str/includes? rendered "update: false")
           "a development machine's working copy is not a deployment")
-      (is (< (at "install.determinate.systems") (at "#emacs") (at "repo:"))))))
+      (is (< (at "install.determinate.systems") (at "#emacs") (at "#coreutils") (at "repo:"))))))
 
 (deftest the-clone-authenticates-with-the-machines-own-token
   (testing "https through the gh credential helper, so nothing of the
@@ -564,11 +567,12 @@
       (is (str/includes? rendered "--batch"))
       (is (str/includes? rendered "-l {{ (walter_emacs_dest ~ '/init.el') | quote }}")
           "the -l is what actually loads the configuration")
-      (testing "walter carries no elisp of its own — loading init.el is the
-               whole mechanism, and the package list lives in the configuration
-               where it belongs. Asserted on `--eval` rather than on the word
-               `use-package`, which appears in the commentary explaining why."
-        (is (not (str/includes? rendered "--eval")))
+      (testing "error-level warnings make the background job fail even when
+               use-package catches an installation error; the configuration
+               still owns the package list"
+        (is (str/includes? rendered "(quote display-warning)"))
+        (is (str/includes? rendered "(quote (:error :emergency))"))
+        (is (str/includes? rendered "(when walter-emacs-bootstrap-failed (kill-emacs 1))"))
         (is (not (str/includes? rendered "package-install-selected")))))))
 
 (deftest a-tilde-destination-is-resolved-against-the-machines-home
