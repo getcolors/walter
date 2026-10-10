@@ -150,6 +150,11 @@ SSH; and the sysctls grant the login user's group ICMP sockets and QUIC-sized
 buffers so `cloudflared` needs no sudo and emits no permissions or buffer
 warnings.
 
+Docker is installed with `curl -fsSL https://get.docker.com | sh` when the
+daemon is absent, and its service is enabled and started. The `ubuntu` user
+is added to the `docker` group for use without sudo; other seat users are not.
+Existing interactive sessions need a fresh login to pick up the group.
+
 Set `github-account` and `git-email` and the machine comes up with its own
 GitHub identity: gh logged in, git cloning and pushing over https through it,
 and the commit identity configured. No token lives in desired state — the
