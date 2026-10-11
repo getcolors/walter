@@ -237,4 +237,5 @@ The macOS profile was inspected but not live-tested.
 Validation: 141 tests passed, one privilege test skipped in the ordinary suite,
 and 47 subtests passed. The separate root suite passed 19 tests and four subtests.
 Package builds and copied-launcher checks passed. Controller Vault checkpoints
-were saved before and after migration.
+were saved before and after migration; the final checkpoint succeeded on retry
+after its first attempt returned a command failure.
