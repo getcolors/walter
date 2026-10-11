@@ -302,3 +302,28 @@ def test_cancelled_remote_task_drains_actual_ssh_thread(worker_fails):
 
     with patch.object(controller, 'remote', side_effect=blocking_remote):
         asyncio.run(exercise())
+
+
+def test_successful_user_retry_replaces_root_failure_progress(tmp_path):
+    payload = {'action': 'resolve-asdf', 'config': {}, 'target_user': 'ubuntu'}
+    def failed_user(*args):
+        remote.stage('asdf')  # finish_user reports the child's failure stage.
+        raise remote.ProvisionError('synthetic failure')
+    def root_path(value):
+        return tmp_path if str(value) == '/var/lib/walter' else Path(value)
+    with patch.object(remote, 'Path', side_effect=root_path), patch.object(remote, 'as_user', side_effect=failed_user):
+        with pytest.raises(remote.ProvisionError):
+            remote.main(payload)
+    progress = tmp_path / 'progress-resolve-asdf-ubuntu.json'
+    assert remote.read_progress(progress) == {'stage': 'asdf', 'user': 'ubuntu'}
+    with patch.object(remote, 'Path', side_effect=root_path), patch.object(remote, 'as_user', return_value={'resolved_versions': {}}):
+        assert remote.main(payload)['ok']
+    assert remote.read_progress(progress) == {'stage': 'complete', 'user': 'ubuntu'}
+
+
+@pytest.mark.parametrize('action', ['resolve-nix', 'resolve-asdf'])
+def test_resolver_records_completed_child_progress(tmp_path, action):
+    from types import SimpleNamespace
+    with patch.object(remote.pwd, 'getpwnam', return_value=SimpleNamespace(pw_dir=str(tmp_path))), patch.dict(remote.os.environ, {}, clear=True), patch.object(remote.os, 'chdir'), patch.object(remote, 'run', return_value=SimpleNamespace(stdout='{"locked":{"rev":"' + 'a' * 40 + '"}}')):
+        remote.user_tasks({'action': action, 'config': {}}, 'ubuntu', {})
+    assert remote.read_progress(tmp_path / '.local/state/walter' / ('progress-' + action + '.json')) == {'stage': 'complete', 'user': 'ubuntu'}

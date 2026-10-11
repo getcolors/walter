@@ -402,6 +402,7 @@ def user_tasks(payload, user, resolved):
                 raise ProvisionError('invalid Nix package revision')
             nix_source = 'github:NixOS/nixpkgs/' + revision
         if action == 'resolve-nix':
+            stage('complete')
             return {'resolved_versions': {}, 'nix_source': nix_source}
         if action == 'resolve' and config.get('asdf-tools'):
             nix_packages(['asdf-vm'], source=nix_source)
@@ -415,6 +416,7 @@ def user_tasks(payload, user, resolved):
             if len(version) > 128 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+-]*', version) or version == 'latest':
                 raise ProvisionError('invalid resolved runtime version')
             resolved[name] = version
+        stage('complete')
         return {'resolved_versions': resolved, 'nix_source': nix_source}
     packages = list(config.get('nix-packages', []))
     if action in ('converge', 'user-packages'):
@@ -700,7 +702,10 @@ def main(payload):
         if user not in users:
             raise ProvisionError('invalid target user')
         PROGRESS_PATH = Path('/var/lib/walter') / ('progress-' + action + '-' + user + '.json')
+        PROGRESS_USER = user
+        stage('users')
         result = as_user(payload, user, payload.get('resolved_versions', {}))
+        stage('complete')
         return {'ok': True, 'users': {user: result}, **result}
     if action in MACHINE_ACTIONS:
         if action == 'bootstrap':
