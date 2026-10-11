@@ -190,6 +190,17 @@ cross the controller boundary. There is no output masking or excerpt mode.
 PocketDeploy owns the shared schema, transport and history support; Alice uses
 the same schema for provisioning, Transmission RPC and file-copy failures.
 
+For an explicitly authorized Atuin investigation, set
+`COLORS_PAR_ATUIN_SYNC_CAPTURE=true` for convergence. This captures only
+`atuin sync`, never interactive login or credential inputs. Each user’s latest
+attempt is written to `~/.local/state/walter/atuin-sync.json`; each output stream
+retains a bounded tail and records whether it was truncated. The file contains
+unmasked output and is readable only by its owner and root. Normal CLI results
+and controller history continue to contain structured diagnostics only.
+Read the capture through authorized SSH access before retrying, since the next
+captured attempt replaces it. Remove it after the investigation. The option is
+off by default and can also be set with `atuin-sync-capture: true` in configuration.
+
 ## Development
 
 ```sh

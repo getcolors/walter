@@ -148,3 +148,18 @@ original IDs and running state, destruction protection is enabled and no journal
 steps remain pending. SSH authority validates the replacement instance. The
 original Atuin diagnostic remains in controller history after successful retries.
 A final six-file controller recovery checkpoint was saved successfully to Vault.
+
+
+## Atuin first-sync investigation plan
+
+Add bounded, opt-in capture of `atuin sync` stdout/stderr, excluding interactive
+login and credential input. The user authorizes sharing the unmasked sync output
+in the conversation. Test and publish the change before fresh live deployment.
+Save controller recovery state to Vault, delete disposable `walter-gcp` without
+remote-data backup, and recreate the same profile with protection enabled. Keep
+shared networking and unrelated deployments unchanged.
+
+Read the first attempt's capture before retrying. Use the evidence to identify
+and fix a reproducible cause rather than adding a blanket retry. If the failure
+does not recur, record that limit. Verify convergence, shared Go and private seats,
+publish any justified fix, and save a final controller checkpoint.

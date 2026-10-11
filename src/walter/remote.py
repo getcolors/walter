@@ -14,6 +14,8 @@ from pathlib import Path
 import pwd
 import re
 import shlex
+import selectors
+import signal
 import subprocess
 import sys
 import tempfile
@@ -143,6 +145,79 @@ def run(args, *, data=None, check=True, timeout=3600):
             operation, category, returncode=result.returncode,
             elapsed_seconds=time.monotonic() - started, http_status=status))
     return result
+
+
+ATUIN_CAPTURE_LIMIT = 65536
+
+
+def atuin_sync(home, *, capture=False, timeout=3600):
+    """Capture only sync, after privilege drop; never accept login arguments."""
+    if not capture:
+        return run(['atuin', 'sync'], timeout=timeout)
+    started = time.monotonic()
+    buffers = {'stdout': bytearray(), 'stderr': bytearray()}
+    truncated = {'stdout': False, 'stderr': False}
+    category, status, returncode = None, None, None
+    try:
+        with subprocess.Popen(['atuin', 'sync'], stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              start_new_session=True) as process:
+            with selectors.DefaultSelector() as selector:
+                for name in buffers:
+                    selector.register(getattr(process, name), selectors.EVENT_READ, name)
+                deadline = started + timeout
+                while selector.get_map():
+                    now = time.monotonic()
+                    if now >= deadline:
+                        if category == 'timeout':
+                            break
+                        category = 'timeout'
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        deadline = now + 1
+                    for key, _ in selector.select(min(0.1, max(0, deadline - now))):
+                        chunk = os.read(key.fileobj.fileno(), 16384)
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                            continue
+                        name = key.data
+                        buffers[name].extend(chunk)
+                        truncated[name] |= len(buffers[name]) > ATUIN_CAPTURE_LIMIT
+                        del buffers[name][:-ATUIN_CAPTURE_LIMIT]
+                remaining = max(0, deadline - time.monotonic())
+                try:
+                    returncode = process.wait(timeout=remaining)
+                except subprocess.TimeoutExpired:
+                    category = 'timeout'
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    returncode = process.wait()
+    except OSError:
+        category = 'unavailable'
+    elapsed = time.monotonic() - started
+    output = {name: bytes(value).decode('utf-8', errors='replace')
+              for name, value in buffers.items()}
+    if category is None and returncode:
+        category, status = atuin_failure(output['stderr'])
+        if returncode < 0:
+            category, status = 'signal', None
+    record = {'operation': 'atuin-sync', 'category': category or 'success',
+              'exit_code': returncode, 'elapsed_seconds': elapsed,
+              **output, 'stdout_truncated': truncated['stdout'],
+              'stderr_truncated': truncated['stderr']}
+    # Atomic replacement keeps one bounded attempt, never a growing log.
+    write(home / '.local/state/walter/atuin-sync.json', json.dumps(record) + '\n', 0o600)
+    if category:
+        raise ProvisionError('Atuin sync failed; output captured on the user seat.',
+                             build_diagnostic('atuin-sync', category,
+                                 returncode=returncode if category not in ('timeout', 'unavailable') else None,
+                                 elapsed_seconds=elapsed, http_status=status))
+    return subprocess.CompletedProcess(['atuin', 'sync'], returncode,
+                                       output['stdout'], output['stderr'])
 
 
 def failure_result(error):
@@ -563,7 +638,7 @@ def user_tasks(payload, user, resolved):
                 raise ProvisionError('Atuin credentials are required')
             atuin_login(username, payload['atuin_password'], payload['atuin_key'])
             write(stamp, 'Authenticated by Walter\n', 0o600)
-        run(['atuin', 'sync'])
+        atuin_sync(home, capture=config.get('atuin-sync-capture', False))
     stage('complete')
     return {'resolved_versions': resolved, 'emacs_log': log}
 

@@ -28,6 +28,15 @@ class ConfigTest(unittest.TestCase):
         _, ordinary = self.load({'users': ['seat']})
         self.assertEqual(ordinary['_desired_hash'], d['_desired_hash'])
 
+    def test_atuin_capture_requires_explicit_boolean_opt_in(self):
+        c, _ = self.load()
+        self.assertIs(False, c['atuin-sync-capture'])
+        c, _ = self.load(env={'COLORS_PAR_ATUIN_SYNC_CAPTURE': 'true'})
+        self.assertIs(True, c['atuin-sync-capture'])
+        for value in ('yes', 1, None, []):
+            with self.subTest(value=value), self.assertRaises(DeployError):
+                self.load({'atuin-sync-capture': value})
+
     def test_go_version_requires_pinned_release(self):
         c, _ = self.load()
         self.assertEqual('1.27.2', c['go-version'])

@@ -21,7 +21,7 @@ DEFAULTS = {'workdir': '.colors', 'provider-compute': 'google', 'users': [],
             'compute-prevent-destroy': True, 'walter-ssh-sources': ['0.0.0.0/0'],
             'google-auth': 'application-default', 'google-network': 'default',
             'google-subnet': 'default', 'google-nic-type': 'GVNIC',
-            'google-local-ssd-count': 0, 'local-ssd-scratch': False, 'go-version': '1.27.2'}
+            'atuin-sync-capture': False, 'google-local-ssd-count': 0, 'local-ssd-scratch': False, 'go-version': '1.27.2'}
 TOOLS = {'github-account', 'git-email', 'emacs-config-repo', 'emacs-config-dest',
          'nix-packages', 'agent-tools', 'login-shell', 'asdf-tools', 'corepack-packages',
          'dotfiles-checkout', 'clone-orgs', 'clone-repos', 'atuin-username', 'seed-agent-credentials'}
@@ -51,7 +51,7 @@ def validate(c):
     primary = c.get('ssh-user', 'ubuntu')
     if primary in users or 'root' in users or primary == 'root':
         raise DeployError('Seats must differ from the non-root primary user.')
-    for key in ('local-ssd-scratch', 'compute-prevent-destroy'):
+    for key in ('local-ssd-scratch', 'compute-prevent-destroy', 'atuin-sync-capture'):
         if type(c[key]) is not bool:
             raise DeployError(key + ' must be boolean.')
     if c['local-ssd-scratch'] and not c['google-local-ssd-count']:
