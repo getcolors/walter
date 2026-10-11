@@ -466,6 +466,10 @@ def user_tasks(payload, user, resolved):
         namespace = {'__name__': 'walter_dotfiles'}
         exec(payload['dotfiles_source'], namespace)
         namespace['install'](user_path(home, config['dotfiles-checkout']), home)
+    # Emacs depends on packages/checkouts/dotfiles, not Atuin authentication.
+    # Start its existing locked background job before the potentially long sync.
+    stage('emacs')
+    log = emacs_job(home, config)
     stage('atuin')
     if config.get('atuin-username'):
         username = config['atuin-username']
@@ -476,8 +480,6 @@ def user_tasks(payload, user, resolved):
             atuin_login(username, payload['atuin_password'], payload['atuin_key'])
             write(stamp, 'Authenticated by Walter\n', 0o600)
         run(['atuin', 'sync'])
-    stage('emacs')
-    log = emacs_job(home, config)
     stage('complete')
     return {'resolved_versions': resolved, 'emacs_log': log}
 
