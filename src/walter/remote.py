@@ -620,6 +620,8 @@ def install_nix(config, receipt=Path('/nix/receipt.json')):
 
 def prerequisites(config):
     packages = ['curl', 'git', 'unzip', 'xz-utils', 'ca-certificates', 'gnupg', 'tar', 'gzip', 'util-linux']
+    if any(tool['name'] == 'nodejs' for tool in config.get('asdf-tools', [])):
+        packages += ['libatomic1']
     if any(tool['name'] == 'python' for tool in config.get('asdf-tools', [])):
         packages += ['build-essential', 'libssl-dev', 'zlib1g-dev', 'libbz2-dev', 'libreadline-dev', 'libsqlite3-dev', 'libffi-dev', 'liblzma-dev', 'libncurses-dev', 'tk-dev', 'uuid-dev']
     if config.get('local-ssd-scratch'):

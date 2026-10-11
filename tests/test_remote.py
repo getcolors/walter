@@ -39,6 +39,13 @@ class RemoteTests(unittest.TestCase):
                 with self.assertRaises(remote.ProvisionError):
                     remote.user_path(home, value)
 
+    def test_node_runtime_libraries_do_not_depend_on_python(self):
+        with patch.object(remote, 'run') as run:
+            remote.prerequisites({'asdf-tools': [{'name': 'nodejs'}]})
+        packages = run.call_args.args[0]
+        self.assertIn('libatomic1', packages)
+        self.assertNotIn('build-essential', packages)
+
     def test_latest_is_resolved_once_for_multiple_seats(self):
         calls = []
         def runner(args, **kwargs):
