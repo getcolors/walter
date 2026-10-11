@@ -208,3 +208,33 @@ is enabled, SSH trust matches the new instance and no journal steps remain pendi
 After preserving the authorized output locally for review, the temporary captures
 were removed from all three seats. Capture remains disabled in saved configuration.
 The final six-file controller recovery checkpoint was saved successfully to Vault.
+
+
+## Official Atuin installer and dotfiles compatibility
+
+Source `e32cd76` and launcher `7bfaeca` replace the Nix Atuin package with the
+user-requested `https://setup.atuin.sh` installer. Walter downloads with HTTPS/TLS
+restrictions, executes the script noninteractively after dropping privileges,
+verifies the installed binary, then removes the old Nix profile entry. The
+Atuin-only Nix pin and replacement logic were removed. `~/.atuin/bin` precedes
+Nix in provisioning, Bash and Fish PATHs. Repeat convergence retains an existing
+official installation; history and credentials are preserved.
+
+Migration on the existing `walter-gcp` completed in 33.639 seconds. All three
+users now run official Atuin 18.23.0 with no Nix Atuin entry. Their 74,887 indexed
+history entries and 74,971 stored records were preserved. Full live verification
+passed, including Go, seats, Atuin rebuild evidence and Emacs completion.
+Copied-launcher repeat convergence passed in 32.965 seconds, retaining the VM ID.
+
+Compatibility with getcolors/dotfiles was checked on Walter's Ubuntu profile:
+the Fish and Atuin configuration files remained byte-for-byte unchanged for all
+three users, and each retains exactly one `atuin init fish` statement. The official
+setup script detects that existing initialization. Interactive Fish resolved the
+official binary, loaded its search function and emitted no stderr; Bash login
+shells also resolved the official binary. The dotfiles repository needed no edits.
+The macOS profile was inspected but not live-tested.
+
+Validation: 141 tests passed, one privilege test skipped in the ordinary suite,
+and 47 subtests passed. The separate root suite passed 19 tests and four subtests.
+Package builds and copied-launcher checks passed. Controller Vault checkpoints
+were saved before and after migration.
