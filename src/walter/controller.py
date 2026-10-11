@@ -10,7 +10,7 @@ import stat
 
 from blue.workflow import workflow, run as run_workflow
 from pocketdeploy.common import DeployError, run
-from pocketdeploy.cli import initialize
+from pocketdeploy.runtime import initialize
 from . import ssh_config
 
 CREDENTIALS = {'claude': '.claude/.credentials.json', 'codex': '.codex/auth.json',
@@ -131,12 +131,7 @@ async def converge(config, deployment, state, cloud, host, operation, reporter):
     users = [deployment.get('ssh-user', 'ubuntu'), *config['users']]
 
     async def prepare():
-        # Freeze verified SSH arguments on the controller thread: Host._argv
-        # reads SQLite trust and rewrites known_hosts, neither is worker-safe.
-        worker_host = copy.copy(host)
-        argv = host._argv(results['connection'])
-        worker_host._argv = lambda connection: list(argv)
-        results['worker_host'] = worker_host
+        results['worker_host'] = host.prepare_transport(results['connection'])
         evidence = {'instance_id': results['connection']['instance_id'], 'desired_hash': deployment['_desired_hash']}
         results['intent'] = state.intent(operation, 'converge', evidence)
         results['resolved'] = await asyncio.to_thread(remote, results['worker_host'], results['connection'], config, 'prepare')

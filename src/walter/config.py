@@ -1,6 +1,4 @@
 """Walter's small desired-state vocabulary mapped into PocketDeploy."""
-import hashlib
-import json
 import os
 import re
 import shlex
@@ -140,20 +138,18 @@ def load(path, env=None):
     c = read_pars({**DEFAULTS, **raw}, env)
     # Credential environment variables must never enter desired state or hashing.
     c = {k: v for k, v in c.items() if k in KEYS}
-    d = {**deployment.DEFAULTS, **deployment.PROVIDER_DEFAULTS['gcp'],
-         **{k: c[k] for k in SHARED if k in c},
+    d = {**{k: c[k] for k in SHARED if k in c},
          'profile': c.get('profile'), 'provider-compute': 'gcp', 'workdir': c['workdir'],
          'compute-prevent-destroy': c['compute-prevent-destroy'],
          'compute-ssh-sources': c['walter-ssh-sources'], 'compute-http-sources': [],
          'compute-ssh-ports': ['22', '2022'] if 'eternal-terminal' in c.get('nix-packages', []) else ['22'],
-         '_root': str(path.parent), '_file': str(path)}
+         }
     for old, new in GOOGLE.items():
         if 'google-' + old in c:
             d['gcp-' + new] = c['google-' + old]
     if isinstance(d.get('gcp-image'), str) and d['gcp-image'].startswith('projects/'):
         d['gcp-image'] = 'https://compute.googleapis.com/compute/v1/' + d['gcp-image']
-    deployment.validate(d)
+    d = deployment.normalize(d, path=path, env={}, desired=c)
     validate(c)
     deployment.validate_local_paths(d, path.parent)
-    d['_desired_hash'] = hashlib.sha256(json.dumps(c, sort_keys=True).encode()).hexdigest()
     return c, d

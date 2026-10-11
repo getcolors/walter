@@ -60,7 +60,10 @@ retains the OS, configuration, logs and Walter metadata. Mounts precede user set
 temporary-file initialization and dependent services. The helper refuses foreign
 filesystems and unsafe ownership. Local SSD data is disposable.
 
-Walter uses PocketDeploy's `.colors.sqlite`, `.ssh/` authority and local lock.
+Walter uses PocketDeploy's configuration normalization, deployment sessions,
+operation journal, compute deletion, `.colors.sqlite`, `.ssh/` authority and local lock.
+Pinned SSH transport is prepared before parallel user work; shared alias updates
+preserve Walter's existing ownership markers and use PocketDeploy's common lock.
 One controller at a time is supported. There is no backend bucket. Missing state
 or authority requires recovery, not adoption by name. Host bootstrap keys rotate
 before application credentials are transmitted. `ssh-install` refreshes owned

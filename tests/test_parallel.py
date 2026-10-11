@@ -25,7 +25,7 @@ def test_user_branches_overlap_and_join_without_worker_journal_access(failed_use
     state.complete.side_effect = lambda *a: (pytest.fail('worker journal') if threading.get_ident() != main_thread else None)
     host.pub = Mock(spec=Path)
     host.pub.read_text.return_value = 'public'
-    host._argv.side_effect = lambda *a: (pytest.fail('worker trust access') if threading.get_ident() != main_thread else ['ssh'])
+    host.prepare_transport.side_effect = lambda *a: (pytest.fail('worker trust access') if threading.get_ident() != main_thread else ['ssh'])
     cloud.converge.return_value = {'instance_id': '123'}
     reporter.stage.side_effect = lambda name: nullcontext()
 
