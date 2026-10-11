@@ -1,244 +1,137 @@
-# walter
+# Walter
 
-The current checkout targets **colors-compute v2**, pinned to a published
-commit in `deps.edn`. The launcher resolves Walter and its pinned dependencies
-without sibling checkouts. It is for a new deployment, not an upgrade of an
-existing v1 machine.
+Walter provisions one Google Cloud development machine and its user environments
+using Python and [PocketDeploy](https://github.com/pocketcontext/pocketdeploy).
+There is no Terraform/OpenTofu, Ansible or Clojure orchestration. Nix, asdf, Git,
+OpenSSH, Google Cloud CLI and downloaded tool installers remain external tools.
 
-```sh
-./green build             # credential-free output under .colors/build/<profile>
-./green create --dry-run
-./green create            # explicitly authorized provisioning only
-./green ssh               # primary login with an isolated temporary agent
-./green ssh rose          # or jack: same scoped access, isolated home
-./green converge-nix
-./green converge-asdf
-```
+The new profile is **walter-gcp**. Existing Walter deployments and their state
+are independent. There is no state migration, compatibility launcher, start or stop.
 
-The supplied `colors.yml` defines `walter-google`, N4A highmem with Hyperdisk,
-gVNIC and Ubuntu ARM64, seats `rose` and `jack`, and the software configuration
-from `walter-vultr`. Pi, Codex, Claude and Antigravity use their official standalone
-installers. Antigravity is selected with `agent-tools: [antigravity]` and runs
-as `agy`. Bun, Node.js, uv and Python resolve the latest stable version on
-each create or `converge-asdf`; asdf records the resolved exact versions.
+## Setup
 
-V2 needs an existing state bucket and `COLORS_PAR_WALTER_SSH_PASSPHRASE` for
-the encrypted SSH resource. Atuin also needs `COLORS_PAR_ATUIN_PASSWORD` and
-`COLORS_PAR_ATUIN_KEY`. Google provisioning uses ADC; SSH resource access uses
-the active gcloud account. Credentials never belong in `colors.yml`.
-
-Compute and provider registration receive only public identity. Deleting the
-machine retains the encrypted SSH resource and persistent OpenTofu roots.
-Managed aliases select public keys and disable the ambient agent; use
-`./green ssh` to open an authenticated scope. It resolves the owned machine's
-current public address with a read-only provider refresh, then connects directly
-with an explicit login and port. It does not read `~/.ssh/config`; a fresh
-controller needs backend and provider credentials, OpenTofu, and the SSH resource
-passphrase, but no generated alias. SSH retains known-host verification
-(`StrictHostKeyChecking=accept-new`), rejects changed host keys, and disables
-agent forwarding and connection multiplexing. Missing state, a destroyed machine,
-or an unavailable public address refuses the connection before unlocking the key.
-For ordinary SSH, SCP, and editors, run `./green ssh-install`. It retrieves the
-existing encrypted OpenSSH private key and public key into
-`~/.ssh/walter/<profile>/`, verifies their fingerprint, and installs managed
-aliases for the primary login and configured seats at the start of
-`~/.ssh/config`. It refuses unrelated keys and unmanaged exact host aliases.
-Ordinary `ssh <profile>` prompts for the key passphrase; it does not consume
-`COLORS_PAR_WALTER_SSH_PASSPHRASE` or automatically cache the key in an agent or
-Keychain. Agent forwarding stays disabled; user clipboard forwarding, keepalive,
-and multiplexing settings remain available.
-Repeat installation to refresh the live address or seat list. Later creates
-preserve the installed identity. `./green ssh` still resolves live and opens its
-own scoped agent independently of these files.
-
-`./green ssh-uninstall` removes only owned local aliases and the exported keypair.
-It works without backend/provider credentials or a passphrase and never removes
-the remote encrypted authority. Machine deletion removes aliases but retains
-local exported keys until uninstall. Backend passphrase changes do not invalidate
-an existing exported copy of the same underlying key. Failed config installation
-can leave an owned encrypted keypair, which a retry reuses or uninstall removes.
-
-Focused convergence and the GitHub-login probe still use managed aliases.
-`stop` and `start` are currently
-unavailable because the v2 library has no power API; both refuse explicitly.
-
-`compute-api-version: 2` is required. Existing deployments retain their old
-launcher and state. Do not copy this v2 launcher into an
-existing deployment. See [AGENTS.md](AGENTS.md) for current architecture,
-checks and release constraints. `python3 scripts/tooling-smoke.py` exercises
-the rendered runtime and installer tasks using local mocks, without downloads
-or privileged changes.
-
-## Disposable Local SSD caches
-
-For new Google C4A `standard` or `highmem` `-lssd` deployments, declare the
-shape's fixed number of 375 GiB NVMe disks with `google-local-ssd-count`.
-Opt into `local-ssd-scratch: true` to mount scratch storage at `/scratch`
-before installing tools. One disk uses ext4 directly; multiple disks use an
-`mdadm` RAID 0 array with one ext4 filesystem. For example:
-
-```yaml
-google-machine-type: c4a-standard-8-lssd
-google-local-ssd-count: 2
-local-ssd-scratch: true
-```
-
-This provides 750 GiB raw scratch capacity, less metadata/filesystem overhead.
-The pinned colors-compute dependency supplies the matching disk declarations.
-
-The boot service checks the exact configured device count. It only creates a
-new RAID array when all disks are blank, records its UUID and member count in
-`/var/lib/walter/local-ssd-raid.json` on the persistent root, and reassembles
-that identity on reboot (including arrays already assembled under another
-device name by udev). It never force-assembles or wipes surviving RAID members.
-Partial disk loss, unknown arrays, missing ownership records, unfamiliar
-filesystems, conflicting mounts and unsafe symlinks are refused. A missing
-ownership record after an interrupted first creation requires operator review.
-All-blank replacement disks can recreate scratch storage; partial loss requires
-an explicit recovery operation. RAID 0 has no redundancy: losing one member
-loses the array's usable data.
-
-After initialization, the service recreates private `npm`, `uv`, `ccache`, `tmp` and `build`
-directories for each login. Fish and POSIX login-shell configuration sends
-npm/uv/compiler caches and temporary files there. Use `/scratch/$USER/build`
-for explicitly disposable build outputs. Existing caches are not migrated.
-Source checkouts, agent history, credentials and `/nix` remain persistent.
-Local SSD loss is expected on stop/start or unrecoverable host failure; never
-place the only copy of work there. No Google commitment is purchased by Walter.
-
-The following describes the **historical v1 release**, not this checkout.
-
-A remote development machine, as a Package Skill.
-
-Walter provisions one machine, writes it into `~/.ssh/config` so `ssh <profile>`
-reaches it, confirms Ansible can talk to it, and powers it off and on so you are
-not paying for it overnight.
+Install uv, OpenSSH, gcloud and GitHub CLI. Authenticate Google Application Default
+Credentials for the configured project and authenticate `gh` as `github-account`.
+The portable `walter` launcher fetches an immutable package pin. Source development:
 
 ```sh
-./green build              # render .colors/<profile>/ — contacts nothing
-./green create --dry-run   # print the graph — touches nothing
-./green create             # provision, and record the ssh alias
-./green stop               # power off
-./green start              # power on, and refresh the alias
-./green converge-nix       # update declared Nix packages on every login
-./green converge-asdf      # install declared asdf versions on every login
-./green delete             # destroy, dropping the ssh block first
+uv sync --locked --extra test
+uv run walter --help
+uv run walter init
+uv run walter plan
+uv run walter vault-save
+uv run walter converge --verbose
+uv run walter vault-save
+uv run walter status
+uv run walter ssh
+uv run walter ssh --user rose
+uv run walter converge-nix
+uv run walter converge-asdf
 ```
 
-Desired state is `colors.yml`, found by walking up from wherever you run it.
-Credentials never live there — they arrive as `COLORS_PAR_*` environment
-variables. See `skills/package-walter-green/references/configuration.md`.
+Run without arguments for help. Configuration defaults to `colors.yml` in the
+current directory; use `-f /absolute/path/colors.yml` to select another deployment.
+`plan` and `converge --dry-run` read cloud resources without creating authority.
+The plan describes infrastructure changes and intended user reconciliation;
+it does not predict every package-manager change.
 
-## Install it into a project
+## Configuration
+
+The existing `google-*` and tooling keys remain the desired-state vocabulary.
+They normalize into PocketDeploy's `gcp-*` settings internally. `provider-compute`
+is `google`; only Google Cloud is supported. The durable `profile` supplies the
+resource-name prefix. New names use `<profile>-<component>-<purpose>`, omitting
+redundant components, with immutable provider IDs and ownership labels recorded
+separately. `COLORS_PAR_PROFILE` is refused.
+
+Existing `google-network` and `google-subnet` are required infrastructure
+references (both default to `default`). Region/zone must agree. Walter owns only
+its VM, boot disk and firewall rules; it does not own the network or subnet.
+SSH sources default to all IPv4 addresses; set `walter-ssh-sources` to narrower
+CIDRs when appropriate. The shared HTTP/HTTPS firewall rule is disabled.
+Inherited network firewall rules can grant broader access.
+
+N4A uses ARM64 Ubuntu, `hyperdisk-balanced` and `GVNIC`. C4A `-lssd` shapes require
+their fixed `google-local-ssd-count`; `local-ssd-scratch: true` initializes private
+cache/build directories on disposable scratch. Persistent boot disks retain source
+checkouts, credentials and `/nix`. The helper refuses partial disk loss, foreign
+filesystems and unsafe ownership rather than formatting surviving data.
+
+Walter uses PocketDeploy's `.colors.sqlite`, `.ssh/` authority and local lock.
+One controller at a time is supported. There is no backend bucket. Missing state
+or authority requires recovery, not adoption by name. Host bootstrap keys rotate
+before application credentials are transmitted. `ssh-install` refreshes owned
+primary/seat aliases; `ssh-uninstall` removes only aliases. `ssh` resolves the live
+owned address and supports `--ssh-command` for explicit commands.
+
+## Private settings
+
+Every variable assigned in `.envrc.private` must start with **`COLORS_PAR_`**.
+Keep the file private and ignored. Values never belong in `colors.yml`, command
+arguments, logs or Git. Load private settings in your trusted shell; the CLI does
+not source shell files. Atuin requires:
 
 ```sh
-npx skills add getcolors/walter
-cp .agents/skills/package-walter-green/green green
+export COLORS_PAR_ATUIN_PASSWORD=""
+export COLORS_PAR_ATUIN_KEY=""
 ```
 
-The root launcher is a **copy** of the skill payload, not a symlink, so
-`npx skills update -p` leaves it behind — re-copy after every update or the
-project keeps running the old pin while `skills-lock.json` claims the new one.
+Fill the values privately. `COLORS_PAR_*` overrides for supported configuration
+fields follow the shared Colors convention. Unrelated environment variables are
+not copied into desired state. Google and GitHub authenticate through their CLI
+credential stores; VaultContext uses its already configured client session.
 
-## What v1 does and does not do
+Convergence verifies the current `gh` account and transfers its token only when a
+configured remote login lacks the expected GitHub identity. It does not create a
+new GitHub OAuth grant. Tokens travel through SSH stdin, never argv or SQLite.
+Deleting a VM does not revoke the underlying GitHub credential.
 
-It creates a machine, gets you onto it, and installs **nix**, a **terminfo entry
-for Ghostty**, and **cloudflared kernel networking settings** — all on every
-machine, gated on nothing. nix makes anything else one `nix profile install`
-away; terminfo keeps `vim`, `top` and `less` working when `TERM` travels over
-SSH; and the sysctls grant the login user's group ICMP sockets and QUIC-sized
-buffers so `cloudflared` needs no sudo and emits no permissions or buffer
-warnings.
+Optional agent seeding reads only the named credential files for Claude, Codex and
+Pi, never transcript directories. Existing remote credential files are preserved.
+Seat users have private homes and no sudo or Docker-group access. They share the
+configured GitHub/agent identities and host networking; seats are not separate
+cloud or service accounts. The primary user remains privileged.
 
-Docker is installed with `curl -fsSL https://get.docker.com | sh` when the
-daemon is absent, and its service is enabled and started. The `ubuntu` user
-is added to the `docker` group for use without sudo; other seat users are not.
-Existing interactive sessions need a fresh login to pick up the group.
+## Convergence and recovery
 
-Set `github-account` and `git-email` and the machine comes up with its own
-GitHub identity: gh logged in, git cloning and pushing over https through it,
-and the commit identity configured. No token lives in desired state — the
-create *mints* one with GitHub's device flow as its very first action: a
-one-time code to approve from any browser, and once approved the rest of the
-run is unattended. A machine that already holds a login keeps it, so
-re-creates stay non-interactive. The clone-bearing features
-(`emacs-config-repo`, `clone-orgs`, `dotfiles-checkout`) authenticate through
-this identity and refuse to build without it.
+The workflow is preflight → local keys → compute → verified host trust → remote
+Python provisioning → local aliases. Remote users run with permanently dropped
+privileges. Nix/asdf and standalone agent installers configure each home. `latest`
+asdf versions resolve once per invocation and are shared across seats. Focused
+commands operate on the recorded owned machine. Dotfiles use a small Python
+renderer for the checkout's Ubuntu profile, preserving existing user files; the
+checkout's old launcher is never executed. Emacs package warming is asynchronous;
+inspect `~/.local/state/walter/emacs-packages.log` for completion.
 
-By default walter generates and owns the machine-access keypair (SSH Keypair
-Standard, `workspace/standards/ssh-keypair.md`): a profile-named ed25519 pair
-in the operator's `~/.ssh`, created on the first real create, fed to the
-provider, pinned for `ssh <profile>` and Ansible, and removed by a successful
-delete. Set the provider's machine-key value instead and you supply the key
-yourself, exactly as before the standard.
+`vault-id` selects a dedicated vault; `vault-command` selects its installed CLI.
+The user must authenticate and unlock it. `vault-save` is an explicit checkpoint
+of private bindings, operator/bootstrap keys, known hosts and SQLite. It does not
+back up the remote home directories or boot volume. Preserve remote work separately.
+Save after successful mutations and after failures that changed resource state.
 
-Set `emacs-config-repo` (an https URL) and the remote playbook also installs
-Emacs and GNU coreutils from nixpkgs and clones that configuration with the
-machine's own token. Coreutils provides the profile-local GNU `ls` neoemacs
-requires. Leave the key out and the rendered playbook does not mention Emacs
-at all. A separate asynchronous stage warms the configuration's package cache;
-its log at `~/.local/state/walter/emacs-packages.log` records a nonzero status
-for error-level warnings as well as uncaught errors. Archive retry policy and
-the package list belong to the Emacs configuration.
+```sh
+walter vault-restore --document DOCUMENT --version VERSION \
+  --destination /absolute/recovery/directory
+```
 
-No agent forwarding, anywhere. Nothing on the machine authenticates with your
-workstation's keys: GitHub work rides the machine's own token, and the only
-private key involved in reaching the machine is the one walter generated for
-exactly that.
+Place matching Git configuration in the destination first. Restore never runs a
+deployment or sources private bindings. Review `plan` before takeover. Old recovery
+checkpoints may require reconciliation against live resources.
 
-Set `users` and the machine grows **seats**: extra unix logins beside the
-primary one — one person's isolated workspaces, kept apart by file
-permissions. Each seat gets a private `0700` home, the same keys the machine
-already trusts, and the same environment as the primary login: same nix
-profile and shell, same GitHub identity, Emacs configuration, dotfiles, org
-checkouts, agent credentials and atuin account, each in its own home.
-`ssh <profile>-<seat>` reaches each one. A seat holds **no sudo** — a sudoer
-can read every home, which would delete the feature — so the primary login
-remains the trust root. The boundary is filesystem and process, not network
-or identity: seats share localhost, `/tmp`, and the seeded credentials.
-
-Vultr accepts no explicit machine key (walter needs the generated private
-half) and has one bootstrap exception to the
-normal login: its provider image exposes root, so Walter enters once to adopt
-the stock UID/GID 1000 account as `ubuntu`, install the dedicated key and
-passwordless sudo, then
-disables both root and password SSH. Every normal Ansible stage and
-`ssh <profile>` use `ubuntu`; later creates probe that login first.
-
-Nothing else is installed. Other toolchains are the user's `nix profile
-install`, not a walter feature.
-
-`stop` and `start` work on OCI and Vultr. Everywhere else they report that the
-provider has no power API walter can drive and exit 0. Both implementations act
-on immutable provider instance IDs and refresh the SSH alias from the live API
-after start; power state remains outside OpenTofu.
-
-`converge-nix` and `converge-asdf` are focused existing-machine operations. They
-connect through the managed SSH aliases to the primary login and every seat,
-without reading OpenTofu state or requiring provider credentials. The Nix event
-ensures the declared profile entries exist and advances only those entries to
-the current `nixpkgs-unstable` revision; manually installed profile elements are
-left alone. The asdf event installs the exact versions in `asdf-tools`, then
-re-enables and reshims any declared Corepack packages. Run `create` first, and
-`start` first when the machine is stopped.
-
-Every focused task is safe to run again. Asdf reports no change once converged;
-Nix reports a change when it advances an element, using Nix's current output
-wording for that changed flag.
+Deletion requires `compute-prevent-destroy: false`. Review `delete --dry-run`,
+then `delete` removes owned compute, boot storage, firewall rules and local SSH
+keys/aliases. It retains the SQLite receipt, configuration and Vault history.
+Deletion destroys remote work; recovery checkpoints do not contain that work.
 
 ## Development
 
 ```sh
-bb test                  # unit suite
-bb golden                # every provider variant vs committed output
-./scripts/launcher.sh    # the launcher, in environments this checkout is not
+uv sync --locked --extra test
+uv run pytest -q
+uv build
+uv run python scripts/test-launcher.py
 ```
 
-`bb golden` is the important one. Walter depends on ONCE's provider registry and
-compute templates through a SHA pin, and nothing upstream promises that surface
-will hold still — the golden diff is what turns a pin bump that changes output
-into a loud failure instead of a silent one. Bump the pin deliberately, run
-`bb golden`, and read the diff rather than accepting it.
-
-`CLAUDE.md` covers the architecture and the invariants. `plans/0001-walter-v1.md`
-covers why, including the designs that were rejected.
+Synthetic tests cover configuration, controller behavior, secrets, privilege
+boundaries, local aliases and scratch recovery. Shared cloud/SSH tests live in
+PocketDeploy. Live verification is recorded separately in docs/verification.md.

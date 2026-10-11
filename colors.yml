@@ -1,12 +1,10 @@
-# Desired state for a new Walter v2 development machine on Google Cloud.
+# Desired state for the Python Walter development machine on Google Cloud.
 # Credentials stay in COLORS_PAR_* environment variables. Never set COLORS_PAR_PROFILE.
-profile: walter-google
+profile: walter-gcp
 workdir: .colors
-compute-api-version: 2
 users: [rose, jack]
 
 provider-compute: google
-provider-backend: r2
 compute-prevent-destroy: true
 
 # N4A requires ARM64, Hyperdisk and gVNIC. Image verified with IDPF support.
@@ -19,21 +17,17 @@ google-nic-type: GVNIC
 google-image-project: ubuntu-os-cloud
 google-image-family: ubuntu-2404-lts-arm64
 google-image-id: projects/ubuntu-os-cloud/global/images/ubuntu-2404-noble-arm64-v20260918
-google-subnet-cidr: 10.43.0.0/24
+google-network: default
+google-subnet: default
 google-boot-disk-size-gb: 100
 
-# Existing R2 bucket; credentials are supplied through .envrc.private.
-r2-bucket: walter-google-state
-r2-endpoint: https://319271fed8bc6d2d9059362be1165f37.eu.r2.cloudflarestorage.com
-
-# Encrypted SSH resource: supply COLORS_PAR_WALTER_SSH_PASSPHRASE at runtime.
-# Create/delete retain this named authority; each access scope owns an agent.
-# This is a new deployment. No v1 resources or state are adopted.
+# Explicit encrypted recovery checkpoints, using the unlocked VaultContext session.
+vault-id: uqjfolnlkfc3g7z
+vault-command: /home/ubuntu/.agents/skills/vaultcontext/vaultcontext
 
 # --- GitHub identity --------------------------------------------------------
-# A real create starts GitHub's device flow before provisioning. The resulting
-# machine-owned token is used for HTTPS clones; no GitHub SSH key or forwarded
-# workstation agent reaches the server.
+# Convergence uses the matching authenticated gh account for HTTPS clones.
+# Its token travels over SSH stdin and never enters configuration or state.
 github-account: amiorin
 git-email: 32617+amiorin@users.noreply.github.com
 

@@ -1,20 +1,5 @@
-{ pkgs, lib, config, inputs, ... }:
-
+{ pkgs, ... }:
 {
-  languages.clojure.enable = true;
-  languages.ansible.enable = true;
-  languages.opentofu.enable = true;
-  packages = [
-    pkgs.babashka
-    pkgs.bun
-    pkgs.uv
-    pkgs.jet
-    pkgs.hcl2json
-    pkgs.awscli2
-    pkgs.azure-cli
-    pkgs.google-cloud-sdk
-    pkgs.skopeo
-    pkgs.hcloud
-    pkgs.doctl
-  ];
+  languages.python.enable = true;
+  packages = [ pkgs.uv pkgs.openssh pkgs.google-cloud-sdk pkgs.gh pkgs.git ];
 }

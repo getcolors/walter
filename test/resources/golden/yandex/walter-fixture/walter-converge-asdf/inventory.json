@@ -1,9 +1,0 @@
-{
-  "all" : {
-    "hosts" : {
-      "walter-fixture" : { },
-      "walter-fixture-jack" : { },
-      "walter-fixture-emma" : { }
-    }
-  }
-}

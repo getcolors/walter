@@ -1,0 +1,25 @@
+[project]
+name = "walter"
+version = "3.0.0"
+description = "Google Cloud development machines, using PocketDeploy"
+requires-python = ">=3.11"
+dependencies = ["pocketdeploy @ git+https://github.com/pocketcontext/pocketdeploy.git@22b9a5c9235a52ac4a772554e26b21bef6f571f5"]
+
+[project.scripts]
+walter = "walter.cli:main"
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/walter"]
+
+[tool.pytest.ini_options]
+testpaths = ["test_python"]
