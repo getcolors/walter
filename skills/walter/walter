@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["walter @ git+https://github.com/getcolors/walter.git@3977cc1eddb529d154bc29991af134aaf0177616"]
+# dependencies = ["walter @ git+https://github.com/getcolors/walter.git@a13326f73911b5bd4b52e67b7b3d0c6b204b981d"]
 # ///
 """Portable Walter; configuration follows the caller, never the launcher."""
 from walter.cli import main
