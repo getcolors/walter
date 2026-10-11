@@ -3,7 +3,6 @@
 import json
 import os
 from pathlib import Path
-import pwd
 import re
 import stat
 import subprocess
@@ -14,7 +13,9 @@ MOUNT = Path('/scratch')
 LABEL = 'walter-scratch'
 ARRAY = Path('/dev/md/walter-scratch')
 STATE = Path('/var/lib/walter/local-ssd-raid.json')
-CACHES = ('npm', 'uv', 'ccache', 'tmp', 'build')
+LAYOUT = {'home': ('/home', 0o755), 'nix': ('/nix', 0o755),
+          'tmp': ('/tmp', 0o1777), 'var-tmp': ('/var/tmp', 0o1777),
+          'docker': ('/var/lib/docker', 0o711), 'containerd': ('/var/lib/containerd', 0o711)}
 
 
 def run(*args, allowed=(0,)):
@@ -161,7 +162,7 @@ def prepare(device=DEVICE, mount=MOUNT, execute=run, count=1, array=ARRAY, state
             raise RuntimeError('refusing a partitioned scratch device')
         for entry in [layout[0], *children]:
             points = [p for p in entry.get('mountpoints', []) if p]
-            if any(p != str(mount) for p in points) or (count > 1 and entry is layout[0] and points):
+            if any(p not in {str(mount), *(v[0] for v in LAYOUT.values())} for p in points) or (count > 1 and entry is layout[0] and points):
                 raise RuntimeError('Local SSD is mounted elsewhere; refusing to modify it')
     # Refuse an occupied mount before creating/assembling/formatting anything.
     mounted_sources = [Path(c['path']) for layout in layouts for c in layout.get('children', [])] if count > 1 else disks
@@ -184,35 +185,49 @@ def prepare(device=DEVICE, mount=MOUNT, execute=run, count=1, array=ARRAY, state
         raise RuntimeError('scratch filesystem does not belong to Walter')
 
 
-def initialize_users(users, mount=MOUNT):
-    if not isinstance(users, list) or not users or any(
-            not isinstance(u, str) or not re.fullmatch(r'[a-z_][a-z0-9_-]*', u) for u in users):
-        raise ValueError('scratch users must be explicit login names')
-    accounts = [pwd.getpwnam(u) for u in dict.fromkeys(users)]
-    if any(a.pw_uid == 0 for a in accounts):
-        raise ValueError('root cannot be a scratch seat')
+def bind_layout(mount=MOUNT, execute=run, bootstrap=False):
+    """Bind owned SSD directories at standard paths before consumers start.
+
+    Bootstrap is only for a new machine: preserve cloud-init's initial home,
+    never silently import an existing Nix or container installation.
+    """
+    if not mount.is_mount():
+        raise RuntimeError('scratch filesystem must be mounted first')
+    if bootstrap and not (mount / '.layout-ready').exists():
+        for path in ('/nix', '/var/lib/docker', '/var/lib/containerd'):
+            target = Path(path)
+            if target.exists() and any(target.iterdir()):
+                raise RuntimeError('SSD layout requires a fresh machine')
     root_fd = os.open(mount, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        os.fchown(root_fd, 0, 0)
-        os.fchmod(root_fd, 0o755)
-        for account in accounts:
-            user_fd = directory(root_fd, account.pw_name, account.pw_uid, account.pw_gid, 0o700)
-            try:
-                for name in CACHES:
-                    fd = directory(user_fd, name, account.pw_uid, account.pw_gid, 0o700)
-                    os.close(fd)
-            finally:
-                os.close(user_fd)
+        for name, (destination, mode) in LAYOUT.items():
+            source = mount / name
+            fd = directory(root_fd, name, mode=mode)
+            os.close(fd)
+            target = Path(destination)
+            if target.is_symlink() or any(p.is_symlink() for p in target.parents):
+                raise RuntimeError('layout destination must not be a symlink')
+            target.mkdir(parents=True, exist_ok=True)
+            if target.is_mount():
+                if not os.path.samefile(source, target):
+                    raise RuntimeError('layout destination is occupied by another mount')
+                continue
+            if bootstrap and name == 'home' and not (mount / '.layout-ready').exists():
+                execute('cp', '-a', '--', str(target) + '/.', str(source) + '/')
+            execute('mount', '--bind', str(source), str(target))
+            if not os.path.samefile(source, target):
+                raise RuntimeError('layout bind mount verification failed')
+        (mount / '.layout-ready').touch(mode=0o600, exist_ok=True)
     finally:
         os.close(root_fd)
 
 
 def main():
+    import sys
     with open('/etc/walter-scratch.json') as source:
         config = json.load(source)
-    users = config['users']
     prepare(count=config['disk_count'])
-    initialize_users(users)
+    bind_layout(bootstrap='--bootstrap' in sys.argv[1:])
 
 
 if __name__ == '__main__':

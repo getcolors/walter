@@ -7,11 +7,13 @@ users: [rose, jack]
 provider-compute: google
 compute-prevent-destroy: true
 
-# N4A requires ARM64, Hyperdisk and gVNIC. Image verified with IDPF support.
+# C4A uses ARM64, Hyperdisk and gVNIC. Image verified with IDPF support.
 google-project: pocketcontext
 google-region: europe-west4
 google-zone: europe-west4-b
-google-machine-type: n4a-highmem-1
+google-machine-type: c4a-standard-4-lssd
+google-local-ssd-count: 1
+local-ssd-scratch: true
 google-boot-disk-type: hyperdisk-balanced
 google-nic-type: GVNIC
 google-image-project: ubuntu-os-cloud
@@ -40,6 +42,7 @@ nix-packages:
   - ripgrep
   - fd
   - fish
+  - eternal-terminal
   - fzf
   - gh
   - caddy
@@ -75,10 +78,6 @@ asdf-tools:
     version: latest
     plugin: https://github.com/cometkim/asdf-bun.git
 
-  - name: python
-    version: latest
-    plugin: https://github.com/asdf-community/asdf-python.git
-
 corepack-packages:
   - pnpm
 
@@ -87,6 +86,11 @@ dotfiles-checkout: ~/code/getcolors/dotfiles
 clone-orgs:
   - getcolors
   - pocketcontext
+
+clone-repos:
+  - basecamp/once
+  - pocketbase/pocketbase
+  - benbjohnson/litestream
 
 atuin-username: amiorin
 

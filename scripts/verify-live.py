@@ -8,7 +8,7 @@ import sys
 import tempfile
 
 REMOTE = r'''
-import fcntl, grp, json, os, platform, pwd, re, stat, subprocess, sys
+import fcntl, grp, json, os, platform, pwd, re, socket, stat, subprocess, sys
 from pathlib import Path
 
 
@@ -49,9 +49,64 @@ def emacs(home):
     return result
 
 
+def storage(config, mountinfo=None):
+    if not config.get('local-ssd-scratch'):
+        return True
+    try:
+        mounts = {}
+        for line in (mountinfo if mountinfo is not None else Path('/proc/self/mountinfo').read_text()).splitlines():
+            fields, fs = line.split(' - ', 1)
+            fields, fs = fields.split(), fs.split()
+            mounts[fields[4]] = (fields[2], fields[3], fs[0], fields[5].split(','))
+        scratch = mounts['/scratch']
+        if scratch[2] != 'ext4' or 'rw' not in scratch[3] or scratch[1] != '/':
+            return False
+        if mounts['/'][0] == scratch[0]:
+            return False
+        for target in ('/home', '/nix', '/tmp', '/var/tmp', '/var/lib/docker', '/var/lib/containerd'):
+            entry = mounts[target]
+            if entry[0] != scratch[0] or entry[1] == '/' or entry[2] != 'ext4' or 'rw' not in entry[3]:
+                return False
+        for target in ('/tmp', '/var/tmp'):
+            info = Path(target).stat()
+            if stat.S_IMODE(info.st_mode) != 0o1777 or info.st_uid != 0 or info.st_gid != 0:
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def repositories(user, home, config):
+    for name in config.get('clone-repos', []):
+        path = home / 'code' / name
+        if not path.is_dir() or path.is_symlink() or not (path / '.git').is_dir():
+            return False
+        code, output = command(user, ['git', '-C', str(path), 'remote', 'get-url', 'origin'])
+        if code != 0 or output.strip() not in ('https://github.com/' + name + '.git', 'https://github.com/' + name, 'git@github.com:' + name + '.git'):
+            return False
+    return True
+
+
+def eternal_terminal(config):
+    if 'eternal-terminal' not in config.get('nix-packages', []):
+        return True
+    try:
+        profile = Path('/nix/var/nix/profiles/walter-et')
+        if profile.lstat().st_uid != 0 or not (profile / 'bin/etserver').is_file():
+            return False
+        result = subprocess.run(['systemctl', 'is-active', '--quiet', 'et.service'], capture_output=True, timeout=10)
+        if result.returncode:
+            return False
+        with socket.create_connection(('127.0.0.1', 2022), timeout=5):
+            return True
+    except Exception:
+        return False
+
+
 def verify(payload):
     config, primary = payload['config'], payload['primary']
-    result = {'architecture_matches': platform.machine() == payload['architecture'], 'users': {}}
+    result = {'architecture_matches': platform.machine() == payload['architecture'], 'ssd_layout': storage(config), 'eternal_terminal': eternal_terminal(config), 'shared_asdf_versions': True, 'users': {}}
+    resolved_versions = {}
     for user in [primary, *config.get('users', [])]:
         try:
             record = pwd.getpwnam(user)
@@ -69,7 +124,7 @@ def verify(payload):
                         attr = entry.get('attrPath', '').split('.')
                         if len(attr) > 2 and attr[0] in ('legacyPackages', 'packages'):
                             attr = attr[2:]
-                        if entry.get('originalUrl') == 'github:NixOS/nixpkgs/nixpkgs-unstable':
+                        if entry.get('originalUrl', '').startswith('github:NixOS/nixpkgs/'):
                             attrs.add('.'.join(attr))
                 except Exception:
                     pass
@@ -88,6 +143,13 @@ def verify(payload):
                 matches = tool['version'] == 'latest' or version == tool['version']
                 installed = (home / '.asdf/installs' / tool['name'] / version).is_dir()
                 checks['asdf_runtimes'] &= exact and matches and installed
+            for tool in config.get('asdf-tools', []):
+                name = tool['name']
+                version = selected.get(name)
+                if name in resolved_versions and resolved_versions[name] != version:
+                    result['shared_asdf_versions'] = False
+                resolved_versions[name] = version
+            checks['explicit_repositories'] = repositories(user, home, config)
             checks['agent_executables'] = all(os.access(home / '.local/bin' / ('agy' if name == 'antigravity' else name), os.X_OK) for name in config.get('agent-tools', []))
             checks['github_account'] = True
             if config.get('github-account'):
@@ -111,14 +173,15 @@ except Exception:
 '''
 
 CHECKS = ('private_home', 'unprivileged_seat', 'authorized_key', 'nix_packages',
-          'asdf_runtimes', 'agent_executables', 'github_account', 'dotfiles_stamp', 'atuin_session_files')
+          'asdf_runtimes', 'explicit_repositories', 'agent_executables', 'github_account', 'dotfiles_stamp', 'atuin_session_files')
 
 
 def filter_result(raw, users, allow_emacs_pending=False):
     """Treat the host response as untrusted: copy only expected bools and exit code."""
     raw = raw if isinstance(raw, dict) else {}
-    result = {'architecture_matches': raw.get('architecture_matches') is True, 'users': {}}
-    passed = result['architecture_matches']
+    result = {name: raw.get(name) is True for name in ('architecture_matches', 'ssd_layout', 'shared_asdf_versions', 'eternal_terminal')}
+    passed = all(result.values())
+    result['users'] = {}
     remote_users = raw.get('users') if isinstance(raw.get('users'), dict) else {}
     for user in users:
         entry = remote_users.get(user)

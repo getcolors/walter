@@ -11,7 +11,7 @@ class VerifyLiveTest(unittest.TestCase):
     def fixture(self):
         checks = {key: True for key in VERIFY.CHECKS}
         checks['emacs'] = {'running': False, 'exit_code': 0, 'succeeded': True}
-        return {'architecture_matches': True, 'users': {'ubuntu': checks}}
+        return {'architecture_matches': True, 'ssd_layout': True, 'eternal_terminal': True, 'shared_asdf_versions': True, 'users': {'ubuntu': checks}}
 
     def test_filters_unknown_content_and_requires_true_booleans(self):
         raw = self.fixture()
@@ -44,3 +44,33 @@ class VerifyLiveTest(unittest.TestCase):
 
     def test_remote_program_compiles_without_execution(self):
         compile(VERIFY.REMOTE, '<remote verifier>', 'exec')
+
+    def test_storage_and_shared_versions_are_required(self):
+        for field in ('ssd_layout', 'shared_asdf_versions', 'eternal_terminal'):
+            raw = self.fixture()
+            raw[field] = False
+            self.assertFalse(VERIFY.filter_result(raw, ['ubuntu'])['passed'])
+
+    def test_storage_rejects_missing_and_boot_disk_mounts(self):
+        namespace = {'__name__': 'verification_test'}
+        exec(VERIFY.REMOTE.split('try:\n    print(json.dumps(verify')[0], namespace)
+        storage = namespace['storage']
+        self.assertTrue(storage({}, ''))
+        self.assertFalse(storage({'local-ssd-scratch': True}, ''))
+        mounts = '1 0 8:1 / / rw - ext4 /dev/root rw\n2 1 8:1 / /scratch rw - ext4 /dev/root rw'
+        self.assertFalse(storage({'local-ssd-scratch': True}, mounts))
+
+    def test_storage_requires_all_six_writable_ssd_bind_mounts(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        namespace = {'__name__': 'verification_test'}
+        exec(VERIFY.REMOTE.split('try:\n    print(json.dumps(verify')[0], namespace)
+        storage = namespace['storage']
+        mounts = ['1 0 8:1 / / rw - ext4 /dev/root rw',
+                  '2 1 259:1 / /scratch rw - ext4 /dev/nvme0n1 rw']
+        for number, target in enumerate(('/home', '/nix', '/tmp', '/var/tmp', '/var/lib/docker', '/var/lib/containerd'), 3):
+            mounts.append(f'{number} 1 259:1 {target} {target} rw - ext4 /dev/nvme0n1 rw')
+        with patch.object(namespace['Path'], 'stat', return_value=SimpleNamespace(st_mode=0o41777, st_uid=0, st_gid=0)):
+            self.assertTrue(storage({'local-ssd-scratch': True}, '\n'.join(mounts)))
+            self.assertFalse(storage({'local-ssd-scratch': True}, '\n'.join(mounts[:-1])))
+            self.assertFalse(storage({'local-ssd-scratch': True}, '\n'.join(mounts).replace('/home rw', '/home ro')))

@@ -53,10 +53,12 @@ CIDRs when appropriate. The shared HTTP/HTTPS firewall rule is disabled.
 Inherited network firewall rules can grant broader access.
 
 N4A uses ARM64 Ubuntu, `hyperdisk-balanced` and `GVNIC`. C4A `-lssd` shapes require
-their fixed `google-local-ssd-count`; `local-ssd-scratch: true` initializes private
-cache/build directories on disposable scratch. Persistent boot disks retain source
-checkouts, credentials and `/nix`. The helper refuses partial disk loss, foreign
-filesystems and unsafe ownership rather than formatting surviving data.
+their fixed `google-local-ssd-count`; `local-ssd-scratch: true` mounts one disposable filesystem at `/scratch` and
+bind-mounts `/home`, `/nix`, `/tmp`, `/var/tmp`, `/var/lib/docker` and
+`/var/lib/containerd` onto it. This layout requires a fresh machine. The boot disk
+retains the OS, configuration, logs and Walter metadata. Mounts precede user setup,
+temporary-file initialization and dependent services. The helper refuses foreign
+filesystems and unsafe ownership. Local SSD data is disposable.
 
 Walter uses PocketDeploy's `.colors.sqlite`, `.ssh/` authority and local lock.
 One controller at a time is supported. There is no backend bucket. Missing state
@@ -64,6 +66,25 @@ or authority requires recovery, not adoption by name. Host bootstrap keys rotate
 before application credentials are transmitted. `ssh-install` refreshes owned
 primary/seat aliases; `ssh-uninstall` removes only aliases. `ssh` resolves the live
 owned address and supports `--ssh-command` for explicit commands.
+
+`clone-orgs` discovers non-archived, non-fork repositories. `clone-repos` names
+explicit repositories, including archived repositories or forks when requested:
+
+```yaml
+clone-repos:
+  - basecamp/once
+  - pocketbase/pocketbase
+  - benbjohnson/litestream
+```
+
+The combined list is deduplicated and cloned with two workers per user into
+`~/code/<owner>/<repo>`. Existing checkouts are preserved without automatic pulls.
+
+Include `eternal-terminal` in `nix-packages` to install the client for each user
+and configure the root-owned Nix server profile and `et.service`. TCP 2022 uses
+the same source CIDRs as SSH. With ET installed on your client, connect through
+Walter's SSH aliases using `et walter-gcp`, `et walter-gcp-jack` or
+`et walter-gcp-rose`.
 
 ## Private settings
 
@@ -96,9 +117,12 @@ cloud or service accounts. The primary user remains privileged.
 ## Convergence and recovery
 
 The workflow is preflight → local keys → compute → verified host trust → remote
-Python provisioning → local aliases. Remote users run with permanently dropped
-privileges. Nix/asdf and standalone agent installers configure each home. `latest`
-asdf versions resolve once per invocation and are shared across seats. Focused
+Python machine preparation → parallel user provisioning → finalization → local
+aliases. The DAG provisions all configured users concurrently in separate
+processes with permanently dropped privileges. Nix uses one resolved nixpkgs
+revision and asdf `latest` versions resolve once per convergence. Compilation is
+limited to one job per user. Nix/asdf and standalone agent installers configure
+each home. Focused
 commands operate on the recorded owned machine. Dotfiles use a small Python
 renderer for the checkout's Ubuntu profile, preserving existing user files; the
 checkout's old launcher is never executed. Emacs package warming is asynchronous;

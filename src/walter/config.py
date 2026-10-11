@@ -25,7 +25,7 @@ DEFAULTS = {'workdir': '.colors', 'provider-compute': 'google', 'users': [],
             'google-local-ssd-count': 0, 'local-ssd-scratch': False}
 TOOLS = {'github-account', 'git-email', 'emacs-config-repo', 'emacs-config-dest',
          'nix-packages', 'agent-tools', 'login-shell', 'asdf-tools', 'corepack-packages',
-         'dotfiles-checkout', 'clone-orgs', 'atuin-username', 'seed-agent-credentials'}
+         'dotfiles-checkout', 'clone-orgs', 'clone-repos', 'atuin-username', 'seed-agent-credentials'}
 SHARED = {'state-file', 'ssh-user', 'ssh-private-key-file', 'ssh-public-key-file',
           'ssh-host-private-key-file', 'ssh-host-public-key-file', 'ssh-known-hosts-file',
           'vault-id', 'vault-state-document-id', 'vault-command', 'compute-require-existing-state'}
@@ -59,6 +59,7 @@ def validate(c):
         raise DeployError('Google zone must belong to google-region.')
     _strings(c, 'nix-packages', r'[A-Za-z0-9_+.-]+')
     _strings(c, 'clone-orgs', r'[A-Za-z0-9][A-Za-z0-9-]*')
+    _strings(c, 'clone-repos', r'[A-Za-z0-9][A-Za-z0-9-]*/(?!\.{1,2}$)[A-Za-z0-9_.-]+')
     agents = _strings(c, 'agent-tools')
     if set(agents) - {'pi', 'codex', 'claude', 'antigravity'}:
         raise DeployError('Unsupported agent tool.')
@@ -70,7 +71,7 @@ def validate(c):
     if c.get('github-account'):
         if not isinstance(c['github-account'], str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*', c['github-account']) or not c.get('git-email'):
             raise DeployError('GitHub account requires a valid account and git-email.')
-    elif any(c.get(k) for k in ('emacs-config-repo', 'clone-orgs', 'dotfiles-checkout')):
+    elif any(c.get(k) for k in ('emacs-config-repo', 'clone-orgs', 'clone-repos', 'dotfiles-checkout')):
         raise DeployError('Repository setup requires github-account and git-email.')
     for key in ('git-email', 'atuin-username'):
         if key in c and (not isinstance(c[key], str) or not c[key] or any(ord(x) < 32 for x in c[key])):
@@ -144,6 +145,7 @@ def load(path, env=None):
          'profile': c.get('profile'), 'provider-compute': 'gcp', 'workdir': c['workdir'],
          'compute-prevent-destroy': c['compute-prevent-destroy'],
          'compute-ssh-sources': c['walter-ssh-sources'], 'compute-http-sources': [],
+         'compute-ssh-ports': ['22', '2022'] if 'eternal-terminal' in c.get('nix-packages', []) else ['22'],
          '_root': str(path.parent), '_file': str(path)}
     for old, new in GOOGLE.items():
         if 'google-' + old in c:

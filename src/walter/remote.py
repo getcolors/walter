@@ -6,6 +6,7 @@ relinquishes root, including all filesystem writes and downloaded installers.
 from __future__ import annotations
 
 import base64
+from contextlib import ExitStack
 import fcntl
 import json
 import os
@@ -95,6 +96,8 @@ def write(path, text, mode=0o644, *, exclusive=False):
         Path(name).unlink(missing_ok=True)
     return True
 
+    return True
+
 
 def user_path(home, value):
     """Configured destinations stay inside the user's home."""
@@ -143,18 +146,18 @@ def profile_attributes(profile):
         attr = value.get('attrPath', '').split('.')
         if len(attr) > 2 and attr[0] in ('legacyPackages', 'packages'):
             attr = attr[2:]
-        if value.get('originalUrl') == NIXPKGS:
+        if value.get('originalUrl', '').startswith('github:NixOS/nixpkgs/'):
             result['.'.join(attr)] = name
     return result
 
 
-def nix_packages(packages, upgrade=False):
+def nix_packages(packages, upgrade=False, source=NIXPKGS):
     if not packages:
         return
     current = profile_attributes(json.loads(run(['nix', 'profile', 'list', '--json']).stdout)) if (Path.home() / '.nix-profile').exists() else {}
     missing = [p for p in packages if p not in current]
     if missing:
-        run(['nix', 'profile', 'add', '--impure', *[NIXPKGS + '#' + p for p in missing]])
+        run(['nix', 'profile', 'add', '--impure', *[source + '#' + p for p in missing]])
     if upgrade:
         current = profile_attributes(json.loads(run(['nix', 'profile', 'list', '--json']).stdout))
         names = [current[p] for p in packages if p in current]
@@ -238,6 +241,20 @@ def github(config, payload, home):
     run(['gh', 'auth', 'setup-git', '--hostname', 'github.com'])
     run(['git', 'config', '--global', 'user.name', config['github-account']])
     run(['git', 'config', '--global', 'user.email', config['git-email']])
+    # Explicit entries win over discovery (including its archived/fork filters).
+    # GitHub identities are case insensitive, including across both sources.
+    repositories = {}
+
+    def select(name, org=None):
+        if (not isinstance(name, str) or
+                not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+', name) or
+                name.split('/')[1] in ('.', '..') or
+                (org is not None and name.split('/')[0].lower() != org.lower())):
+            raise ProvisionError('invalid repository identity')
+        repositories.setdefault(name.lower(), name)
+
+    for name in config.get('clone-repos', []):
+        select(name)
     for org in config.get('clone-orgs', []):
         pages = json.loads(run(['gh', 'api', '--paginate', '--slurp',
                                f'orgs/{org}/repos?per_page=100&type=sources&sort=full_name']).stdout)
@@ -245,10 +262,15 @@ def github(config, payload, home):
             for repo in page:
                 if repo.get('archived') or repo.get('fork'):
                     continue
-                name = repo['full_name']
-                if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', name) or name.split('/')[0].lower() != org.lower() or name.split('/')[-1] in ('.', '..'):
-                    raise ProvisionError('invalid repository identity')
-                clone('https://github.com/' + name + '.git', home / 'code' / name)
+                select(repo['full_name'], org)
+    # Workers only clone independent destinations, after global Git/auth writes.
+    # Bound per-home network/disk work even when several users provision at once.
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(clone, 'https://github.com/' + name + '.git', home / 'code' / name)
+                   for name in repositories.values()]
+        for future in futures:
+            future.result()
 
 
 def shell_paths(home, config):
@@ -260,15 +282,6 @@ def shell_paths(home, config):
     write(profile, text.rstrip() + '\n' + fragment)
     write(home / '.config/fish/conf.d/walter-paths.fish',
           'fish_add_path --prepend ~/.local/bin ~/.asdf/shims ~/.nix-profile/bin /nix/var/nix/profiles/default/bin\n')
-    if config.get('local-ssd-scratch'):
-        scratch = '/scratch/' + home.name
-        values = {'NPM_CONFIG_CACHE': 'npm', 'UV_CACHE_DIR': 'uv', 'CCACHE_DIR': 'ccache', 'TMPDIR': 'tmp'}
-        write(home / '.config/fish/conf.d/walter-local-ssd.fish', ''.join(f'set -gx {key} {scratch}/{value}\n' for key, value in values.items()))
-        write(home / '.local/state/walter/scratch.sh', ''.join(f'export {key}={scratch}/{value}\n' for key, value in values.items()))
-        source = '. "$HOME/.local/state/walter/scratch.sh"'
-        text = profile.read_text()
-        if source not in text:
-            write(profile, text + source + '\n')
 
 
 def emacs_job(home, config):
@@ -355,7 +368,8 @@ def user_tasks(payload, user, resolved):
     os.environ.clear()
     os.environ.update(HOME=str(home), USER=user, LOGNAME=user, SHELL='/bin/bash', LANG='C.UTF-8',
                       PATH=f'{home}/.local/bin:{home}/.asdf/shims:{home}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/bin:/bin',
-                      NIXPKGS_ALLOW_UNFREE='1', DEBIAN_FRONTEND='noninteractive')
+                      NIXPKGS_ALLOW_UNFREE='1', DEBIAN_FRONTEND='noninteractive',
+                      MAKEFLAGS='-j1', CMAKE_BUILD_PARALLEL_LEVEL='1', CARGO_BUILD_JOBS='1')
     os.chdir(home)
     config = payload['config']
     action = payload.get('action', 'converge')
@@ -364,6 +378,26 @@ def user_tasks(payload, user, resolved):
     PROGRESS_USER = user
     if action in ('probe', 'status'):
         return {'github_authenticated': github_authenticated(config), 'nix': Path('/nix/receipt.json').exists(), 'progress': read_progress(progress)}
+    if action == 'resolve':
+        stage('nix-packages')
+        metadata = json.loads(run(['nix', 'flake', 'metadata', '--json', NIXPKGS]).stdout)
+        revision = metadata.get('locked', {}).get('rev', '')
+        if not re.fullmatch(r'[0-9a-f]{40}', revision):
+            raise ProvisionError('invalid Nix package revision')
+        nix_source = 'github:NixOS/nixpkgs/' + revision
+        if config.get('asdf-tools'):
+            nix_packages(['asdf-vm'], source=nix_source)
+        for tool in config.get('asdf-tools', []):
+            name, version = tool['name'], tool['version']
+            if version == 'latest':
+                if not (home / '.asdf/plugins' / name).is_dir():
+                    run(['asdf', 'plugin', 'add', name, *([tool['plugin']] if tool.get('plugin') else [])])
+                run(['asdf', 'plugin', 'update', name])
+                version = run(['asdf', 'latest', name]).stdout.strip()
+            if len(version) > 128 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+-]*', version) or version == 'latest':
+                raise ProvisionError('invalid resolved runtime version')
+            resolved[name] = version
+        return {'resolved_versions': resolved, 'nix_source': nix_source}
     packages = list(config.get('nix-packages', []))
     if action == 'converge':
         packages += ['ghostty.terminfo']
@@ -377,7 +411,7 @@ def user_tasks(payload, user, resolved):
             packages += [config['login-shell']]
     if action in ('converge', 'converge-nix'):
         stage('nix-packages')
-        nix_packages(list(dict.fromkeys(packages)), upgrade=action == 'converge-nix')
+        nix_packages(list(dict.fromkeys(packages)), upgrade=action == 'converge-nix', source=payload.get('nix_source', NIXPKGS))
     if action in ('converge', 'converge-asdf'):
         stage('asdf')
         asdf_tools(config, resolved, home)
@@ -426,7 +460,7 @@ def user_tasks(payload, user, resolved):
     return {'resolved_versions': resolved, 'emacs_log': log}
 
 
-def as_user(payload, user, resolved):
+def start_user(payload, user, resolved):
     """Fork rather than temporarily changing euid: shells cannot regain root."""
     read_fd, write_fd = os.pipe()
     pid = os.fork()
@@ -445,17 +479,55 @@ def as_user(payload, user, resolved):
             json.dump(value, stream)
         os._exit(0)
     os.close(write_fd)
-    with os.fdopen(read_fd) as stream:
-        result = json.load(stream)
-    os.waitpid(pid, 0)
+    return pid, read_fd
+
+
+def finish_user(worker):
+    pid, read_fd = worker
+    try:
+        with os.fdopen(read_fd) as stream:
+            result = json.load(stream)
+    finally:
+        os.waitpid(pid, 0)
     if not result['ok']:
         stage(result['stage'])
         raise ProvisionError(result['error'])
     return result['result']
 
 
+def setup_storage(payload):
+    write('/usr/local/sbin/walter-local-ssd', payload['local_ssd_source'], 0o755)
+    write('/etc/walter-scratch.json', json.dumps({'disk_count': payload['config']['google-local-ssd-count']}))
+    # Local filesystems must be ready before tmpfiles, logins or package daemons.
+    unit = ('[Unit]\nDescription=Walter Local SSD development directories\n'
+            'DefaultDependencies=no\nAfter=systemd-remount-fs.service systemd-udev-trigger.service\n'
+            'Wants=systemd-udev-trigger.service\n'
+            'Before=local-fs.target systemd-tmpfiles-setup.service ssh.service ssh.socket '
+            'docker.service containerd.service nix-daemon.service nix-daemon.socket\n'
+            '[Service]\nType=oneshot\nExecStart=/usr/local/sbin/walter-local-ssd\n'
+            'RemainAfterExit=yes\nTimeoutStartSec=120\nEnvironment=PATH=/usr/sbin:/usr/bin:/sbin:/bin\n'
+            '[Install]\nWantedBy=local-fs.target\n')
+    write('/etc/systemd/system/walter-local-ssd.service', unit)
+    for service in ('ssh.service', 'ssh.socket', 'docker.service', 'containerd.service',
+                    'nix-daemon.service', 'nix-daemon.socket'):
+        write('/etc/systemd/system/' + service + '.d/walter-storage.conf',
+              '[Unit]\nRequires=walter-local-ssd.service\nAfter=walter-local-ssd.service\n')
+    run(['systemctl', 'daemon-reload'])
+    run(['/usr/local/sbin/walter-local-ssd', '--bootstrap'])
+    run(['systemctl', 'enable', '--now', 'walter-local-ssd'])
+
+
+def as_user(payload, user, resolved):
+    return finish_user(start_user(payload, user, resolved))
+
+
 def machine(payload, users):
     config = payload['config']
+    stage('prerequisites')
+    prerequisites(config)
+    if config.get('local-ssd-scratch'):
+        stage('local-ssd')
+        setup_storage(payload)
     primary = users[0]
     primary_home = Path(pwd.getpwnam(primary).pw_dir)
     keys = (primary_home / '.ssh/authorized_keys').read_text()
@@ -502,21 +574,11 @@ def machine(payload, users):
     write('/etc/ssh/sshd_config.d/00-walter-forwarding.conf', 'ClientAliveInterval 15\nClientAliveCountMax 3\nAllowTcpForwarding yes\nGatewayPorts clientspecified\nStreamLocalBindUnlink yes\n')
     run(['/usr/sbin/sshd', '-t'])
     run(['systemctl', 'reload', 'ssh'])
-    stage('prerequisites')
-    prerequisites(config)
     stage('docker')
     if not Path('/usr/bin/dockerd').exists():
         install_script('https://get.docker.com')
     run(['systemctl', 'enable', '--now', 'docker'])
     run(['usermod', '-aG', 'docker', primary])
-    if config.get('local-ssd-scratch'):
-        stage('local-ssd')
-        write('/usr/local/sbin/walter-local-ssd', payload['local_ssd_source'], 0o755)
-        write('/etc/walter-scratch.json', json.dumps({'disk_count': config['google-local-ssd-count'], 'users': users}))
-        write('/etc/systemd/system/walter-local-ssd.service', '[Unit]\nDescription=Walter disposable Local SSD\nAfter=local-fs.target systemd-udev-trigger.service\nBefore=ssh.service ssh.socket nix-daemon.service nix-daemon.socket\n[Service]\nType=oneshot\nExecStart=/usr/local/sbin/walter-local-ssd\nRemainAfterExit=yes\nTimeoutStartSec=120\nEnvironment=PATH=/usr/sbin:/usr/bin:/sbin:/bin\n[Install]\nWantedBy=multi-user.target\n')
-        run(['systemctl', 'daemon-reload'])
-        run(['systemctl', 'enable', 'walter-local-ssd'])
-        run(['systemctl', 'restart', 'walter-local-ssd'])
     stage('nix-install')
     if not Path('/nix/receipt.json').exists():
         install_script('https://install.determinate.systems/nix', arguments=('install', '--no-confirm'))
@@ -533,14 +595,50 @@ def prerequisites(config):
     run(['apt-get', 'install', '-y', '--no-install-recommends', *packages])
 
 
+def finalize_shells(config, users):
+    if not config.get('login-shell'):
+        return
+    for user in users:
+        shell = str(Path(pwd.getpwnam(user).pw_dir) / '.nix-profile/bin' / config['login-shell'])
+        shells = Path('/etc/shells').read_text().splitlines()
+        if shell not in shells:
+            write('/etc/shells', '\n'.join([*shells, shell]) + '\n')
+        run(['chsh', '-s', shell, user])
+
+
 def main(payload):
     global PROGRESS_PATH, PROGRESS_USER
     users = [payload.get('primary_user', 'ubuntu'), *payload['config'].get('users', [])]
     if len(set(users)) != len(users) or any(not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', user) for user in users):
         raise ProvisionError('invalid login names')
     action = payload.get('action', 'converge')
-    if action not in ('converge', 'converge-nix', 'converge-asdf', 'probe', 'status'):
+    if action not in ('converge', 'converge-nix', 'converge-asdf', 'probe', 'status', 'prepare', 'provision-user', 'finalize'):
         raise ProvisionError('unsupported remote action')
+    if action == 'provision-user':
+        user = payload.get('target_user')
+        if user not in users:
+            raise ProvisionError('invalid target user')
+        result = as_user({**payload, 'action': 'converge'}, user, payload['resolved_versions'])
+        return {'ok': True, 'users': {user: result}}
+    if action == 'prepare':
+        PROGRESS_PATH = Path('/var/lib/walter/progress.json')
+        PROGRESS_USER = None
+        stage('machine')
+        machine(payload, users)
+        result = as_user({**payload, 'action': 'resolve'}, users[0], {})
+        if 'eternal-terminal' in payload['config'].get('nix-packages', []):
+            namespace = {'__name__': 'walter_eternal_terminal'}
+            exec(payload['eternal_terminal_source'], namespace)
+            namespace['install'](run, write, result['nix_source'],
+                                 local_ssd=payload['config'].get('local-ssd-scratch', False))
+        stage('users')
+        return {'ok': True, **result}
+    if action == 'finalize':
+        finalize_shells(payload['config'], users)
+        PROGRESS_PATH = Path('/var/lib/walter/progress.json')
+        PROGRESS_USER = None
+        stage('complete')
+        return {'ok': True}
     PROGRESS_PATH = None if action in ('probe', 'status') else Path('/var/lib/walter/progress.json')
     PROGRESS_USER = None
     if action == 'converge':
@@ -548,6 +646,25 @@ def main(payload):
         machine(payload, users)
     elif action == 'converge-asdf':
         prerequisites(payload['config'])
+    if action in ('probe', 'status'):
+        results, workers = {}, {}
+        for user in users:
+            try:
+                pwd.getpwnam(user)
+            except KeyError:
+                results[user] = {'github_authenticated': False, 'exists': False}
+                continue
+            workers[user] = start_user(payload, user, {})
+        failure = None
+        for user, worker in workers.items():
+            try:
+                results[user] = finish_user(worker)
+            except Exception as error:
+                failure = error
+        if failure is not None:
+            raise failure
+        return {'ok': True, 'users': results, 'resolved_versions': {},
+                'progress': read_progress(Path('/var/lib/walter/progress.json'))}
     results, resolved = {}, {}
     for user in users:
         try:
@@ -563,12 +680,8 @@ def main(payload):
         result = as_user(payload, user, resolved)
         results[user] = result
         resolved.update(result.get('resolved_versions', {}))
-        if action == 'converge' and payload['config'].get('login-shell'):
-            shell = str(Path(pwd.getpwnam(user).pw_dir) / '.nix-profile/bin' / payload['config']['login-shell'])
-            shells = Path('/etc/shells').read_text().splitlines()
-            if shell not in shells:
-                write('/etc/shells', '\n'.join([*shells, shell]) + '\n')
-            run(['chsh', '-s', shell, user])
+    if action == 'converge':
+        finalize_shells(payload['config'], users)
     if action not in ('probe', 'status'):
         PROGRESS_USER = None
         stage('complete')
@@ -584,8 +697,16 @@ if __name__ == '__main__':
         if request.get('action') in ('probe', 'status'):
             response = main(request)
         else:
-            with open('/run/lock/walter-provision.lock', 'w') as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            target = request.get('target_user')
+            if request.get('action') == 'provision-user' and (not isinstance(target, str) or not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', target)):
+                raise ProvisionError('invalid target user')
+            with ExitStack() as locks:
+                machine_lock = locks.enter_context(open('/run/lock/walter-provision.lock', 'w'))
+                user_action = request.get('action') == 'provision-user'
+                fcntl.flock(machine_lock, (fcntl.LOCK_SH if user_action else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+                if user_action:
+                    user_lock = locks.enter_context(open('/run/lock/walter-user-' + target + '.lock', 'w'))
+                    fcntl.flock(user_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 response = main(request)
     except Exception as error:
         response = {'ok': False, 'stage': STAGE, 'error': str(error) if isinstance(error, ProvisionError) else 'remote provisioning failed'}

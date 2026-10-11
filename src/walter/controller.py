@@ -1,7 +1,9 @@
 """Walter orchestration; cloud state, authority and recovery belong to PocketDeploy."""
 import asyncio
 import base64
+import copy
 import json
+import inspect
 import os
 from pathlib import Path
 import stat
@@ -22,8 +24,10 @@ def source(name):
 def remote(host, connection, config, action, **private):
     payload = {'config': config, 'primary_user': connection.get('user', 'ubuntu'),
                'action': action, **private}
-    if action == 'converge':
+    if action in ('converge', 'prepare', 'provision-user'):
         payload['dotfiles_source'] = source('dotfiles')
+        if action == 'prepare' and 'eternal-terminal' in config.get('nix-packages', []):
+            payload['eternal_terminal_source'] = source('eternal_terminal')
         if config.get('local-ssd-scratch'):
             payload['local_ssd_source'] = source('local_ssd')
     result = host.run_python(connection, source('remote'), payload, timeout=14400)
@@ -124,24 +128,66 @@ async def converge(config, deployment, state, cloud, host, operation, reporter):
     def trust():
         host.rotate_key(results['connection'], operation)
 
-    def provision():
-        results['provisioning'] = complete_remote(state, operation, {**deployment, '_walter': config},
-                                                host, results['connection'], 'converge', **private)
+    users = [deployment.get('ssh-user', 'ubuntu'), *config['users']]
+
+    async def prepare():
+        # Freeze verified SSH arguments on the controller thread: Host._argv
+        # reads SQLite trust and rewrites known_hosts, neither is worker-safe.
+        worker_host = copy.copy(host)
+        argv = host._argv(results['connection'])
+        worker_host._argv = lambda connection: list(argv)
+        results['worker_host'] = worker_host
+        evidence = {'instance_id': results['connection']['instance_id'], 'desired_hash': deployment['_desired_hash']}
+        results['intent'] = state.intent(operation, 'converge', evidence)
+        results['resolved'] = await asyncio.to_thread(remote, results['worker_host'], results['connection'], config, 'prepare')
+        results['users'] = {}
+
+    def user_step(user):
+        async def provision_user():
+            result = await asyncio.to_thread(remote, results['worker_host'], results['connection'], config,
+                                            'provision-user', target_user=user,
+                                            resolved_versions=results['resolved']['resolved_versions'],
+                                            nix_source=results['resolved']['nix_source'], **private)
+            results['users'][user] = result['users'][user]
+        return provision_user
+
+    async def finalize():
+        await asyncio.to_thread(remote, results['worker_host'], results['connection'], config, 'finalize')
+        summary = {'verified': True, 'users': users}
+        state.complete(results['intent'], summary)
+        evidence = {'instance_id': results['connection']['instance_id'], 'desired_hash': deployment['_desired_hash']}
+        for row in state.db.execute("SELECT id,payload FROM steps WHERE step=? AND status='pending'", ('converge',)).fetchall():
+            if json.loads(row['payload']) == evidence:
+                state.complete(row['id'], summary)
+        results['provisioning'] = {'ok': True, 'users': results['users'],
+                                   'resolved_versions': results['resolved']['resolved_versions']}
 
     def local():
         aliases(config, deployment, host, results['connection'])
 
     steps = {'preflight': [preflight, 'keys'], 'keys': [keys, 'compute'],
-             'compute': [compute, 'trust'], 'trust': [trust, 'provision'],
-             'provision': [provision, 'aliases'], 'aliases': [local]}
+             'compute': [compute, 'trust'], 'trust': [trust, 'prepare'],
+             'prepare': [prepare, *['user-' + user for user in users]],
+             'finalize': [finalize, 'aliases'], 'aliases': [local]}
+    steps.update({'user-' + user: [user_step(user), 'finalize'] for user in users})
 
     def wire(name, _opts):
         fn, *next_steps = steps[name]
-        def safe(opts):
+        async def safe(opts):
             nonlocal failure
             try:
-                with reporter.stage(name):
-                    fn()
+                # Reporter.stage keeps a mutable nesting stack; parallel
+                # branches need independent stacks but retain its output lock.
+                stage_reporter = copy.copy(reporter) if name.startswith('user-') else reporter
+                if stage_reporter is not reporter:
+                    stage_reporter._active_spans = []
+                    stage_reporter.current_stage = None
+                    stage_reporter.failed_stage = None
+                with stage_reporter.stage(name):
+                    if inspect.iscoroutinefunction(fn):
+                        await fn()
+                    else:
+                        fn()
                 return dict(opts)
             except DeployError as error:
                 failure = error
