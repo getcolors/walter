@@ -37,6 +37,7 @@ emacs-config-repo: https://github.com/amiorin/.emacs.d.git
 emacs-config-dest: ~/.config/neoemacs
 
 # --- Tooling ---------------------------------------------------------------
+go-version: 1.27.2
 nix-packages:
   - asdf-vm
   - ripgrep

@@ -74,3 +74,26 @@ class VerifyLiveTest(unittest.TestCase):
             self.assertTrue(storage({'local-ssd-scratch': True}, '\n'.join(mounts)))
             self.assertFalse(storage({'local-ssd-scratch': True}, '\n'.join(mounts[:-1])))
             self.assertFalse(storage({'local-ssd-scratch': True}, '\n'.join(mounts).replace('/home rw', '/home ro')))
+
+
+def test_go_verification_requires_each_shell_and_compiles_native_probe():
+    from unittest.mock import patch
+    from types import SimpleNamespace
+    namespace = {'__name__': 'verification_test'}
+    exec(VERIFY.REMOTE.split('try:\n    print(json.dumps(verify')[0], namespace)
+    commands = []
+    def command(user, argv):
+        commands.append(argv)
+        if argv[0] == '/usr/bin/python3':
+            compile(argv[2], '<native go probe>', 'exec')
+            return 0, ''
+        return 0, 'go version go1.27.2 linux/arm64\n'
+    namespace['command'] = command
+    with patch.object(namespace['platform'], 'machine', return_value='aarch64'), patch.object(namespace['Path'], 'stat', return_value=SimpleNamespace(st_uid=0, st_mode=0o100755)):
+        checks = namespace['go_checks']('seat', Path('/home/seat'), {'go-version': '1.27.2'})
+    assert all(checks.values())
+    assert len(commands) == 4
+    namespace['command'] = lambda *args: (0, 'go version go1.26.0 linux/arm64')
+    with patch.object(namespace['platform'], 'machine', return_value='aarch64'):
+        checks = namespace['go_checks']('seat', Path('/home/seat'), {'go-version': '1.27.2'})
+    assert not checks['go_direct'] and not checks['go_bash'] and not checks['go_fish']

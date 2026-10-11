@@ -28,6 +28,13 @@ class ConfigTest(unittest.TestCase):
         _, ordinary = self.load({'users': ['seat']})
         self.assertEqual(ordinary['_desired_hash'], d['_desired_hash'])
 
+    def test_go_version_requires_pinned_release(self):
+        c, _ = self.load()
+        self.assertEqual('1.27.2', c['go-version'])
+        for value in ['latest', '1.27.3', 1272, None, ['1.27.2']]:
+            with self.subTest(value=value), self.assertRaises(DeployError):
+                self.load({'go-version': value})
+
     def test_rejects_retired_configuration(self):
         for values, env in [({'compute-api-version': 2}, {}), ({'provider-backend': 'r2'}, {})]:
             with self.assertRaises(DeployError):

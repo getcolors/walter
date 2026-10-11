@@ -7,6 +7,9 @@ import inspect
 import os
 from pathlib import Path
 import stat
+import time
+import uuid
+from graphlib import TopologicalSorter
 
 from blue.workflow import workflow, run as run_workflow
 from pocketdeploy.common import DeployError, run
@@ -24,17 +27,19 @@ def source(name):
 def remote(host, connection, config, action, **private):
     payload = {'config': config, 'primary_user': connection.get('user', 'ubuntu'),
                'action': action, **private}
-    if action in ('converge', 'prepare', 'provision-user'):
+    if action in ('converge', 'bootstrap', 'user-finish'):
         payload['dotfiles_source'] = source('dotfiles')
         if config.get('local-ssd-scratch'):
             payload['local_ssd_source'] = source('local_ssd')
-    if action in ('prepare', 'converge-nix') and 'eternal-terminal' in config.get('nix-packages', []):
+    if action in ('install-et', 'converge-nix') and 'eternal-terminal' in config.get('nix-packages', []):
         payload['eternal_terminal_source'] = source('eternal_terminal')
+    if action in ('converge', 'install-go'):
+        payload['go_install_source'] = source('go_install')
     result = host.run_python(connection, source('remote'), payload, timeout=14400)
     if not isinstance(result, dict) or result.get('ok') is not True:
         # Remote text is untrusted, including exceptions from configured tools.
         stage = result.get('stage') if isinstance(result, dict) else None
-        safe = stage if stage in {'validation', 'local-ssd', 'machine', 'prerequisites', 'docker', 'nix-install', 'nix-packages', 'asdf', 'shell-paths', 'agent-tools', 'credentials', 'github', 'dotfiles', 'atuin', 'emacs'} else 'provisioning'
+        safe = stage if stage in {'validation', 'local-ssd', 'machine', 'prerequisites', 'go', 'docker', 'nix-install', 'nix-packages', 'asdf', 'shell-paths', 'agent-tools', 'credentials', 'github', 'dotfiles', 'atuin', 'emacs'} else 'provisioning'
         raise DeployError('Remote ' + safe + ' failed; private output suppressed.', stage=safe)
     return result
 
@@ -130,24 +135,100 @@ async def converge(config, deployment, state, cloud, host, operation, reporter):
 
     users = [deployment.get('ssh-user', 'ubuntu'), *config['users']]
 
-    async def prepare():
+    async def provision():
         results['worker_host'] = host.prepare_transport(results['connection'])
         evidence = {'instance_id': results['connection']['instance_id'], 'desired_hash': deployment['_desired_hash']}
         results['intent'] = state.intent(operation, 'converge', evidence)
-        results['resolved'] = await asyncio.to_thread(remote, results['worker_host'], results['connection'], config, 'prepare')
-        results['users'] = {}
+        results['run_token'] = uuid.uuid4().hex
+        results['users'], results['timings'] = {}, {}
+        results['resolved'] = {'resolved_versions': {}}
+        # Blue handles the outer lifecycle. Its wave-based fork scheduler waits
+        # for all siblings, so use a dependency sorter for remote readiness:
+        # Docker must not hold back Nix consumers after Nix has completed.
+        graph = {'bootstrap': set(), 'install-go': {'bootstrap'},
+                 'install-docker': {'bootstrap'}, 'install-nix': {'bootstrap'},
+                 'resolve-nix': {'install-nix'}, 'install-et': {'resolve-nix'},
+                 'resolve-asdf': {'user-packages-' + users[0]}}
+        actions = {name: (name, None) for name in graph}
+        for user in users:
+            packages = 'user-packages-' + user
+            runtime = 'user-runtime-' + user
+            github = 'user-github-' + user
+            finish = 'user-finish-' + user
+            graph[packages] = {'resolve-nix'}
+            graph[runtime] = {packages, 'resolve-asdf'}
+            graph[github] = {packages}
+            graph[finish] = {runtime, github, 'install-go'}
+            for name, action in ((packages, 'user-packages'), (runtime, 'user-runtime'),
+                                 (github, 'user-github'), (finish, 'user-finish')):
+                actions[name] = (action, user)
+        actions['resolve-nix'] = ('resolve-nix', users[0])
+        actions['resolve-asdf'] = ('resolve-asdf', users[0])
+        sorter = TopologicalSorter(graph)
+        sorter.prepare()
+        active, ready = {}, []
+        error = None
+        origin = time.monotonic()
 
-    def user_step(user):
-        async def provision_user():
-            result = await asyncio.to_thread(remote, results['worker_host'], results['connection'], config,
-                                            'provision-user', target_user=user,
-                                            resolved_versions=results['resolved']['resolved_versions'],
-                                            nix_source=results['resolved']['nix_source'], **private)
-            results['users'][user] = result['users'][user]
-        return provision_user
+        async def execute(name):
+            action, user = actions[name]
+            arguments = {'run_token': results['run_token']}
+            if user:
+                arguments['target_user'] = user
+            if action not in ('bootstrap', 'install-go', 'install-docker', 'install-nix', 'resolve-nix'):
+                arguments['nix_source'] = results['resolved']['nix_source']
+            if action in ('user-runtime', 'user-finish'):
+                arguments['resolved_versions'] = results['resolved']['resolved_versions']
+            if action in ('user-github', 'user-finish'):
+                arguments.update(private)
+            branch_reporter = copy.copy(reporter)
+            branch_reporter._active_spans = []
+            branch_reporter.current_stage = None
+            branch_reporter.failed_stage = None
+            start = time.monotonic() - origin
+            try:
+                with branch_reporter.stage(name):
+                    value = await asyncio.to_thread(remote, results['worker_host'], results['connection'], config, action, **arguments)
+                if action == 'resolve-nix':
+                    results['resolved']['nix_source'] = value['nix_source']
+                elif action == 'resolve-asdf':
+                    results['resolved']['resolved_versions'] = value['resolved_versions']
+                elif action == 'user-finish':
+                    results['users'][user] = value['users'][user]
+                return value
+            finally:
+                results['timings'][name] = {'started_seconds': round(start, 3),
+                                           'finished_seconds': round(time.monotonic() - origin, 3)}
+
+        try:
+            while sorter.is_active():
+                ready.extend(sorter.get_ready())
+                while ready and len(active) < 6 and error is None:
+                    name = ready.pop(0)
+                    active[asyncio.create_task(execute(name))] = name
+                if not active:
+                    break
+                done, _ = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    name = active.pop(task)
+                    try:
+                        task.result()
+                    except Exception as failure:
+                        error = error or failure
+                    else:
+                        sorter.done(name)
+                if error is not None:
+                    # Never cancel an SSH worker while its process still mutates
+                    # the host. Drain every started task; schedule no new work.
+                    await asyncio.gather(*active, return_exceptions=True)
+                    active.clear()
+                    raise error
+        finally:
+            if active:
+                await asyncio.shield(asyncio.gather(*active, return_exceptions=True))
 
     async def finalize():
-        await asyncio.to_thread(remote, results['worker_host'], results['connection'], config, 'finalize')
+        await asyncio.to_thread(remote, results['worker_host'], results['connection'], config, 'finalize', run_token=results['run_token'])
         summary = {'verified': True, 'users': users}
         state.complete(results['intent'], summary)
         evidence = {'instance_id': results['connection']['instance_id'], 'desired_hash': deployment['_desired_hash']}
@@ -155,30 +236,23 @@ async def converge(config, deployment, state, cloud, host, operation, reporter):
             if json.loads(row['payload']) == evidence:
                 state.complete(row['id'], summary)
         results['provisioning'] = {'ok': True, 'users': results['users'],
-                                   'resolved_versions': results['resolved']['resolved_versions']}
+                                   'resolved_versions': results['resolved']['resolved_versions'],
+                                   'task_timings': results['timings']}
 
     def local():
         aliases(config, deployment, host, results['connection'])
 
     steps = {'preflight': [preflight, 'keys'], 'keys': [keys, 'compute'],
-             'compute': [compute, 'trust'], 'trust': [trust, 'prepare'],
-             'prepare': [prepare, *['user-' + user for user in users]],
+             'compute': [compute, 'trust'], 'trust': [trust, 'provision'],
+             'provision': [provision, 'finalize'],
              'finalize': [finalize, 'aliases'], 'aliases': [local]}
-    steps.update({'user-' + user: [user_step(user), 'finalize'] for user in users})
 
     def wire(name, _opts):
         fn, *next_steps = steps[name]
         async def safe(opts):
             nonlocal failure
             try:
-                # Reporter.stage keeps a mutable nesting stack; parallel
-                # branches need independent stacks but retain its output lock.
-                stage_reporter = copy.copy(reporter) if name.startswith('user-') else reporter
-                if stage_reporter is not reporter:
-                    stage_reporter._active_spans = []
-                    stage_reporter.current_stage = None
-                    stage_reporter.failed_stage = None
-                with stage_reporter.stage(name):
+                with reporter.stage(name):
                     if inspect.iscoroutinefunction(fn):
                         await fn()
                     else:

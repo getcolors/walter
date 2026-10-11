@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 from blue.cli import load_yaml, read_pars
 from pocketdeploy import config as deployment
 from pocketdeploy.common import DeployError
+from .go_install import CHECKSUMS
 
 GOOGLE = {
     'project': 'project', 'zone': 'zone', 'network': 'network', 'subnet': 'subnet',
@@ -20,7 +21,7 @@ DEFAULTS = {'workdir': '.colors', 'provider-compute': 'google', 'users': [],
             'compute-prevent-destroy': True, 'walter-ssh-sources': ['0.0.0.0/0'],
             'google-auth': 'application-default', 'google-network': 'default',
             'google-subnet': 'default', 'google-nic-type': 'GVNIC',
-            'google-local-ssd-count': 0, 'local-ssd-scratch': False}
+            'google-local-ssd-count': 0, 'local-ssd-scratch': False, 'go-version': '1.27.2'}
 TOOLS = {'github-account', 'git-email', 'emacs-config-repo', 'emacs-config-dest',
          'nix-packages', 'agent-tools', 'login-shell', 'asdf-tools', 'corepack-packages',
          'dotfiles-checkout', 'clone-orgs', 'clone-repos', 'atuin-username', 'seed-agent-credentials'}
@@ -42,6 +43,8 @@ def _strings(c, key, pattern=None):
 
 
 def validate(c):
+    if not isinstance(c['go-version'], str) or c['go-version'] not in CHECKSUMS:
+        raise DeployError('go-version requires a release with pinned checksums.')
     if c['provider-compute'] != 'google':
         raise DeployError('Walter supports Google Cloud only.')
     users = _strings(c, 'users', USER.pattern)

@@ -103,6 +103,40 @@ def eternal_terminal(config):
         return False
 
 
+def go_checks(user, home, config):
+    version = config.get('go-version', '1.27.2')
+    arch = {'aarch64': 'arm64', 'arm64': 'arm64', 'x86_64': 'amd64', 'amd64': 'amd64'}.get(platform.machine())
+    expected = 'go version go' + version + ' linux/' + str(arch)
+    checks = {}
+    for name, argv in (
+        ('go_direct', ['go', 'version']),
+        ('go_bash', ['/bin/bash', '-lc', 'go version']),
+        ('go_fish', [str(home / '.nix-profile/bin/fish'), '-lc', 'go version']),
+    ):
+        code, text = command(user, argv)
+        checks[name] = code == 0 and text.strip() == expected
+    try:
+        checks['go_shared_permissions'] = all(
+            path.stat().st_uid == 0 and not path.stat().st_mode & 0o022
+            and path.stat().st_mode & 0o005 == 0o005
+            for path in (Path('/usr/local/go'), Path('/usr/local/go/bin'), Path('/usr/local/go/bin/go')))
+    except OSError:
+        checks['go_shared_permissions'] = False
+    # Run a real native build as the seat; all build output is temporary.
+    script = """import os, pathlib, subprocess, tempfile
+with tempfile.TemporaryDirectory(prefix='walter-go-verify-') as directory:
+    root = pathlib.Path(directory)
+    (root / 'main.go').write_text('package main\\nfunc main() { println("walter-go-ok") }\\n')
+    env = dict(os.environ, GOTOOLCHAIN='local', GOCACHE=str(root / 'cache'), CGO_ENABLED='0')
+    subprocess.run(['go', 'build', '-o', str(root / 'hello'), str(root / 'main.go')], env=env, check=True, capture_output=True)
+    result = subprocess.run([str(root / 'hello')], capture_output=True, text=True, check=True)
+    assert result.stderr.strip() == 'walter-go-ok'
+"""
+    code, _ = command(user, ['/usr/bin/python3', '-c', script])
+    checks['go_native_build'] = code == 0
+    return checks
+
+
 def verify(payload):
     config, primary = payload['config'], payload['primary']
     result = {'architecture_matches': platform.machine() == payload['architecture'], 'ssd_layout': storage(config), 'eternal_terminal': eternal_terminal(config), 'shared_asdf_versions': True, 'users': {}}
@@ -128,6 +162,7 @@ def verify(payload):
                             attrs.add('.'.join(attr))
                 except Exception:
                     pass
+            checks.update(go_checks(user, home, config))
             checks['nix_packages'] = code == 0 and set(config.get('nix-packages', [])).issubset(attrs)
             selected = {}
             versions_file = home / '.tool-versions'
@@ -173,6 +208,7 @@ except Exception:
 '''
 
 CHECKS = ('private_home', 'unprivileged_seat', 'authorized_key', 'nix_packages',
+          'go_direct', 'go_bash', 'go_fish', 'go_shared_permissions', 'go_native_build',
           'asdf_runtimes', 'explicit_repositories', 'agent_executables', 'github_account', 'dotfiles_stamp', 'atuin_session_files')
 
 

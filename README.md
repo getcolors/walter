@@ -89,6 +89,17 @@ the same source CIDRs as SSH. With ET installed on your client, connect through
 Walter's SSH aliases using `et walter-gcp`, `et walter-gcp-jack` or
 `et walter-gcp-rose`.
 
+## Shared Go
+
+`go-version: 1.27.2` installs the official checksum-pinned Go distribution once
+at `/usr/local/go`. The remote architecture selects Linux ARM64 or AMD64;
+unsupported architectures fail before replacing the existing installation.
+Downloads are verified and extracted into a fresh staging tree before replacement.
+The compiler is root-owned and readable/executable by all users. Bash and Fish
+receive Go paths, with `go` and `gofmt` also linked into `/usr/local/bin`.
+Each user retains their own `~/go/bin`, module cache and build cache.
+Only releases with checksums pinned in Walter are accepted.
+
 ## Private settings
 
 Every variable assigned in `.envrc.private` must start with **`COLORS_PAR_`**.
@@ -119,17 +130,30 @@ cloud or service accounts. The primary user remains privileged.
 
 ## Convergence and recovery
 
-The workflow is preflight → local keys → compute → verified host trust → remote
-Python machine preparation → parallel user provisioning → finalization → local
-aliases. The DAG provisions all configured users concurrently in separate
-processes with permanently dropped privileges. Nix uses one resolved nixpkgs `nixos-26.05`
-revision and asdf `latest` versions resolve once per convergence. Compilation is
-limited to one job per user. Nix/asdf and standalone agent installers configure
-each home. Focused
-commands operate on the recorded owned machine. Dotfiles use a small Python
-renderer for the checkout's Ubuntu profile, preserving existing user files; the
-checkout's old launcher is never executed. Emacs package warming is asynchronous;
-inspect `~/.local/state/walter/emacs-packages.log` for completion.
+The workflow is preflight → local keys → compute → verified host trust →
+bootstrap → dependency-driven software provisioning → finalization → local aliases.
+Bootstrap prepares prerequisites, scratch storage and private accounts. Go, Docker
+and Nix then install concurrently. Nix consumers start as soon as Nix and its
+pinned revision are ready; Docker and Eternal Terminal do not block user setup.
+Each user's package transaction precedes independent Git and runtime branches.
+The primary user's asdf installation resolves `latest` versions once for all users.
+Shell configuration, agent installers, credentials, dotfiles, Atuin and Emacs
+launching follow the user's Git/runtime branches and shared Go verification.
+
+At most six remote tasks run at once, with two clone workers per active Git task.
+Compilation remains limited to one job per user. User tasks run in separate
+processes with permanently dropped privileges. Machine/resource locks and a
+convergence token reject conflicting or delayed tasks; focused convergence commands
+retain exclusive machine access. Failure stops new tasks and drains running work
+before returning. Progress is recorded per task; successful convergence includes
+relative start/finish timings under `provisioning.task_timings`.
+
+Nix uses one resolved nixpkgs `nixos-26.05` revision. Nix/asdf and standalone
+agent installers configure each home. Focused commands operate on the recorded
+owned machine. Dotfiles use a small Python renderer for the checkout's Ubuntu
+profile, preserving existing user files; the checkout's old launcher is never
+executed. Emacs package warming is asynchronous; inspect
+`~/.local/state/walter/emacs-packages.log` for completion.
 
 `vault-id` selects a dedicated vault; `vault-command` selects its installed CLI.
 The user must authenticate and unlock it. `vault-save` is an explicit checkpoint

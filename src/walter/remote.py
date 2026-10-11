@@ -32,7 +32,7 @@ class ProvisionError(Exception):
     """Only fixed, credential-free operation names may appear in this error."""
 
 
-STAGES = frozenset(('validation', 'machine', 'users', 'prerequisites', 'docker', 'local-ssd', 'nix-install', 'nix-packages', 'asdf', 'shell-paths', 'agent-tools', 'credentials', 'github', 'dotfiles', 'atuin', 'emacs', 'complete'))
+STAGES = frozenset(('validation', 'machine', 'users', 'prerequisites', 'go', 'docker', 'local-ssd', 'nix-install', 'nix-packages', 'asdf', 'shell-paths', 'agent-tools', 'credentials', 'github', 'dotfiles', 'atuin', 'emacs', 'complete'))
 STAGE = 'validation'
 PROGRESS_PATH = None
 PROGRESS_USER = None
@@ -57,6 +57,12 @@ def read_progress(path):
         return {'stage': value['stage'], 'user': user}
     except (OSError, ValueError, TypeError, AttributeError):
         return None
+
+
+def task_progress(directory):
+    return {path.stem.removeprefix('progress-'): value
+            for path in sorted(directory.glob('progress-*.json'))
+            if (value := read_progress(path)) is not None}
 
 
 def run(args, *, data=None, check=True, timeout=3600):
@@ -94,8 +100,6 @@ def write(path, text, mode=0o644, *, exclusive=False):
         os.replace(name, path)
     finally:
         Path(name).unlink(missing_ok=True)
-    return True
-
     return True
 
 
@@ -284,14 +288,14 @@ def github(config, payload, home):
 
 
 def shell_paths(home, config):
-    paths = '$HOME/.local/bin:$HOME/.asdf/shims:$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin'
+    paths = '/usr/local/go/bin:$HOME/go/bin:$HOME/.local/bin:$HOME/.asdf/shims:$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin'
     fragment = '# BEGIN walter paths\nexport PATH="' + paths + ':$PATH"\n# END walter paths\n'
     profile = home / '.profile'
     text = profile.read_text() if profile.exists() else ''
     text = re.sub(r'# BEGIN walter paths\n.*?# END walter paths\n?', '', text, flags=re.S)
     write(profile, text.rstrip() + '\n' + fragment)
     write(home / '.config/fish/conf.d/walter-paths.fish',
-          'fish_add_path --prepend ~/.local/bin ~/.asdf/shims ~/.nix-profile/bin /nix/var/nix/profiles/default/bin\n')
+          'fish_add_path --prepend /usr/local/go/bin ~/go/bin ~/.local/bin ~/.asdf/shims ~/.nix-profile/bin /nix/var/nix/profiles/default/bin\n')
 
 
 def emacs_job(home, config):
@@ -377,27 +381,29 @@ def user_tasks(payload, user, resolved):
     home = Path(pwd.getpwnam(user).pw_dir)
     os.environ.clear()
     os.environ.update(HOME=str(home), USER=user, LOGNAME=user, SHELL='/bin/bash', LANG='C.UTF-8',
-                      PATH=f'{home}/.local/bin:{home}/.asdf/shims:{home}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/bin:/bin',
+                      PATH=f'/usr/local/go/bin:{home}/go/bin:{home}/.local/bin:{home}/.asdf/shims:{home}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/bin:/bin',
                       NIXPKGS_ALLOW_UNFREE='1', DEBIAN_FRONTEND='noninteractive',
                       MAKEFLAGS='-j1', CMAKE_BUILD_PARALLEL_LEVEL='1', CARGO_BUILD_JOBS='1')
     os.chdir(home)
     config = payload['config']
     action = payload.get('action', 'converge')
-    progress = home / '.local/state/walter/progress.json'
+    progress = home / '.local/state/walter' / ('progress-' + action + '.json')
     PROGRESS_PATH = None if action in ('probe', 'status') else progress
     PROGRESS_USER = user
     if action in ('probe', 'status'):
-        return {'github_authenticated': github_authenticated(config), 'nix': Path('/nix/receipt.json').exists(), 'progress': read_progress(progress)}
-    if action in ('resolve', 'resolve-nix'):
+        return {'github_authenticated': github_authenticated(config), 'nix': Path('/nix/receipt.json').exists(), 'progress': read_progress(home / '.local/state/walter/progress-user-finish.json'), 'tasks': task_progress(home / '.local/state/walter')}
+    if action in ('resolve', 'resolve-nix', 'resolve-asdf'):
         stage('nix-packages')
-        metadata = json.loads(run(['nix', 'flake', 'metadata', '--json', NIXPKGS]).stdout)
-        revision = metadata.get('locked', {}).get('rev', '')
-        if not re.fullmatch(r'[0-9a-f]{40}', revision):
-            raise ProvisionError('invalid Nix package revision')
-        nix_source = 'github:NixOS/nixpkgs/' + revision
+        nix_source = payload.get('nix_source', NIXPKGS)
+        if action != 'resolve-asdf':
+            metadata = json.loads(run(['nix', 'flake', 'metadata', '--json', NIXPKGS]).stdout)
+            revision = metadata.get('locked', {}).get('rev', '')
+            if not re.fullmatch(r'[0-9a-f]{40}', revision):
+                raise ProvisionError('invalid Nix package revision')
+            nix_source = 'github:NixOS/nixpkgs/' + revision
         if action == 'resolve-nix':
             return {'resolved_versions': {}, 'nix_source': nix_source}
-        if config.get('asdf-tools'):
+        if action == 'resolve' and config.get('asdf-tools'):
             nix_packages(['asdf-vm'], source=nix_source)
         for tool in config.get('asdf-tools', []):
             name, version = tool['name'], tool['version']
@@ -411,7 +417,7 @@ def user_tasks(payload, user, resolved):
             resolved[name] = version
         return {'resolved_versions': resolved, 'nix_source': nix_source}
     packages = list(config.get('nix-packages', []))
-    if action == 'converge':
+    if action in ('converge', 'user-packages'):
         packages += ['ghostty.terminfo']
         if config.get('github-account'):
             packages += ['gh']
@@ -421,13 +427,16 @@ def user_tasks(payload, user, resolved):
             packages += ['asdf-vm']
         if config.get('login-shell'):
             packages += [config['login-shell']]
-    if action in ('converge', 'converge-nix'):
+    if action in ('converge', 'converge-nix', 'user-packages'):
         stage('nix-packages')
         nix_packages(list(dict.fromkeys(packages)), upgrade=action == 'converge-nix', source=payload.get('nix_source', NIXPKGS))
-    if action in ('converge', 'converge-asdf'):
+    if action in ('converge', 'converge-asdf', 'user-runtime'):
         stage('asdf')
         asdf_tools(config, resolved, home)
-    if action != 'converge':
+    if action == 'user-github':
+        stage('github')
+        github(config, payload, home)
+    if action not in ('converge', 'user-finish'):
         stage('complete')
         return {'resolved_versions': resolved}
     stage('shell-paths')
@@ -449,8 +458,9 @@ def user_tasks(payload, user, resolved):
         run([str(home / '.local/bin' / binary), '--version'])
     stage('credentials')
     seed_credentials(home, payload.get('credentials', {}))
-    stage('github')
-    github(config, payload, home)
+    if action == 'converge':
+        stage('github')
+        github(config, payload, home)
     stage('dotfiles')
     if config.get('dotfiles-checkout'):
         namespace = {'__name__': 'walter_dotfiles'}
@@ -532,7 +542,7 @@ def as_user(payload, user, resolved):
     return finish_user(start_user(payload, user, resolved))
 
 
-def machine(payload, users):
+def bootstrap(payload, users):
     config = payload['config']
     stage('prerequisites')
     prerequisites(config)
@@ -585,13 +595,29 @@ def machine(payload, users):
     write('/etc/ssh/sshd_config.d/00-walter-forwarding.conf', 'ClientAliveInterval 15\nClientAliveCountMax 3\nAllowTcpForwarding yes\nGatewayPorts clientspecified\nStreamLocalBindUnlink yes\n')
     run(['/usr/sbin/sshd', '-t'])
     run(['systemctl', 'reload', 'ssh'])
+
+
+def install_docker(primary):
     stage('docker')
     if not Path('/usr/bin/dockerd').exists():
         install_script('https://get.docker.com')
     run(['systemctl', 'enable', '--now', 'docker'])
     run(['usermod', '-aG', 'docker', primary])
+
+
+def install_go(payload):
+    stage('go')
+    namespace = {'__name__': 'walter_go_install'}
+    exec(payload['go_install_source'], namespace)
+    return namespace['install'](run, write, payload['config']['go-version'])
+
+
+def machine(payload, users):
+    bootstrap(payload, users)
+    install_docker(users[0])
     stage('nix-install')
-    install_nix(config)
+    install_nix(payload['config'])
+    install_go(payload)
 
 
 def install_nix(config, receipt=Path('/nix/receipt.json')):
@@ -651,29 +677,43 @@ def install_et(payload, nix_source):
                          local_ssd=payload['config'].get('local-ssd-scratch', False))
 
 
+USER_ACTIONS = frozenset(('user-packages', 'user-runtime', 'user-github', 'user-finish', 'resolve-nix', 'resolve-asdf'))
+MACHINE_ACTIONS = frozenset(('bootstrap', 'install-go', 'install-docker', 'install-nix', 'install-et'))
+DAG_ACTIONS = USER_ACTIONS | MACHINE_ACTIONS | {'finalize'}
+
+
 def main(payload):
     global PROGRESS_PATH, PROGRESS_USER
     users = [payload.get('primary_user', 'ubuntu'), *payload['config'].get('users', [])]
     if len(set(users)) != len(users) or any(not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', user) for user in users):
         raise ProvisionError('invalid login names')
     action = payload.get('action', 'converge')
-    if action not in ('converge', 'converge-nix', 'converge-asdf', 'probe', 'status', 'prepare', 'provision-user', 'finalize'):
+    if action not in DAG_ACTIONS and action not in ('converge', 'converge-nix', 'converge-asdf', 'probe', 'status', 'finalize'):
         raise ProvisionError('unsupported remote action')
-    if action == 'provision-user':
+    if action in DAG_ACTIONS:
+        PROGRESS_PATH = Path('/var/lib/walter') / ('progress-' + action + '.json')
+        PROGRESS_USER = None
+    if action in USER_ACTIONS:
         user = payload.get('target_user')
         if user not in users:
             raise ProvisionError('invalid target user')
-        result = as_user({**payload, 'action': 'converge'}, user, payload['resolved_versions'])
-        return {'ok': True, 'users': {user: result}}
-    if action == 'prepare':
-        PROGRESS_PATH = Path('/var/lib/walter/progress.json')
-        PROGRESS_USER = None
-        stage('machine')
-        machine(payload, users)
-        result = as_user({**payload, 'action': 'resolve'}, users[0], {})
-        install_et(payload, result['nix_source'])
-        stage('users')
-        return {'ok': True, **result}
+        PROGRESS_PATH = Path('/var/lib/walter') / ('progress-' + action + '-' + user + '.json')
+        result = as_user(payload, user, payload.get('resolved_versions', {}))
+        return {'ok': True, 'users': {user: result}, **result}
+    if action in MACHINE_ACTIONS:
+        if action == 'bootstrap':
+            bootstrap(payload, users)
+        elif action == 'install-go':
+            install_go(payload)
+        elif action == 'install-docker':
+            install_docker(users[0])
+        elif action == 'install-nix':
+            stage('nix-install')
+            install_nix(payload['config'])
+        elif action == 'install-et':
+            install_et(payload, payload['nix_source'])
+        stage('complete')
+        return {'ok': True}
     if action == 'finalize':
         finalize_shells(payload['config'], users)
         PROGRESS_PATH = Path('/var/lib/walter/progress.json')
@@ -705,7 +745,7 @@ def main(payload):
         if failure is not None:
             raise failure
         return {'ok': True, 'users': results, 'resolved_versions': {},
-                'progress': read_progress(Path('/var/lib/walter/progress.json'))}
+                'progress': read_progress(Path('/var/lib/walter/progress.json')), 'tasks': task_progress(Path('/var/lib/walter'))}
     if action == 'converge-nix':
         resolution = as_user({**payload, 'action': 'resolve-nix'}, users[0], {})
         payload = {**payload, 'nix_source': resolution['nix_source']}
@@ -732,7 +772,48 @@ def main(payload):
         PROGRESS_USER = None
         stage('complete')
     return {'ok': True, 'users': results, 'resolved_versions': resolved,
-            'progress': read_progress(Path('/var/lib/walter/progress.json'))}
+            'progress': read_progress(Path('/var/lib/walter/progress.json')), 'tasks': task_progress(Path('/var/lib/walter'))}
+
+
+def dispatch(request, lock_root=Path('/run/lock'), state_root=Path('/var/lib/walter')):
+    """A bootstrap may supersede an idle run; stale tasks then fail closed.
+
+    The controller holds its deployment lock for the entire DAG. Remote token
+    checks additionally prevent delayed SSH requests from an earlier controller
+    run from mutating the replacement run. Every check holds the machine lock.
+    """
+    action = request.get('action')
+    if action in ('probe', 'status'):
+        return main(request)
+    target = request.get('target_user')
+    user_action = action in USER_ACTIONS
+    if user_action and (not isinstance(target, str) or not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', target)):
+        raise ProvisionError('invalid target user')
+    with ExitStack() as locks:
+        machine_lock = locks.enter_context(open(lock_root / 'walter-provision.lock', 'a'))
+        shared = action in DAG_ACTIONS - {'bootstrap', 'finalize'}
+        fcntl.flock(machine_lock, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+        if action in DAG_ACTIONS:
+            token = request.get('run_token')
+            if not isinstance(token, str) or not re.fullmatch(r'[0-9a-f]{32}', token):
+                raise ProvisionError('invalid convergence token')
+            marker = state_root / 'active-run'
+            if action == 'bootstrap':
+                write(marker, token + '\n', 0o600)
+            elif not marker.exists() or marker.read_text().strip() != token:
+                raise ProvisionError('stale convergence task')
+        elif not shared:
+            (state_root / 'active-run').unlink(missing_ok=True)
+        # Each Nix profile/asdf tree/Git configuration belongs to one worker.
+        # Finish is ordered after the concurrent runtime and Git workers.
+        resource = ('user-' + target + '-' + ('asdf' if action in ('resolve-asdf', 'user-runtime') else action)) if user_action else action
+        if shared:
+            resource_lock = locks.enter_context(open(lock_root / ('walter-' + resource + '.lock'), 'a'))
+            fcntl.flock(resource_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = main(request)
+        if action == 'finalize':
+            marker.unlink(missing_ok=True)
+        return result
 
 
 if __name__ == '__main__':
@@ -740,20 +821,7 @@ if __name__ == '__main__':
         request = json.load(sys.stdin)
         if os.geteuid() != 0:
             raise ProvisionError('remote provisioner requires sudo')
-        if request.get('action') in ('probe', 'status'):
-            response = main(request)
-        else:
-            target = request.get('target_user')
-            if request.get('action') == 'provision-user' and (not isinstance(target, str) or not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', target)):
-                raise ProvisionError('invalid target user')
-            with ExitStack() as locks:
-                machine_lock = locks.enter_context(open('/run/lock/walter-provision.lock', 'w'))
-                user_action = request.get('action') == 'provision-user'
-                fcntl.flock(machine_lock, (fcntl.LOCK_SH if user_action else fcntl.LOCK_EX) | fcntl.LOCK_NB)
-                if user_action:
-                    user_lock = locks.enter_context(open('/run/lock/walter-user-' + target + '.lock', 'w'))
-                    fcntl.flock(user_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                response = main(request)
+        response = dispatch(request)
     except Exception as error:
         response = {'ok': False, 'stage': STAGE, 'error': str(error) if isinstance(error, ProvisionError) else 'remote provisioning failed'}
     print(json.dumps(response))
