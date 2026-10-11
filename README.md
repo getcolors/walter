@@ -119,7 +119,7 @@ cloud or service accounts. The primary user remains privileged.
 The workflow is preflight → local keys → compute → verified host trust → remote
 Python machine preparation → parallel user provisioning → finalization → local
 aliases. The DAG provisions all configured users concurrently in separate
-processes with permanently dropped privileges. Nix uses one resolved nixpkgs
+processes with permanently dropped privileges. Nix uses one resolved nixpkgs `nixos-26.05`
 revision and asdf `latest` versions resolve once per convergence. Compilation is
 limited to one job per user. Nix/asdf and standalone agent installers configure
 each home. Focused

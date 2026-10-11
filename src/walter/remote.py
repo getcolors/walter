@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 
-NIXPKGS = 'github:NixOS/nixpkgs/nixpkgs-unstable'
+NIXPKGS = 'github:NixOS/nixpkgs/nixos-26.05'
 CREDENTIALS = {'.claude/.credentials.json', '.codex/auth.json', '.pi/agent/auth.json'}
 AGENTS = {
     'pi': ('pi', 'https://pi.dev/install.sh', 'sh'),
@@ -155,14 +155,24 @@ def nix_packages(packages, upgrade=False, source=NIXPKGS):
     if not packages:
         return
     current = profile_attributes(json.loads(run(['nix', 'profile', 'list', '--json']).stdout)) if (Path.home() / '.nix-profile').exists() else {}
+    if upgrade:
+        # `profile upgrade` deliberately skips immutable original URLs. Build
+        # replacements first, preserving a usable profile if realization fails.
+        installables = [source + '#' + p for p in packages]
+        run(['nix', 'build', '--impure', '--no-link', *installables])
+        names = [current[p] for p in packages if p in current]
+        if names:
+            run(['nix', 'profile', 'remove', *names])
+        try:
+            run(['nix', 'profile', 'add', '--impure', *installables])
+        except BaseException:
+            if names:
+                run(['nix', 'profile', 'rollback'])
+            raise
+        return
     missing = [p for p in packages if p not in current]
     if missing:
         run(['nix', 'profile', 'add', '--impure', *[source + '#' + p for p in missing]])
-    if upgrade:
-        current = profile_attributes(json.loads(run(['nix', 'profile', 'list', '--json']).stdout))
-        names = [current[p] for p in packages if p in current]
-        if names:
-            run(['nix', 'profile', 'upgrade', '--impure', *names])
 
 
 def asdf_tools(config, resolved, home):
@@ -378,13 +388,15 @@ def user_tasks(payload, user, resolved):
     PROGRESS_USER = user
     if action in ('probe', 'status'):
         return {'github_authenticated': github_authenticated(config), 'nix': Path('/nix/receipt.json').exists(), 'progress': read_progress(progress)}
-    if action == 'resolve':
+    if action in ('resolve', 'resolve-nix'):
         stage('nix-packages')
         metadata = json.loads(run(['nix', 'flake', 'metadata', '--json', NIXPKGS]).stdout)
         revision = metadata.get('locked', {}).get('rev', '')
         if not re.fullmatch(r'[0-9a-f]{40}', revision):
             raise ProvisionError('invalid Nix package revision')
         nix_source = 'github:NixOS/nixpkgs/' + revision
+        if action == 'resolve-nix':
+            return {'resolved_versions': {}, 'nix_source': nix_source}
         if config.get('asdf-tools'):
             nix_packages(['asdf-vm'], source=nix_source)
         for tool in config.get('asdf-tools', []):
@@ -508,8 +520,7 @@ def setup_storage(payload):
             'RemainAfterExit=yes\nTimeoutStartSec=120\nEnvironment=PATH=/usr/sbin:/usr/bin:/sbin:/bin\n'
             '[Install]\nWantedBy=local-fs.target\n')
     write('/etc/systemd/system/walter-local-ssd.service', unit)
-    for service in ('ssh.service', 'ssh.socket', 'docker.service', 'containerd.service',
-                    'nix-daemon.service', 'nix-daemon.socket'):
+    for service in ('ssh.service', 'ssh.socket', 'docker.service', 'containerd.service'):
         write('/etc/systemd/system/' + service + '.d/walter-storage.conf',
               '[Unit]\nRequires=walter-local-ssd.service\nAfter=walter-local-ssd.service\n')
     run(['systemctl', 'daemon-reload'])
@@ -580,8 +591,31 @@ def machine(payload, users):
     run(['systemctl', 'enable', '--now', 'docker'])
     run(['usermod', '-aG', 'docker', primary])
     stage('nix-install')
-    if not Path('/nix/receipt.json').exists():
+    install_nix(config)
+
+
+def install_nix(config, receipt=Path('/nix/receipt.json')):
+    def completed():
+        if not receipt.exists():
+            return False
+        actions = json.loads(receipt.read_text()).get('actions', [])
+        return bool(actions) and all(item.get('state') in ('Completed', 'Skipped') for item in actions)
+
+    if not receipt.exists():
         install_script('https://install.determinate.systems/nix', arguments=('install', '--no-confirm'))
+    elif not completed():
+        # Plain install treats every existing receipt as success, even Progress.
+        # The explicit positional plan resumes unfinished actions in that receipt.
+        run(['/nix/nix-installer', 'install', '--no-confirm', str(receipt)])
+    if not completed():
+        raise ProvisionError('Nix installer did not complete')
+    if config.get('local-ssd-scratch'):
+        # The installer explicitly refuses preexisting service override folders.
+        # Add storage dependencies only after every installer action completes.
+        for service in ('nix-daemon.service', 'nix-daemon.socket', 'determinate-nixd.socket'):
+            write('/etc/systemd/system/' + service + '.d/walter-storage.conf',
+                  '[Unit]\nRequires=walter-local-ssd.service\nAfter=walter-local-ssd.service\n')
+        run(['systemctl', 'daemon-reload'])
 
 
 def prerequisites(config):
@@ -606,6 +640,15 @@ def finalize_shells(config, users):
         run(['chsh', '-s', shell, user])
 
 
+def install_et(payload, nix_source):
+    if 'eternal-terminal' not in payload['config'].get('nix-packages', []):
+        return
+    namespace = {'__name__': 'walter_eternal_terminal'}
+    exec(payload['eternal_terminal_source'], namespace)
+    namespace['install'](run, write, nix_source,
+                         local_ssd=payload['config'].get('local-ssd-scratch', False))
+
+
 def main(payload):
     global PROGRESS_PATH, PROGRESS_USER
     users = [payload.get('primary_user', 'ubuntu'), *payload['config'].get('users', [])]
@@ -626,11 +669,7 @@ def main(payload):
         stage('machine')
         machine(payload, users)
         result = as_user({**payload, 'action': 'resolve'}, users[0], {})
-        if 'eternal-terminal' in payload['config'].get('nix-packages', []):
-            namespace = {'__name__': 'walter_eternal_terminal'}
-            exec(payload['eternal_terminal_source'], namespace)
-            namespace['install'](run, write, result['nix_source'],
-                                 local_ssd=payload['config'].get('local-ssd-scratch', False))
+        install_et(payload, result['nix_source'])
         stage('users')
         return {'ok': True, **result}
     if action == 'finalize':
@@ -665,6 +704,9 @@ def main(payload):
             raise failure
         return {'ok': True, 'users': results, 'resolved_versions': {},
                 'progress': read_progress(Path('/var/lib/walter/progress.json'))}
+    if action == 'converge-nix':
+        resolution = as_user({**payload, 'action': 'resolve-nix'}, users[0], {})
+        payload = {**payload, 'nix_source': resolution['nix_source']}
     results, resolved = {}, {}
     for user in users:
         try:
@@ -680,6 +722,8 @@ def main(payload):
         result = as_user(payload, user, resolved)
         results[user] = result
         resolved.update(result.get('resolved_versions', {}))
+    if action == 'converge-nix':
+        install_et(payload, payload['nix_source'])
     if action == 'converge':
         finalize_shells(payload['config'], users)
     if action not in ('probe', 'status'):

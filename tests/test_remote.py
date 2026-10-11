@@ -60,9 +60,10 @@ class RemoteTests(unittest.TestCase):
         def runner(args, **kwargs):
             calls.append(args)
             return types.SimpleNamespace(returncode=0, stdout=json.dumps(profile), stderr='')
-        with patch.object(remote, 'run', runner):
-            remote.nix_packages(['fish'], upgrade=True)
-        self.assertEqual(calls[-1], ['nix', 'profile', 'upgrade', '--impure', 'owned'])
+        with patch.object(remote, 'run', runner), patch.object(Path, 'exists', return_value=True):
+            remote.nix_packages(['fish'], upgrade=True, source='github:NixOS/nixpkgs/' + 'a' * 40)
+        self.assertEqual(calls[-1], ['nix', 'profile', 'add', '--impure', 'github:NixOS/nixpkgs/' + 'a' * 40 + '#fish'])
+        self.assertIn(['nix', 'profile', 'remove', 'owned'], calls)
         self.assertFalse(any('manual' in args for args in calls))
 
     def test_command_failure_does_not_expose_output(self):

@@ -56,6 +56,6 @@ def test_storage_boot_order_and_daemon_dependencies():
     unit = files['/etc/systemd/system/walter-local-ssd.service']
     assert 'DefaultDependencies=no' in unit
     assert 'Before=local-fs.target systemd-tmpfiles-setup.service' in unit
-    for service in ('docker.service', 'containerd.service', 'nix-daemon.service', 'ssh.service'):
+    for service in ('docker.service', 'containerd.service', 'ssh.service'):
         assert 'Requires=walter-local-ssd.service' in files[f'/etc/systemd/system/{service}.d/walter-storage.conf']
     assert commands.index(['/usr/local/sbin/walter-local-ssd', '--bootstrap']) < commands.index(['systemctl', 'enable', '--now', 'walter-local-ssd'])

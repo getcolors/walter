@@ -26,10 +26,10 @@ def remote(host, connection, config, action, **private):
                'action': action, **private}
     if action in ('converge', 'prepare', 'provision-user'):
         payload['dotfiles_source'] = source('dotfiles')
-        if action == 'prepare' and 'eternal-terminal' in config.get('nix-packages', []):
-            payload['eternal_terminal_source'] = source('eternal_terminal')
         if config.get('local-ssd-scratch'):
             payload['local_ssd_source'] = source('local_ssd')
+    if action in ('prepare', 'converge-nix') and 'eternal-terminal' in config.get('nix-packages', []):
+        payload['eternal_terminal_source'] = source('eternal_terminal')
     result = host.run_python(connection, source('remote'), payload, timeout=14400)
     if not isinstance(result, dict) or result.get('ok') is not True:
         # Remote text is untrusted, including exceptions from configured tools.

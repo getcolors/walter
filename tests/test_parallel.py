@@ -81,3 +81,58 @@ def test_probe_starts_every_user_before_waiting_and_drains_failures():
         with pytest.raises(remote.ProvisionError):
             remote.main({'action': 'probe', 'config': {'users': ['jack', 'rose']}})
     assert events[-1] == ('finish', 'rose')
+
+
+def test_pinned_nix_upgrade_prebuilds_and_rolls_back_failed_replacement():
+    import json
+    from types import SimpleNamespace
+    profile = {'elements': {
+        'fish': {'attrPath': 'legacyPackages.aarch64-linux.fish',
+                 'originalUrl': 'github:NixOS/nixpkgs/' + 'a' * 40},
+        'manual': {'attrPath': 'legacyPackages.aarch64-linux.fd',
+                   'originalUrl': 'github:other/packages'},
+    }}
+    calls = []
+    def run(args, **kwargs):
+        calls.append(args)
+        if args[:3] == ['nix', 'profile', 'add']:
+            raise remote.ProvisionError('synthetic add failure')
+        return SimpleNamespace(stdout=json.dumps(profile))
+    with patch.object(remote, 'run', side_effect=run), patch.object(Path, 'exists', return_value=True):
+        with pytest.raises(remote.ProvisionError):
+            remote.nix_packages(['fish'], upgrade=True, source='github:NixOS/nixpkgs/' + 'b' * 40)
+    assert calls[1][:2] == ['nix', 'build']
+    assert calls[2] == ['nix', 'profile', 'remove', 'fish']
+    assert calls[-1] == ['nix', 'profile', 'rollback']
+    assert all('manual' not in call for call in calls)
+
+
+def test_focused_nix_resolves_once_and_updates_et_after_users():
+    actions = []
+    def as_user(payload, user, resolved):
+        actions.append((payload['action'], user, payload.get('nix_source')))
+        if payload['action'] == 'resolve-nix':
+            return {'nix_source': 'pinned'}
+        return {'resolved_versions': {}}
+    with patch.object(remote, 'as_user', side_effect=as_user), patch.object(remote.pwd, 'getpwnam'), patch.object(remote, 'stage'), patch.object(remote, 'read_progress'), patch.object(remote, 'install_et') as install:
+        payload = {'config': {'users': ['jack', 'rose']}, 'action': 'converge-nix'}
+        remote.main(payload)
+    assert actions == [('resolve-nix', 'ubuntu', None), ('converge-nix', 'ubuntu', 'pinned'), ('converge-nix', 'jack', 'pinned'), ('converge-nix', 'rose', 'pinned')]
+    assert install.call_args.args[1] == 'pinned'
+
+
+def test_failed_nix_realization_does_not_remove_installed_packages():
+    import json
+    from types import SimpleNamespace
+    calls = []
+    def run(args, **kwargs):
+        calls.append(args)
+        if args[:2] == ['nix', 'build']:
+            raise remote.ProvisionError('synthetic build failure')
+        return SimpleNamespace(stdout=json.dumps({'elements': {'fish': {
+            'attrPath': 'legacyPackages.aarch64-linux.fish',
+            'originalUrl': remote.NIXPKGS}}}))
+    with patch.object(remote, 'run', side_effect=run), patch.object(Path, 'exists', return_value=True):
+        with pytest.raises(remote.ProvisionError):
+            remote.nix_packages(['fish'], upgrade=True)
+    assert not any(call[:3] == ['nix', 'profile', 'remove'] for call in calls)
