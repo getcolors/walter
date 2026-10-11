@@ -20,7 +20,7 @@ class SSHConfigTest(unittest.TestCase):
         self.directory = self.home / '.ssh'
         self.path = self.directory / 'config'
         self.payload = dict(host_alias='probe', block_state='present', known_hosts_file=str(self.home / 'known_hosts'),
-                            identity_file=str(self.home / 'id_ed25519'), 
+                            identity_file=str(self.home / 'id_ed25519'),
                             ssh_hosts=[
                                 dict(name='probe', ip='203.0.113.10', user='ubuntu'),
                                 dict(name='probe-seat', ip='203.0.113.10', user='seat')])
