@@ -1,72 +1,95 @@
 # Walter deployment verification
 
-Verified on 11 October 2026. Walter package
-`0e02cf318195af795e00460723d8aedd07f2bae4` uses PocketDeploy package
-`2231acf6f720003e14593a24aa304e14bf989fcb`. The portable launcher is pinned to
-that published Walter package and tested from an unrelated directory.
+Verified on 11 October 2026 for the shared Go and dependency-driven provisioning
+refactor. The portable launcher pins the published package identified in
+`skills/walter/walter`; shared SSH behavior comes from the immutable PocketDeploy
+pin in `pyproject.toml`.
 
 ## Automated checks
 
-Walter: 98 tests passed, one privilege test skipped in the ordinary run, and
-23 subtests passed. The remote suite also passed all 13 tests and two subtests
-under sudo, including the actual privilege boundary. Package build and copied
-launcher checks passed. Tests cover SSD placement and boot ordering, partial Nix
-installation, true DAG user concurrency, failure joins, immutable package
-upgrades, explicit repository selection, runtime dependencies and ET service setup.
+Walter's suite passed 117 tests and 28 subtests, with the root-only privilege test
+skipped in the ordinary run. The remote suite passed all 14 tests and two subtests
+under sudo, including permanent privilege dropping. Package build and copied
+launcher checks passed.
 
-PocketDeploy: 807 tests, package build and 36 copied-launcher checks passed.
-Configurable SSH companion TCP ports use the existing owned firewall lifecycle
-and SSH source restrictions across supported providers.
+Coverage includes ARM64/AMD64 Go archive selection, pinned checksums, replacement
+without stale files, interrupted-promotion recovery, shared permissions, and
+repeat installation. DAG tests exercise actual task overlap, immediate successor
+readiness despite unrelated slow branches, a six-task concurrency bound, failure
+draining, cancellation, exclusive resource locks and stale-run rejection.
 
-## Fresh deployment
+## Authorized replacement and backups
 
-Deleted the previous `walter-gcp` VM, boot volume and owned firewall rules before
-creating the new deployment. No old remote files were migrated. The shared
-network and subnet were retained. The separate `walter-google` and
-`walter-google-big` machines retained their provider IDs and running state.
+The user explicitly authorized replacing the current `walter-gcp` deployment
+under the same profile after implementation, tests and backup. Walter's existing
+ownership-aware deletion removed its VM, boot volume and owned firewall rules;
+its shared network and subnet were retained. Local SQLite history was preserved.
+Destruction protection was disabled only for the deletion command and remains
+enabled in the desired configuration.
 
-The fresh `walter-gcp-compute` in `europe-west4-b` uses
-`c4a-standard-4-lssd`: four ARM vCPUs, 16 GB RAM, one 375 GiB Local SSD and a
-100 GB Hyperdisk Balanced boot disk. The SSD is ext4 at `/scratch`, with bind
-mounts for `/home`, `/nix`, `/tmp`, `/var/tmp`, `/var/lib/docker` and
-`/var/lib/containerd`. Homes are private and temporary directories use mode 1777.
+Before deletion, a private archive preserved complete homes (including six dirty
+Git checkouts and untracked files), `/root`, `/etc`, `/usr/local`, `/opt`, `/srv`
+and `/var/lib`. Reinstallable `/nix` was excluded. The 4,088,435,513-byte archive
+contained 157,113 entries, all fully read during verification, with SHA-256
+`e65157987ff962ad214bc15cb2ec9f82029706325afdfb6d7d4073d3a0061c35`.
+It remains outside the repository in the controller's private Walter backup
+storage. Separate Vault checkpoints preserve controller recovery material.
+Remote files were preserved in the archive, not automatically restored or executed.
 
-Shared setup runs before parallel user branches for `ubuntu`, `rose` and `jack`.
-The users share one resolved nixpkgs `nixos-26.05` revision and exact asdf versions:
-Node.js 26.11.1, uv 0.13.0 and Bun 1.4.3. Python is absent from asdf configuration.
-Node's `libatomic1` prerequisite is installed independently of Python tooling.
-Nix service overrides are written after the installer completes; incomplete
-installer receipts are resumed through the explicit saved plan.
+## Live provisioning
 
-The full read-only verifier passed before and after reboot, including:
+The replacement retains the ARM64 `c4a-standard-4-lssd` configuration: four vCPUs,
+16 GB RAM, one Local SSD, and a 100 GB Hyperdisk Balanced boot disk. Scratch mounts
+cover `/home`, `/nix`, `/tmp`, `/var/tmp`, Docker and containerd data.
 
-- SSD placement, private homes, configured Nix packages and matching runtimes.
-- GitHub identity, agent executables, dotfiles and Atuin authentication evidence.
-  Atuin synchronization succeeded on retry after an initial transient failure.
-- Explicit clones of `basecamp/once`, `pocketbase/pocketbase` and
-  `benbjohnson/litestream` under each user's `~/code/<owner>/<repo>`.
-- All three Emacs package-warming jobs completed with exit code zero.
-- SSH identity checks for all three users; seats were denied passwordless sudo.
-- Eternal Terminal 6.2.11 from Nix, its root-owned server profile, active service
-  and reachable TCP 2022. Actual ET sessions verified all three user identities.
+A separate `walter-dag-amd64-test` deployment uses `c4-standard-4`, the x86 Ubuntu
+24.04 image and no Local SSD. It exercises the same three users and software.
 
-Repeat convergence through a copied portable launcher from an unrelated directory
-completed in about 35 seconds. The three user branches overlapped and each took
-about six seconds. All managed resources were retained with no drift and zero
-pending journal steps. A scheduled reboot changed the boot ID and reconnected
-with the pinned SSH host key; the full verifier passed again afterward.
+On both architectures, the fresh DAG overlapped Go, Docker and Nix; Nix consumers
+started while unrelated work continued. User Git and runtime branches overlapped.
+The initial Atuin synchronization failed on both fresh machines. The DAG drained
+all workers and withheld finalization; ordinary repeat convergence recovered the
+both installations without changing desired software or adding blanket retries.
 
-## Synthetic performance sample
+Live testing also exposed a shared SSH transport issue: Fish interprets
+backslashes inside single-quoted source differently from Bash. Nested Python
+programs in the Go verifier failed after switching the login shell to Fish.
+The fix belongs to PocketDeploy's source transport, not a Walter shell workaround.
 
-One run compared the boot filesystem with the SSD on the same VM after setup.
-Temporary benchmark files were removed. These are synthetic checks, not claims
-about application build speed.
+The shared transport fix is published in PocketDeploy commit
+`f910976d601b3aaec3bc8fab26126606968c198a` and pinned by Walter. Its 834-test suite,
+actual Bash/Fish source-preservation tests, package build and 36 copied-launcher
+checks passed.
 
-| Check | Boot disk | Local SSD |
-| --- | ---: | ---: |
-| 128 MiB write followed by fsync | 0.3920 s | 0.3928 s |
-| 500 small-file fsync operations | 0.7341 s | 0.0637 s |
-| Synthetic C compilation and execution | 0.6009 s | 0.5981 s |
+Full live verification passed on both architectures after the transport fix:
 
-Small-file synchronization was about 11.5 times faster in this sample. Sequential
-writes and CPU-dominated compilation were effectively unchanged.
+- Go 1.27.2 through direct invocation, Bash and Fish, with root-owned shared files
+  and native compilation/execution as ubuntu, rose and jack.
+- Private homes, correct GitHub identity, all configured Nix/asdf/agent tools,
+  explicit repository checkouts, Atuin session evidence and ET service readiness.
+- Emacs warming finished with exit zero for all users.
+- Actual ARM64 SSH sessions used Fish, selected the correct Go version and user,
+  and denied passwordless sudo to both seats.
+
+A deliberate SIGINT on AMD64 returned the interrupted status after all five
+started workers finished, with finalization skipped. Subsequent ordinary
+convergence recovered successfully in 33.49 seconds. The initial Atuin failures
+also exercised real failed-operation recovery on both architectures.
+
+Copied launchers were run from outside the checkout, selecting deployment
+configuration with an absolute path. ARM64 repeat convergence took 32.021 seconds
+(10.021 seconds of remote DAG work); AMD64 took 32.97 seconds (10.553 seconds of
+remote DAG work). Both retained their resource identities. These are observations,
+not controlled performance comparisons with the previous implementation.
+
+The replacement ARM64 deployment has a new provider ID, destruction protection
+enabled and zero pending journal steps. Both unrelated Walter machines retained
+their IDs and running state. Private backup and safe live evidence remain in the
+controller's local state directories, outside the repository.
+
+After validation, Walter deleted the temporary AMD64 compute, boot volume and
+owned firewall resources. A read-only status check confirmed zero owned resources
+and zero pending steps; shared networking and local history were retained.
+The final ARM64 recovery state was saved to Vault after its successful copied
+launcher run. Resolver and root task progress now explicitly finish at `complete`,
+including successful retries after a previously failed stage.
