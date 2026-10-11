@@ -137,8 +137,8 @@ and Nix then install concurrently. Nix consumers start as soon as Nix and its
 pinned revision are ready; Docker and Eternal Terminal do not block user setup.
 Each user's package transaction precedes independent Git and runtime branches.
 The primary user's asdf installation resolves `latest` versions once for all users.
-Shell configuration, agent installers, credentials, dotfiles, Atuin and Emacs
-launching follow the user's Git/runtime branches and shared Go verification.
+Shell configuration, agent installers, credentials, dotfiles, Emacs launching and
+Atuin follow the user's Git/runtime branches and shared Go verification.
 
 At most six remote tasks run at once, with two clone workers per active Git task.
 Compilation remains limited to one job per user. User tasks run in separate
@@ -152,7 +152,7 @@ Nix uses one resolved nixpkgs `nixos-26.05` revision. Nix/asdf and standalone
 agent installers configure each home. Focused commands operate on the recorded
 owned machine. Dotfiles use a small Python renderer for the checkout's Ubuntu
 profile, preserving existing user files; the checkout's old launcher is never
-executed. Emacs package warming is asynchronous; inspect
+executed. Emacs package warming runs asynchronously alongside Atuin synchronization; inspect
 `~/.local/state/walter/emacs-packages.log` for completion.
 
 `vault-id` selects a dedicated vault; `vault-command` selects its installed CLI.
