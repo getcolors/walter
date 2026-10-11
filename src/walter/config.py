@@ -128,8 +128,6 @@ def load(path, env=None):
     path = Path(path).absolute()
     env = os.environ if env is None else env
     validate_private_names(path.parent / '.envrc.private')
-    if 'COLORS_PAR_PROFILE' in env:
-        raise DeployError('COLORS_PAR_PROFILE is not allowed; select a configuration file.')
     try:
         if path.is_symlink() or path.stat().st_size > 1024 * 1024:
             raise ValueError()

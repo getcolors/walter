@@ -28,10 +28,15 @@ class ConfigTest(unittest.TestCase):
         _, ordinary = self.load({'users': ['seat']})
         self.assertEqual(ordinary['_desired_hash'], d['_desired_hash'])
 
-    def test_rejects_legacy_and_profile_override(self):
-        for values, env in [({'compute-api-version': 2}, {}), ({}, {'COLORS_PAR_PROFILE': 'other'})]:
+    def test_rejects_retired_configuration(self):
+        for values, env in [({'compute-api-version': 2}, {}), ({'provider-backend': 'r2'}, {})]:
             with self.assertRaises(DeployError):
                 self.load(values, env)
+
+    def test_shared_environment_override_maps_to_state_identity(self):
+        c, d = self.load(env={'COLORS_PAR_PROFILE': 'other-profile'})
+        self.assertEqual('other-profile', c['profile'])
+        self.assertEqual('other-profile', d['profile'])
 
     def test_rejects_unsafe_users(self):
         for values in [{'users': ['root']}, {'users': ['ubuntu']}, {'users': ['seat', 'seat']}, {'users': ['bad\nuser']}, {'ssh-user': '-option'}]:

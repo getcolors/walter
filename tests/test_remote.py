@@ -4,6 +4,7 @@ import os
 import pwd
 from pathlib import Path
 import tempfile
+import sys
 import types
 import unittest
 from unittest.mock import patch
@@ -76,6 +77,38 @@ class RemoteTests(unittest.TestCase):
             (path / '.git').mkdir()
             remote.clone('https://example.com/repo', path)
             runner.assert_not_called()
+
+    def test_atuin_private_tty_handles_both_prompt_orders(self):
+        for order in ('hub', 'legacy'):
+            with self.subTest(order=order), tempfile.TemporaryDirectory() as directory:
+                executable = Path(directory) / 'atuin'
+                executable.write_text('#!' + sys.executable + '\n' + """
+import getpass, os, sys
+assert sys.argv[1:] == ['login', '-u', 'synthetic']
+print('Do not share your encryption key or password with anyone.')
+def key():
+    return input('Please enter encryption key [blank to use existing key file]: ')
+if os.environ['SYNTHETIC_ATUIN_ORDER'] == 'hub':
+    supplied_key = key()
+    supplied_password = getpass.getpass('Please enter password: ')
+else:
+    supplied_password = getpass.getpass('Please enter password: ')
+    supplied_key = key()
+sys.exit(0 if supplied_password == 'synthetic-password' and supplied_key == 'synthetic-key' else 1)
+""")
+                executable.chmod(0o700)
+                with patch.dict(os.environ, {'PATH': directory + os.pathsep + os.environ['PATH'], 'SYNTHETIC_ATUIN_ORDER': order}):
+                    remote.atuin_login('synthetic', 'synthetic-password', 'synthetic-key', timeout=3)
+
+    def test_atuin_failure_never_returns_terminal_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / 'atuin'
+            executable.write_text('#!' + sys.executable + '\nprint("synthetic-secret")\nraise SystemExit(1)\n')
+            executable.chmod(0o700)
+            with patch.dict(os.environ, {'PATH': directory + os.pathsep + os.environ['PATH']}):
+                with self.assertRaises(remote.ProvisionError) as caught:
+                    remote.atuin_login('synthetic', 'synthetic-password', 'synthetic-key', timeout=3)
+            self.assertNotIn('synthetic-secret', str(caught.exception))
 
     def test_progress_contains_only_allowlisted_stage_and_login(self):
         with tempfile.TemporaryDirectory() as directory:

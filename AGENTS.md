@@ -5,6 +5,8 @@ as a pinned Python dependency. Read README.md before changes.
 
 ## Rules
 
+- Keep AGENTS.md as the only repository instruction file; do not add CLAUDE.md.
+
 - Simplification is the goal. PocketDeploy wins whenever both projects implement
   the same feature differently. Change PocketDeploy to simplify shared behavior;
   do not duplicate its cloud lifecycle, state, SSH authority or recovery code.

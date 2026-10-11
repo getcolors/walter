@@ -22,4 +22,4 @@ allow-direct-references = true
 packages = ["src/walter"]
 
 [tool.pytest.ini_options]
-testpaths = ["test_python"]
+testpaths = ["tests"]

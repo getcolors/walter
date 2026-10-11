@@ -289,41 +289,51 @@ def emacs_job(home, config):
     return str(log)
 
 
-def atuin_login(username, password, key):
-    """Supply hidden prompts through a private tty, including older Atuin versions.
+def atuin_login(username, password, key, *, timeout=120):
+    """Answer Atuin's hidden password and key prompts in either order.
 
-    Neither secrets nor terminal output are returned to the controller. Terminal
-    input is sent only after echo is disabled for the password/key prompts.
+    Atuin 18.21 asks for the key first for Hub and password first for legacy
+    servers. Secrets never enter argv, logs, or the returned failure message.
     """
     import pty
     import select
     import signal
     import termios
     import time
+    if any('\n' in value or '\r' in value for value in (password, key)):
+        raise ProvisionError('Atuin credentials must each occupy one line')
     pid, fd = pty.fork()
     if pid == 0:
         os.execvp('atuin', ['atuin', 'login', '-u', username])
-    pending = [(b'password', password), (b'key', key)]
+    pending = {'password': password, 'key': key}
     captured = b''
-    deadline = time.monotonic() + 120
+    deadline = time.monotonic() + timeout
     completed = False
+    eof = False
     try:
         while time.monotonic() < deadline:
-            ready, _, _ = select.select([fd], [], [], 0.2)
+            ready, _, _ = select.select([] if eof else [fd], [], [], 0.05)
             if ready:
                 try:
                     chunk = os.read(fd, 4096)
                 except OSError:
                     chunk = b''
                 if not chunk:
-                    break
+                    eof = True
                 captured = (captured + chunk)[-8192:]
-            if pending and pending[0][0] in captured.lower():
-                # rpassword disables echo after writing its prompt. Never race
-                # the prompt and reveal the password on an echoing terminal.
-                if pending[0][0] == b'key' or not termios.tcgetattr(fd)[3] & termios.ECHO:
-                    _, value = pending.pop(0)
-                    os.write(fd, value.encode() + b'\n')
+            # Match the actual terminal prompt, never instructional prose that
+            # happens to mention the encryption key or password.
+            prompt = None
+            if re.search(rb'please enter password:\s*$', captured, re.I):
+                prompt = 'password'
+            elif re.search(rb'please enter encryption key[^\r\n]*:\s*$', captured, re.I):
+                prompt = 'key'
+            if prompt is not None and prompt not in pending:
+                raise ProvisionError('Atuin rejected the supplied credentials')
+            if not eof and prompt is not None:
+                # rpassword disables echo after writing the password prompt.
+                if prompt == 'key' or not termios.tcgetattr(fd)[3] & termios.ECHO:
+                    os.write(fd, pending.pop(prompt).encode() + b'\n')
                     captured = b''
             finished, status = os.waitpid(pid, os.WNOHANG)
             if finished:
@@ -331,12 +341,7 @@ def atuin_login(username, password, key):
                 if status:
                     raise ProvisionError('Atuin login failed')
                 return
-        finished, status = os.waitpid(pid, os.WNOHANG)
-        if finished:
-            completed = True
-            if not status:
-                return
-        raise ProvisionError('Atuin login failed or timed out')
+        raise ProvisionError('Atuin login timed out')
     finally:
         os.close(fd)
         if not completed:

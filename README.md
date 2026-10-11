@@ -42,7 +42,8 @@ They normalize into PocketDeploy's `gcp-*` settings internally. `provider-comput
 is `google`; only Google Cloud is supported. The durable `profile` supplies the
 resource-name prefix. New names use `<profile>-<component>-<purpose>`, omitting
 redundant components, with immutable provider IDs and ownership labels recorded
-separately. `COLORS_PAR_PROFILE` is refused.
+separately. Environment overrides follow PocketDeploy; recorded state identity
+must still match the resulting profile and provider scope.
 
 Existing `google-network` and `google-subnet` are required infrastructure
 references (both default to `default`). Region/zone must agree. Walter owns only

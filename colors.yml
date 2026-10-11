@@ -1,5 +1,5 @@
 # Desired state for the Python Walter development machine on Google Cloud.
-# Credentials stay in COLORS_PAR_* environment variables. Never set COLORS_PAR_PROFILE.
+# Credentials stay in COLORS_PAR_* environment variables.
 profile: walter-gcp
 workdir: .colors
 users: [rose, jack]
