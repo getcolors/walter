@@ -98,3 +98,39 @@ def test_damaged_executable_is_unhealthy(tmp_path):
     (tmp_path / 'bin/gofmt').touch()
     assert not go.healthy(Mock(side_effect=OSError('exec format')), tmp_path,
                           'go version go1.27.2 linux/arm64')
+
+
+def test_failed_promotion_recovers_with_fresh_tree(setup, monkeypatch):
+    prefix, run, write, download = setup
+    tree = prefix / 'go'
+    tree.mkdir()
+    (tree / 'obsolete').write_text('old installation')
+    (prefix / 'bin').mkdir()
+    (prefix / 'bin/go').symlink_to(tree / 'bin/go')
+    original_rename = Path.rename
+
+    def fail_promotion(source, destination):
+        if destination == tree:
+            # The failure window is after removal but before promoting the
+            # verified replacement; the next run must tolerate absent Go.
+            assert not tree.exists()
+            assert (source / 'bin/go').is_file()
+            raise OSError('simulated interrupted promotion')
+        return original_rename(source, destination)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, 'rename', fail_promotion)
+        with pytest.raises(OSError, match='interrupted promotion'):
+            go.install(run, write, '1.27.2')
+    assert not tree.exists()
+    assert (prefix / 'bin/go').is_symlink()
+    write.assert_not_called()
+
+    assert go.install(run, write, '1.27.2')
+    assert (tree / 'bin/go').read_text() == 'compiler'
+    assert (tree / 'bin/gofmt').read_text() == 'formatter'
+    assert not (tree / 'obsolete').exists()
+    assert (prefix / 'bin/go').resolve(strict=True) == tree / 'bin/go'
+    assert download.call_count == 2
+    assert not go.install(run, write, '1.27.2')
+    assert download.call_count == 2
