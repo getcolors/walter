@@ -163,3 +163,48 @@ Read the first attempt's capture before retrying. Use the evidence to identify
 and fix a reproducible cause rather than adding a blanket retry. If the failure
 does not recur, record that limit. Verify convergence, shared Go and private seats,
 publish any justified fix, and save a final controller checkpoint.
+
+## Atuin first-sync investigation results
+
+Capture source `25ff394` and launcher `1ced6c4` were published before the live
+recreation. Deletion took 93.727 seconds; fresh convergence failed after 349.149
+seconds on replacement instance `6441319717065378827`. Ubuntu and Jack's Atuin
+18.15.2 sync attempts failed after 121.110 and 122.963 seconds respectively. Their
+untruncated captures reported `Error: unknown history version "v2"`, at
+`history/store.rs:281:28`. Rose failed earlier in agent-tool installation; the Antigravity `agy` executable
+was absent at inspection. That task succeeded on ordinary recovery.
+
+This establishes a client/history-format incompatibility. Atuin gained v2
+history support in [18.18.0](https://github.com/atuinsh/atuin/blob/v18.18.0/crates/atuin-client/src/history.rs).
+The fix pins only Atuin to [nixpkgs revision
+8edc0c72e3a38faf5434e40d1f19431125fe4b30](https://github.com/NixOS/nixpkgs/blob/8edc0c72e3a38faf5434e40d1f19431125fe4b30/pkgs/by-name/at/atuin/package.nix),
+which supplies 18.21.0 with verified binary-cache availability for ARM64 and AMD64.
+Other packages retain their existing source. The effective client version is
+checked before sync. A full `atuin store rebuild history` follows successful
+sync once, with a completion marker written only after successful rebuilding;
+there is no automatic retry.
+
+Published fix source `a6d7e2e` and launcher `fd0b5d3` converged successfully in
+65.234 seconds, retaining the replacement instance. Ubuntu and Jack initially
+each had 43,055 indexed history entries and 74,971 stored records. With the fixed
+client, sync uploaded/downloaded zero records but still left 43,055 indexed
+entries before rebuilding. Full rebuilding raised each history count to 74,887
+while the store remained at 74,971: **31,832 indexed entries restored per user**.
+A successful sync retry alone therefore did not repair the earlier partial index.
+Rose's first sync with 18.21.0 succeeded in 17.427 seconds, downloading 74,971
+records and uploading none; her resulting history count was also 74,887.
+
+All three users passed effective Atuin version and rebuild-marker checks, shared
+Go checks through direct execution, Bash and Fish, and private-seat checks. Tests
+passed: 142 with one privilege-test skip and 47 subtests; the separate root run
+passed 28 tests and four subtests. Package builds and copied-launcher checks
+passed. Final full verification also passed, including Emacs completion for all
+three users. Copied-launcher convergence took 35.544 seconds, retained the VM ID,
+and left every Nix profile generation and history-rebuild marker unchanged.
+
+Final audit confirmed the replacement is running and owned, the old VM is absent,
+the unrelated machines retain their IDs and running state, destruction protection
+is enabled, SSH trust matches the new instance and no journal steps remain pending.
+After preserving the authorized output locally for review, the temporary captures
+were removed from all three seats. Capture remains disabled in saved configuration.
+The final six-file controller recovery checkpoint was saved successfully to Vault.
