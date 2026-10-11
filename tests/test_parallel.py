@@ -271,3 +271,34 @@ def test_remote_dispatch_is_bounded_across_many_users():
     assert maximum == 6
     assert len(result['provisioning']['users']) == 12
     assert all(t['finished_seconds'] >= t['started_seconds'] for t in result['provisioning']['task_timings'].values())
+
+
+@pytest.mark.parametrize('worker_fails', [False, True])
+def test_cancelled_remote_task_drains_actual_ssh_thread(worker_fails):
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+    def blocking_remote(*args, **kwargs):
+        started.set()
+        assert release.wait(5)
+        finished.set()
+        if worker_fails:
+            raise DeployError('synthetic remote failure')
+        return {'ok': True}
+
+    async def exercise():
+        task = asyncio.create_task(controller.remote_task(None, None, {}, 'install-go'))
+        assert await asyncio.to_thread(started.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0.01)
+        assert not task.done()
+        # Cancellation during the first drain must not abandon the SSH thread.
+        task.cancel()
+        await asyncio.sleep(0.01)
+        assert not task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert finished.is_set()
+
+    with patch.object(controller, 'remote', side_effect=blocking_remote):
+        asyncio.run(exercise())

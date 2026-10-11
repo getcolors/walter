@@ -44,6 +44,25 @@ def remote(host, connection, config, action, **private):
     return result
 
 
+async def remote_task(*args, **kwargs):
+    """Cancellation stops scheduling, never abandons an SSH mutation worker."""
+    worker = asyncio.create_task(asyncio.to_thread(remote, *args, **kwargs))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        # Retrieve a failed worker's exception without replacing cancellation.
+        if not worker.cancelled():
+            worker.exception()
+        raise
+
+
 def github_token(account):
     """Use the authenticated GitHub CLI identity; never print or persist its token."""
     if not account:
@@ -188,7 +207,7 @@ async def converge(config, deployment, state, cloud, host, operation, reporter):
             start = time.monotonic() - origin
             try:
                 with branch_reporter.stage(name):
-                    value = await asyncio.to_thread(remote, results['worker_host'], results['connection'], config, action, **arguments)
+                    value = await remote_task(results['worker_host'], results['connection'], config, action, **arguments)
                 if action == 'resolve-nix':
                     results['resolved']['nix_source'] = value['nix_source']
                 elif action == 'resolve-asdf':
@@ -225,10 +244,15 @@ async def converge(config, deployment, state, cloud, host, operation, reporter):
                     raise error
         finally:
             if active:
-                await asyncio.shield(asyncio.gather(*active, return_exceptions=True))
+                drain = asyncio.gather(*active, return_exceptions=True)
+                while not drain.done():
+                    try:
+                        await asyncio.shield(drain)
+                    except asyncio.CancelledError:
+                        continue
 
     async def finalize():
-        await asyncio.to_thread(remote, results['worker_host'], results['connection'], config, 'finalize', run_token=results['run_token'])
+        await remote_task(results['worker_host'], results['connection'], config, 'finalize', run_token=results['run_token'])
         summary = {'verified': True, 'users': users}
         state.complete(results['intent'], summary)
         evidence = {'instance_id': results['connection']['instance_id'], 'desired_hash': deployment['_desired_hash']}
