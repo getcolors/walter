@@ -160,6 +160,13 @@ profile, preserving existing user files; the checkout's old launcher is never
 executed. Emacs package warming runs asynchronously alongside Atuin synchronization; inspect
 `~/.local/state/walter/emacs-packages.log` for completion.
 
+Walter removes Atuin’s Claude Code, Codex and pi hooks during each full
+convergence, after user tooling setup and before Atuin login/sync. Unrelated
+agent settings and hooks, ordinary shell history and Atuin sync are preserved.
+Missing integration files are ignored; malformed JSON configuration fails
+convergence without replacement. Restart running Claude Code/Codex sessions or
+run `/reload` in pi after cleanup. OpenCode is not managed.
+
 `vault-id` selects a dedicated vault; `vault-command` selects its installed CLI.
 The user must authenticate and unlock it. `vault-save` is an explicit checkpoint
 of private bindings, operator/bootstrap keys, known hosts and SQLite. It does not

@@ -499,6 +499,58 @@ def emacs_job(home, config):
     return str(log)
 
 
+def remove_atuin_agent_hooks(home):
+    """Remove Atuin's installed agent integrations, preserving other settings."""
+    for relative, agent in (('.claude/settings.json', 'claude-code'),
+                            ('.codex/hooks.json', 'codex')):
+        path = user_path(home, relative)
+        if path.is_symlink():
+            raise ProvisionError('refusing agent configuration symlink')
+        if not path.exists():
+            continue
+        try:
+            settings = json.loads(path.read_text())
+        except (ValueError, UnicodeError):
+            raise ProvisionError('invalid agent hook configuration') from None
+        if not isinstance(settings, dict):
+            raise ProvisionError('invalid agent hook configuration')
+        events = settings.get('hooks')
+        if not isinstance(events, dict):
+            continue
+        changed = False
+        for event, groups in events.items():
+            if not isinstance(groups, list):
+                continue
+            retained = []
+            for group in groups:
+                if not isinstance(group, dict) or not isinstance(group.get('hooks'), list):
+                    retained.append(group)
+                    continue
+                hooks = []
+                for hook in group['hooks']:
+                    matches = False
+                    if isinstance(hook, dict) and hook.get('type') == 'command':
+                        command = hook.get('command')
+                        if isinstance(command, str):
+                            try:
+                                matches = shlex.split(command) == ['atuin', 'hook', agent]
+                            except ValueError:
+                                pass
+                    if not matches:
+                        hooks.append(hook)
+                if len(hooks) == len(group['hooks']):
+                    retained.append(group)
+                else:
+                    changed = True
+                    if hooks:
+                        retained.append({**group, 'hooks': hooks})
+            events[event] = retained
+        if changed:
+            write(path, json.dumps(settings, indent=2) + '\n', path.stat().st_mode & 0o777)
+    extension = user_path(home, '.pi/agent/extensions/atuin.ts')
+    extension.unlink(missing_ok=True)
+
+
 def atuin_login(username, password, key, *, timeout=120):
     """Answer Atuin's hidden password and key prompts in either order.
 
@@ -664,6 +716,7 @@ def user_tasks(payload, user, resolved):
     stage('emacs')
     log = emacs_job(home, config)
     stage('atuin')
+    remove_atuin_agent_hooks(home)
     if config.get('atuin-username'):
         username = config['atuin-username']
         stamp = home / '.local/state/walter' / ('atuin-' + username)
