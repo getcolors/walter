@@ -175,6 +175,21 @@ then `delete` removes owned compute, boot storage, firewall rules and local SSH
 keys/aliases. It retains the SQLite receipt, configuration and Vault history.
 Deletion destroys remote work; recovery checkpoints do not contain that work.
 
+## Failure diagnostics
+
+Failures report validated operation names, categories, exit codes or signals,
+elapsed time and recognized HTTP status codes. Walter attaches task and user
+context from the controller. Atuin failures recognize a small set of HTTP and
+transport signatures; unrecognized errors retain their exit status without a
+speculative cause. Failed-operation evidence remains in controller history after
+successful retries.
+
+Command arguments, stdout/stderr, provider bodies, URLs, credential paths and
+exception text remain private. Remote diagnostics are allowlisted before they
+cross the controller boundary. There is no output masking or excerpt mode.
+PocketDeploy owns the shared schema, transport and history support; Alice uses
+the same schema for provisioning, Transmission RPC and file-copy failures.
+
 ## Development
 
 ```sh

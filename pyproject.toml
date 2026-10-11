@@ -3,7 +3,7 @@ name = "walter"
 version = "3.0.0"
 description = "Google Cloud development machines, using PocketDeploy"
 requires-python = ">=3.11"
-dependencies = ["pocketdeploy @ git+https://github.com/pocketcontext/pocketdeploy.git@f910976d601b3aaec3bc8fab26126606968c198a"]
+dependencies = ["pocketdeploy @ git+https://github.com/pocketcontext/pocketdeploy.git@75b20da90f704a39c745e62ad68907039602bc59"]
 
 [project.scripts]
 walter = "walter.cli:main"

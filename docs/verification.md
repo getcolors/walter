@@ -93,3 +93,23 @@ and zero pending steps; shared networking and local history were retained.
 The final ARM64 recovery state was saved to Vault after its successful copied
 launcher run. Resolver and root task progress now explicitly finish at `complete`,
 including successful retries after a previously failed stage.
+
+
+## Structured diagnostics rollout plan
+
+Apply shared diagnostics in PocketDeploy, then pin the published dependency in
+Walter and Alice. Test each package and publish its source before updating and
+testing the portable launcher. Keep raw command output private; no masking or
+excerpt feature is part of this change.
+
+Live deployment is authorized for Walter. Recreate disposable `walter-gcp` with
+the same profile and desired configuration, without backing up or restoring its
+remote files. Checkpoint controller recovery state, review owned deletion, remove
+protection only for deletion, and create with protection enabled. Retain SQLite
+history and external networks; leave unrelated machines unchanged.
+
+Validate the fresh DAG, native shared Go for all users, safe diagnostic transport
+and privilege-dropped child failures, graceful interruption and ordinary recovery.
+Repeat through a copied published launcher, compare resource identities and save
+a final controller checkpoint. Alice and PocketDeploy require no separate live
+resource mutations for this rollout.

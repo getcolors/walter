@@ -132,7 +132,7 @@ def main(argv=None):
         return 0
     except DeployError as error:
         reporter.failure(str(error), code=error.code, stage=error.stage or reporter.failed_stage,
-                         elapsed_seconds=time.monotonic() - started)
+                         elapsed_seconds=time.monotonic() - started, diagnostic=error.diagnostic)
         return 2 if error.code == 'invalid_usage' else 1
     except KeyboardInterrupt:
         reporter.failure('Interrupted; retry to reconcile recorded operations.', code='interrupted')

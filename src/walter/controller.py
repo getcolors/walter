@@ -13,6 +13,8 @@ from graphlib import TopologicalSorter
 
 from blue.workflow import workflow, run as run_workflow
 from pocketdeploy.common import DeployError, run
+from pocketdeploy import diagnostics
+from .remote import OPERATIONS
 from pocketdeploy.runtime import initialize
 from . import ssh_config
 
@@ -35,13 +37,38 @@ def remote(host, connection, config, action, **private):
         payload['eternal_terminal_source'] = source('eternal_terminal')
     if action in ('converge', 'install-go'):
         payload['go_install_source'] = source('go_install')
-    result = host.run_python(connection, source('remote'), payload, timeout=14400)
+    program = 'exec(' + repr(Path(diagnostics.__file__).read_text()) + ')\n' + 'exec(compile(' + repr(source('remote')) + ', "<walter>", "exec"))'
+    try:
+        result = host.run_python(connection, program, payload, timeout=14400)
+    except DeployError as error:
+        error.diagnostic = diagnostic_context(error.diagnostic, action, private, config, connection)
+        raise
     if not isinstance(result, dict) or result.get('ok') is not True:
         # Remote text is untrusted, including exceptions from configured tools.
         stage = result.get('stage') if isinstance(result, dict) else None
-        safe = stage if stage in {'validation', 'local-ssd', 'machine', 'prerequisites', 'go', 'docker', 'nix-install', 'nix-packages', 'asdf', 'shell-paths', 'agent-tools', 'credentials', 'github', 'dotfiles', 'atuin', 'emacs'} else 'provisioning'
-        raise DeployError('Remote ' + safe + ' failed; private output suppressed.', stage=safe)
+        safe = stage if isinstance(stage, str) and stage in {'validation', 'local-ssd', 'machine', 'prerequisites', 'go', 'docker', 'nix-install', 'nix-packages', 'asdf', 'shell-paths', 'agent-tools', 'credentials', 'github', 'dotfiles', 'atuin', 'emacs'} else 'provisioning'
+        diagnostic = diagnostics.validate_diagnostic(result.get('diagnostic'), allowed_operations=OPERATIONS) if isinstance(result, dict) else None
+        diagnostic = diagnostic_context(diagnostic, action, private, config, connection)
+        raise DeployError('Remote ' + safe + ' failed; private output suppressed.', stage=safe, diagnostic=diagnostic)
     return result
+
+
+def diagnostic_context(value, action, private, config, connection):
+    value = diagnostics.validate_diagnostic(value)
+    if value is None:
+        return None
+    # Attribute from trusted caller context, never remote response strings.
+    value.pop('task', None)
+    value.pop('user', None)
+    actions = {'converge', 'converge-nix', 'converge-asdf', 'bootstrap', 'install-go',
+               'install-docker', 'install-nix', 'install-et', 'resolve-nix', 'resolve-asdf',
+               'user-packages', 'user-runtime', 'user-github', 'user-finish', 'finalize', 'probe', 'status'}
+    if action in actions:
+        value['task'] = action
+    user = private.get('target_user')
+    if user in [connection.get('user', 'ubuntu'), *config.get('users', [])]:
+        value['user'] = user
+    return diagnostics.validate_diagnostic(value)
 
 
 async def remote_task(*args, **kwargs):
@@ -75,8 +102,8 @@ def github_token(account):
         if not token or '\n' in token:
             raise DeployError('GitHub CLI returned an invalid token.')
         return token
-    except DeployError:
-        raise DeployError('GitHub credentials unavailable or account mismatch; run gh auth login for github-account before convergence.') from None
+    except DeployError as error:
+        raise DeployError('GitHub credentials unavailable or account mismatch; run gh auth login for github-account before convergence.', diagnostic=error.diagnostic) from None
 
 
 def private_payload(config, *, include_token=True):

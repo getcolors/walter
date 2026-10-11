@@ -17,6 +17,10 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
+
+if 'build_diagnostic' not in globals():
+    from pocketdeploy.diagnostics import build_diagnostic, validate_diagnostic
 
 NIXPKGS = 'github:NixOS/nixpkgs/nixos-26.05'
 CREDENTIALS = {'.claude/.credentials.json', '.codex/auth.json', '.pi/agent/auth.json'}
@@ -29,7 +33,12 @@ AGENTS = {
 
 
 class ProvisionError(Exception):
-    """Only fixed, credential-free operation names may appear in this error."""
+    """Only fixed messages and validated structured evidence cross the boundary."""
+
+    def __init__(self, message, diagnostic=None):
+        super().__init__(message)
+        self.diagnostic = validate_diagnostic(diagnostic, allowed_operations=OPERATIONS)
+
 
 
 STAGES = frozenset(('validation', 'machine', 'users', 'prerequisites', 'go', 'docker', 'local-ssd', 'nix-install', 'nix-packages', 'asdf', 'shell-paths', 'agent-tools', 'credentials', 'github', 'dotfiles', 'atuin', 'emacs', 'complete'))
@@ -65,14 +74,82 @@ def task_progress(directory):
             if (value := read_progress(path)) is not None}
 
 
+COMMAND_OPERATIONS = {
+    ('atuin', 'sync'): 'atuin-sync', ('nix', 'profile'): 'nix-profile',
+    ('nix', 'build'): 'nix-build', ('nix', 'flake'): 'nix-metadata',
+    ('asdf', 'plugin'): 'asdf-plugin', ('asdf', 'install'): 'asdf-install',
+    ('asdf', 'latest'): 'asdf-resolve', ('asdf', 'set'): 'asdf-select',
+    ('git', 'clone'): 'git-clone', ('git', 'config'): 'git-config',
+    ('gh', 'api'): 'github-api', ('gh', 'auth'): 'github-auth',
+    ('apt-get', 'update'): 'apt-update', ('apt-get', 'install'): 'apt-install',
+}
+OPERATIONS = STAGES | frozenset(COMMAND_OPERATIONS.values()) | {
+    'command', 'atuin-login', 'download', 'installer', 'service-command', 'tool-version'}
+
+
+def operation_for(args):
+    name = Path(args[0]).name
+    selected = COMMAND_OPERATIONS.get((name, args[1] if len(args) > 1 else ''))
+    if selected:
+        return selected
+    if name == 'curl':
+        return 'download'
+    if name in ('bash', 'sh'):
+        return 'installer'
+    if name == 'systemctl':
+        return 'service-command'
+    if len(args) == 2 and args[1] == '--version':
+        return 'tool-version'
+    return STAGE if STAGE in STAGES else 'command'
+
+
+def atuin_failure(stderr):
+    """Inspect bounded diagnostics locally; return only fixed categories."""
+    if not isinstance(stderr, str) or len(stderr) > 65536:
+        return 'nonzero_exit', None
+    text = stderr.lower()
+    status = re.search(r'http status (?:client|server) error \(([1-5][0-9]{2})(?:[ )])', text)
+    if status:
+        code = int(status[1])
+        return {401: 'authentication', 403: 'permission', 429: 'rate_limit'}.get(code, 'http'), code
+    for markers, category in (
+        (('invalid peer certificate', 'certificate verify failed'), 'tls'),
+        (('dns error:', 'failed to lookup address information'), 'dns'),
+        (('connection refused', 'network is unreachable'), 'connection'),
+        (('operation timed out', 'connection timed out'), 'timeout'),
+    ):
+        if any(marker in text for marker in markers):
+            return category, None
+    return 'nonzero_exit', None
+
+
 def run(args, *, data=None, check=True, timeout=3600):
+    started = time.monotonic()
+    operation = operation_for(args)
     try:
         result = subprocess.run(args, input=data, text=True, capture_output=True,
                                 timeout=timeout, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        raise ProvisionError('command unavailable or timed out') from None
+    except subprocess.TimeoutExpired:
+        raise ProvisionError('Command timed out.', build_diagnostic(
+            operation, 'timeout', elapsed_seconds=time.monotonic() - started)) from None
+    except OSError:
+        raise ProvisionError('Command unavailable.', build_diagnostic(
+            operation, 'unavailable', elapsed_seconds=time.monotonic() - started)) from None
     if check and result.returncode:
-        raise ProvisionError('command failed: ' + Path(args[0]).name + ' (exit ' + str(result.returncode) + ')')
+        category, status = atuin_failure(result.stderr) if operation == 'atuin-sync' else ('nonzero_exit', None)
+        if result.returncode < 0:
+            category, status = 'signal', None
+        raise ProvisionError('Command failed; private output suppressed.', build_diagnostic(
+            operation, category, returncode=result.returncode,
+            elapsed_seconds=time.monotonic() - started, http_status=status))
+    return result
+
+
+def failure_result(error):
+    result = {'ok': False, 'stage': STAGE}
+    diagnostic = validate_diagnostic(getattr(error, 'diagnostic', None), allowed_operations=OPERATIONS)
+    if diagnostic is not None:
+        result['diagnostic'] = diagnostic
     return result
 
 
@@ -334,7 +411,8 @@ def atuin_login(username, password, key, *, timeout=120):
         os.execvp('atuin', ['atuin', 'login', '-u', username])
     pending = {'password': password, 'key': key}
     captured = b''
-    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    deadline = started + timeout
     completed = False
     eof = False
     try:
@@ -356,7 +434,8 @@ def atuin_login(username, password, key, *, timeout=120):
             elif re.search(rb'please enter encryption key[^\r\n]*:\s*$', captured, re.I):
                 prompt = 'key'
             if prompt is not None and prompt not in pending:
-                raise ProvisionError('Atuin rejected the supplied credentials')
+                raise ProvisionError('Atuin rejected the supplied credentials', build_diagnostic(
+                    'atuin-login', 'authentication', elapsed_seconds=time.monotonic() - started))
             if not eof and prompt is not None:
                 # rpassword disables echo after writing the password prompt.
                 if prompt == 'key' or not termios.tcgetattr(fd)[3] & termios.ECHO:
@@ -366,9 +445,12 @@ def atuin_login(username, password, key, *, timeout=120):
             if finished:
                 completed = True
                 if status:
-                    raise ProvisionError('Atuin login failed')
+                    raise ProvisionError('Atuin login failed', build_diagnostic(
+                        'atuin-login', 'nonzero_exit', returncode=os.waitstatus_to_exitcode(status),
+                        elapsed_seconds=time.monotonic() - started))
                 return
-        raise ProvisionError('Atuin login timed out')
+        raise ProvisionError('Atuin login timed out', build_diagnostic(
+            'atuin-login', 'timeout', elapsed_seconds=time.monotonic() - started))
     finally:
         os.close(fd)
         if not completed:
@@ -500,7 +582,7 @@ def start_user(payload, user, resolved):
             os.umask(0o077)
             value = {'ok': True, 'result': user_tasks(payload, user, dict(resolved))}
         except Exception as error:
-            value = {'ok': False, 'stage': STAGE, 'error': str(error) if isinstance(error, ProvisionError) else 'user provisioning failed'}
+            value = failure_result(error)
         with os.fdopen(write_fd, 'w') as stream:
             json.dump(value, stream)
         os._exit(0)
@@ -517,7 +599,7 @@ def finish_user(worker):
         os.waitpid(pid, 0)
     if not result['ok']:
         stage(result['stage'])
-        raise ProvisionError(result['error'])
+        raise ProvisionError('User provisioning failed.', result.get('diagnostic'))
     return result['result']
 
 
@@ -830,7 +912,7 @@ if __name__ == '__main__':
             raise ProvisionError('remote provisioner requires sudo')
         response = dispatch(request)
     except Exception as error:
-        response = {'ok': False, 'stage': STAGE, 'error': str(error) if isinstance(error, ProvisionError) else 'remote provisioning failed'}
+        response = failure_result(error)
     print(json.dumps(response))
     # Host.run_python transports structured failure without exposing SSH stderr.
     sys.exit(0)
