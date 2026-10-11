@@ -9,44 +9,41 @@ from walter import remote
 
 
 class AtuinMigrationTest(unittest.TestCase):
-    def profile_run(self, atuin_source, *, fail_add=False):
-        profile = {'elements': {
-            'atuin-old': {'attrPath': 'legacyPackages.aarch64-linux.atuin', 'originalUrl': atuin_source},
-            'fish-existing': {'attrPath': 'legacyPackages.aarch64-linux.fish', 'originalUrl': remote.NIXPKGS},
-        }}
+    def test_official_install_verified_before_nix_removal(self):
         calls = []
-        def run(args, **kwargs):
-            calls.append(args)
-            if fail_add and args[:3] == ['nix', 'profile', 'add']:
-                raise remote.ProvisionError('Synthetic add failure')
-            return types.SimpleNamespace(stdout=json.dumps(profile))
-        return calls, run
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / '.nix-profile').mkdir()
+            def runner(args, **kwargs):
+                calls.append(args)
+                if args[0] == 'sh':
+                    binary = home / '.atuin/bin/atuin'
+                    binary.parent.mkdir(parents=True)
+                    binary.write_text('synthetic')
+                output = 'atuin 18.23.0' if args[-1] == '--version' else json.dumps({'elements': {
+                    'atuin-old': {'attrPath': 'legacyPackages.aarch64-linux.atuin', 'originalUrl': remote.NIXPKGS}}})
+                return types.SimpleNamespace(stdout=output)
+            with patch.object(remote, 'run', runner):
+                remote.install_atuin(home)
+            self.assertEqual(calls[0], ['curl', '--proto', '=https', '--tlsv1.2', '-LsSf', 'https://setup.atuin.sh'])
+            self.assertEqual(calls[1], ['sh', '-s', '--', '--non-interactive'])
+            self.assertEqual(calls[2], [str(home / '.atuin/bin/atuin'), '--version'])
+            self.assertEqual(calls[-1], ['nix', 'profile', 'remove', 'atuin-old'])
+            calls.clear()
+            with patch.object(remote, 'run', runner):
+                remote.install_atuin(home)
+            self.assertFalse(any(c[0] in ('curl', 'sh') for c in calls))
 
-    def test_existing_old_atuin_replaced_but_other_packages_preserved(self):
-        calls, run = self.profile_run(remote.NIXPKGS)
-        with patch.object(remote, 'run', run), patch.object(Path, 'exists', return_value=True):
-            remote.nix_packages(['atuin', 'fish'])
-        self.assertEqual(calls[1], ['nix', 'build', '--impure', '--no-link', remote.ATUIN_NIXPKGS + '#atuin'])
-        self.assertEqual(calls[2], ['nix', 'profile', 'remove', 'atuin-old'])
-        self.assertEqual(calls[3], ['nix', 'profile', 'add', '--impure', remote.ATUIN_NIXPKGS + '#atuin'])
-
-    def test_correct_source_not_replaced(self):
-        calls, run = self.profile_run(remote.ATUIN_NIXPKGS)
-        with patch.object(remote, 'run', run), patch.object(Path, 'exists', return_value=True):
-            remote.nix_packages(['atuin', 'fish'])
-        self.assertEqual(calls, [['nix', 'profile', 'list', '--json']])
-
-    def test_fresh_install_sources_only_atuin_from_new_pin(self):
-        with patch.object(remote, 'run') as run, patch.object(Path, 'exists', return_value=False):
-            remote.nix_packages(['atuin', 'fish'], source='github:NixOS/nixpkgs/' + 'a' * 40)
-        run.assert_called_once_with(['nix', 'profile', 'add', '--impure', remote.ATUIN_NIXPKGS + '#atuin', 'github:NixOS/nixpkgs/' + 'a' * 40 + '#fish'])
-
-    def test_failed_replacement_rolls_back(self):
-        calls, run = self.profile_run(remote.NIXPKGS, fail_add=True)
-        with patch.object(remote, 'run', run), patch.object(Path, 'exists', return_value=True):
-            with self.assertRaises(remote.ProvisionError):
-                remote.nix_packages(['atuin', 'fish'])
-        self.assertEqual(calls[-1], ['nix', 'profile', 'rollback'])
+    def test_invalid_official_version_preserves_nix_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            binary = home / '.atuin/bin/atuin'
+            binary.parent.mkdir(parents=True)
+            binary.write_text('synthetic')
+            with patch.object(remote, 'run', return_value=types.SimpleNamespace(stdout='atuin 18.15.2')) as run:
+                with self.assertRaises(remote.ProvisionError):
+                    remote.install_atuin(home)
+            run.assert_called_once_with([str(binary), '--version'])
 
     def test_rebuild_only_after_successful_sync_once(self):
         with tempfile.TemporaryDirectory() as directory:

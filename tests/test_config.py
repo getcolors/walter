@@ -37,6 +37,10 @@ class ConfigTest(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(DeployError):
                 self.load({'atuin-sync-capture': value})
 
+    def test_atuin_cannot_be_reintroduced_through_nix(self):
+        with self.assertRaises(DeployError):
+            self.load({'nix-packages': ['atuin']})
+
     def test_go_version_requires_pinned_release(self):
         c, _ = self.load()
         self.assertEqual('1.27.2', c['go-version'])

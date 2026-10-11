@@ -56,7 +56,6 @@ nix-packages:
   - clojure-lsp
   - starship
   - zoxide
-  - atuin
   - direnv
   - eza
   - zellij

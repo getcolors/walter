@@ -58,7 +58,8 @@ def validate(c):
         raise DeployError('Scratch requires Google Local SSD disks.')
     if c.get('google-region') and c['google-zone'].rsplit('-', 1)[0] != c['google-region']:
         raise DeployError('Google zone must belong to google-region.')
-    _strings(c, 'nix-packages', r'[A-Za-z0-9_+.-]+')
+    if 'atuin' in _strings(c, 'nix-packages', r'[A-Za-z0-9_+.-]+'):
+        raise DeployError('Atuin uses its official installer; remove it from nix-packages.')
     _strings(c, 'clone-orgs', r'[A-Za-z0-9][A-Za-z0-9-]*')
     _strings(c, 'clone-repos', r'[A-Za-z0-9][A-Za-z0-9-]*/(?!\.{1,2}$)[A-Za-z0-9_.-]+')
     agents = _strings(c, 'agent-tools')

@@ -105,7 +105,10 @@ def test_atuin_requires_effective_compatible_version_and_completed_rebuild(tmp_p
     marker = tmp_path / '.local/state/walter/atuin-history-v2-rebuilt'
     marker.parent.mkdir(parents=True)
     config = {'atuin-username': 'synthetic'}
-    namespace['command'] = lambda *args: (0, 'atuin 18.21.0 (revision extra)\n')
+    binary = tmp_path / '.atuin/bin/atuin'
+    binary.parent.mkdir(parents=True)
+    binary.write_text('synthetic')
+    namespace['command'] = lambda user, args: (0, str(binary) if args[0] == '/bin/sh' else 'atuin 18.23.0 (revision extra)\n')
     checks = namespace['atuin_checks']('seat', tmp_path, config)
     assert checks['atuin_v2_compatible'] and not checks['atuin_history_rebuilt']
     marker.write_text('History rebuilt with v2-compatible Atuin after successful sync.\n')
@@ -125,7 +128,7 @@ def test_atuin_requires_effective_compatible_version_and_completed_rebuild(tmp_p
 
 def test_atuin_checks_are_required_even_with_existing_session():
     fixture = VerifyLiveTest().fixture()
-    for name in ('atuin_v2_compatible', 'atuin_history_rebuilt'):
+    for name in ('atuin_v2_compatible', 'atuin_history_rebuilt', 'atuin_official_install'):
         raw = dict(fixture, users={'ubuntu': dict(fixture['users']['ubuntu'])})
         raw['users']['ubuntu'][name] = False
         assert not VERIFY.filter_result(raw, ['ubuntu'])['passed']

@@ -148,9 +148,12 @@ retain exclusive machine access. Failure stops new tasks and drains running work
 before returning. Progress is recorded per task; successful convergence includes
 relative start/finish timings under `provisioning.task_timings`.
 
-Nix uses one resolved nixpkgs `nixos-26.05` revision for ordinary packages.
-Atuin alone uses an immutable newer revision with history-v2 support; the stable
-branch provides an incompatible client. Nix/asdf and standalone agent installers
+Nix uses one resolved nixpkgs `nixos-26.05` revision. Atuin uses its official
+`https://setup.atuin.sh` installer, run without interactive prompts as each user.
+It installs the current upstream release in `~/.atuin/bin` when absent. Walter
+verifies it before removing any previous Nix Atuin entry and includes its directory
+in Bash, Fish and provisioning PATHs. Existing installations are retained on
+repeat convergence; history and credentials are preserved. Nix/asdf and standalone agent installers
 configure each home. Focused commands operate on the recorded
 owned machine. Dotfiles use a small Python renderer for the checkout's Ubuntu
 profile, preserving existing user files; the checkout's old launcher is never

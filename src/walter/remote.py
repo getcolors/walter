@@ -25,8 +25,6 @@ if 'build_diagnostic' not in globals():
     from pocketdeploy.diagnostics import build_diagnostic, validate_diagnostic
 
 NIXPKGS = 'github:NixOS/nixpkgs/nixos-26.05'
-# Atuin v2 history records require >=18.18; stable26.05 still ships18.15.2.
-ATUIN_NIXPKGS = 'github:NixOS/nixpkgs/8edc0c72e3a38faf5434e40d1f19431125fe4b30'
 ATUIN_REBUILD_STAMP = 'atuin-history-v2-rebuilt'
 CREDENTIALS = {'.claude/.credentials.json', '.codex/auth.json', '.pi/agent/auth.json'}
 AGENTS = {
@@ -223,6 +221,23 @@ def atuin_sync(home, *, capture=False, timeout=3600):
                                        output['stdout'], output['stderr'])
 
 
+def install_atuin(home):
+    """Use the official per-user installer before retiring the Nix package."""
+    binary = home / '.atuin/bin/atuin'
+    if not binary.is_file():
+        script = run(['curl', '--proto', '=https', '--tlsv1.2', '-LsSf',
+                      'https://setup.atuin.sh']).stdout
+        run(['sh', '-s', '--', '--non-interactive'], data=script)
+    version = run([str(binary), '--version']).stdout.strip()
+    match = re.fullmatch(r'atuin (\d+)\.(\d+)\.(\d+)(?:[-+][^\s]+)?(?:\s.*)?', version)
+    if not match or tuple(map(int, match.groups())) < (18, 18, 0):
+        raise ProvisionError('The official Atuin installation must support history v2.')
+    if (home / '.nix-profile').exists():
+        current = profile_attributes(json.loads(run(['nix', 'profile', 'list', '--json']).stdout))
+        if 'atuin' in current:
+            run(['nix', 'profile', 'remove', current['atuin']])
+
+
 def atuin_history(home, *, capture=False):
     """Sync with a compatible client and repair history once after migration."""
     version = run(['atuin', '--version']).stdout.strip()
@@ -326,21 +341,13 @@ def profile_attributes(profile):
 def nix_packages(packages, upgrade=False, source=NIXPKGS):
     if not packages:
         return
-    profile = json.loads(run(['nix', 'profile', 'list', '--json']).stdout) if (Path.home() / '.nix-profile').exists() else {}
-    current = profile_attributes(profile)
-    sources = {p: ATUIN_NIXPKGS if p == 'atuin' else source for p in packages}
-    # Only Atuin has a mandatory version migration during normal convergence.
-    # Other packages retain the existing install-missing-only policy.
-    changed = [p for p in packages if p in current and p == 'atuin'
-               and profile['elements'][current[p]].get('originalUrl') != sources[p]]
-    selected = packages if upgrade else [p for p in packages if p not in current or p in changed]
-    if not selected:
-        return
-    installables = [sources[p] + '#' + p for p in selected]
-    if upgrade or changed:
-        # Build replacements before removing the old profile generation.
+    current = profile_attributes(json.loads(run(['nix', 'profile', 'list', '--json']).stdout)) if (Path.home() / '.nix-profile').exists() else {}
+    if upgrade:
+        # `profile upgrade` deliberately skips immutable original URLs. Build
+        # replacements first, preserving a usable profile if realization fails.
+        installables = [source + '#' + p for p in packages]
         run(['nix', 'build', '--impure', '--no-link', *installables])
-        names = [current[p] for p in selected if p in current]
+        names = [current[p] for p in packages if p in current]
         if names:
             run(['nix', 'profile', 'remove', *names])
         try:
@@ -349,8 +356,10 @@ def nix_packages(packages, upgrade=False, source=NIXPKGS):
             if names:
                 run(['nix', 'profile', 'rollback'])
             raise
-    else:
-        run(['nix', 'profile', 'add', '--impure', *installables])
+        return
+    missing = [p for p in packages if p not in current]
+    if missing:
+        run(['nix', 'profile', 'add', '--impure', *[source + '#' + p for p in missing]])
 
 
 def asdf_tools(config, resolved, home):
@@ -462,14 +471,14 @@ def github(config, payload, home):
 
 
 def shell_paths(home, config):
-    paths = '/usr/local/go/bin:$HOME/go/bin:$HOME/.local/bin:$HOME/.asdf/shims:$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin'
+    paths = '/usr/local/go/bin:$HOME/go/bin:$HOME/.atuin/bin:$HOME/.local/bin:$HOME/.asdf/shims:$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin'
     fragment = '# BEGIN walter paths\nexport PATH="' + paths + ':$PATH"\n# END walter paths\n'
     profile = home / '.profile'
     text = profile.read_text() if profile.exists() else ''
     text = re.sub(r'# BEGIN walter paths\n.*?# END walter paths\n?', '', text, flags=re.S)
     write(profile, text.rstrip() + '\n' + fragment)
     write(home / '.config/fish/conf.d/walter-paths.fish',
-          'fish_add_path --prepend /usr/local/go/bin ~/go/bin ~/.local/bin ~/.asdf/shims ~/.nix-profile/bin /nix/var/nix/profiles/default/bin\n')
+          'fish_add_path --prepend /usr/local/go/bin ~/go/bin ~/.atuin/bin ~/.local/bin ~/.asdf/shims ~/.nix-profile/bin /nix/var/nix/profiles/default/bin\n')
 
 
 def emacs_job(home, config):
@@ -560,7 +569,7 @@ def user_tasks(payload, user, resolved):
     home = Path(pwd.getpwnam(user).pw_dir)
     os.environ.clear()
     os.environ.update(HOME=str(home), USER=user, LOGNAME=user, SHELL='/bin/bash', LANG='C.UTF-8',
-                      PATH=f'/usr/local/go/bin:{home}/go/bin:{home}/.local/bin:{home}/.asdf/shims:{home}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/bin:/bin',
+                      PATH=f'/usr/local/go/bin:{home}/go/bin:{home}/.atuin/bin:{home}/.local/bin:{home}/.asdf/shims:{home}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/bin:/bin',
                       NIXPKGS_ALLOW_UNFREE='1', DEBIAN_FRONTEND='noninteractive',
                       MAKEFLAGS='-j1', CMAKE_BUILD_PARALLEL_LEVEL='1', CARGO_BUILD_JOBS='1')
     os.chdir(home)
@@ -647,6 +656,9 @@ def user_tasks(payload, user, resolved):
         namespace = {'__name__': 'walter_dotfiles'}
         exec(payload['dotfiles_source'], namespace)
         namespace['install'](user_path(home, config['dotfiles-checkout']), home)
+    if config.get('atuin-username'):
+        stage('atuin')
+        install_atuin(home)
     # Emacs depends on packages/checkouts/dotfiles, not Atuin authentication.
     # Start its existing locked background job before the potentially long sync.
     stage('emacs')

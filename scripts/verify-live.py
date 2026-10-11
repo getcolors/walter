@@ -16,7 +16,7 @@ def command(user, argv):
     record = pwd.getpwnam(user)
     home = record.pw_dir
     env = dict(HOME=home, USER=user, LOGNAME=user, LANG='C.UTF-8',
-               PATH=home+'/.local/bin:'+home+'/.asdf/shims:'+home+'/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/bin:/bin')
+               PATH=home+'/.atuin/bin:'+home+'/.local/bin:'+home+'/.asdf/shims:'+home+'/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/bin:/bin')
     def drop():
         os.initgroups(user, record.pw_gid)
         os.setgid(record.pw_gid)
@@ -139,9 +139,13 @@ with tempfile.TemporaryDirectory(prefix='walter-go-verify-') as directory:
 
 
 def atuin_checks(user, home, config):
-    checks = {'atuin_v2_compatible': True, 'atuin_history_rebuilt': True}
+    checks = {'atuin_v2_compatible': True, 'atuin_history_rebuilt': True, 'atuin_official_install': True}
     if not config.get('atuin-username'):
         return checks
+    binary = home / '.atuin/bin/atuin'
+    code, output = command(user, ['/bin/sh', '-c', 'command -v atuin'])
+    checks['atuin_official_install'] = (code == 0 and output.strip() == str(binary)
+        and binary.is_file() and not (home / '.nix-profile/bin/atuin').exists())
     code, output = command(user, ['atuin', '--version'])
     match = re.match(r'^atuin ([0-9]+)\.([0-9]+)\.([0-9]+)(?:\s|$)', output.strip())
     checks['atuin_v2_compatible'] = code == 0 and match is not None and tuple(map(int, match.groups())) >= (18, 18, 0)
@@ -230,7 +234,7 @@ except Exception:
 
 CHECKS = ('private_home', 'unprivileged_seat', 'authorized_key', 'nix_packages',
           'go_direct', 'go_bash', 'go_fish', 'go_shared_permissions', 'go_native_build',
-          'asdf_runtimes', 'explicit_repositories', 'agent_executables', 'github_account', 'dotfiles_stamp', 'atuin_session_files', 'atuin_v2_compatible', 'atuin_history_rebuilt')
+          'asdf_runtimes', 'explicit_repositories', 'agent_executables', 'github_account', 'dotfiles_stamp', 'atuin_session_files', 'atuin_v2_compatible', 'atuin_history_rebuilt', 'atuin_official_install')
 
 
 def filter_result(raw, users, allow_emacs_pending=False):
