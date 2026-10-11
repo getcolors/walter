@@ -113,3 +113,38 @@ and privilege-dropped child failures, graceful interruption and ordinary recover
 Repeat through a copied published launcher, compare resource identities and save
 a final controller checkpoint. Alice and PocketDeploy require no separate live
 resource mutations for this rollout.
+
+## Structured diagnostics rollout results
+
+Published Walter source `a13326f` and launcher `b7daca5` pin PocketDeploy source
+`75b20da` (shared launcher `950cfa3`). Alice source `8f27cab` and launcher
+`5863c76` publish the corresponding adapters. Walter passed 125 tests with one
+privilege-test skip and 41 subtests; the separate root run passed 14 tests and
+two subtests. PocketDeploy passed 857 tests and Alice passed 42. Package builds
+and copied-launcher checks passed for all three projects.
+
+The disposable `walter-gcp` was deleted in 100.095 seconds and recreated under
+the same profile without a remote-data backup or restoration. Fresh convergence
+ran for 372.357 seconds before failing. The new diagnostics identified Jack's
+`atuin-sync` operation in `user-finish`: exit code 1, category `nonzero_exit`,
+and elapsed time 125.768 seconds. All three user-finish tasks failed, running
+workers drained, and finalization was withheld. These fields do not establish
+the underlying Atuin cause. Ordinary recovery succeeded in 32.872 seconds on
+new provider instance `4792162071945336603`.
+
+Full verification and actual SSH checks passed for ubuntu, rose and jack:
+Go 1.27.2 on ARM64 through native execution, Bash and Fish; private homes;
+seat sudo denial; Eternal Terminal readiness; and successful Emacs warming.
+Controlled remote failures preserved exit 37, timeout, unavailable-command
+and signal 15 diagnostics. A privilege-dropped Rose child preserved exit 37
+and its stage across the child transport. Both suppressed private sentinels. No raw output excerpts or masking were enabled.
+
+A deliberate SIGINT drained all five started workers and skipped finalization.
+Recovery through the copied published launcher succeeded in 31.383 seconds and
+retained the replacement instance ID. These timings are observed runs, not a
+controlled performance comparison. Final audit confirmed the new owned instance
+is running, the old instance is absent, both unrelated machines retain their
+original IDs and running state, destruction protection is enabled and no journal
+steps remain pending. SSH authority validates the replacement instance. The
+original Atuin diagnostic remains in controller history after successful retries.
+A final six-file controller recovery checkpoint was saved successfully to Vault.
