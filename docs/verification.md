@@ -1,59 +1,72 @@
-# Python Walter verification
+# Walter deployment verification
 
-Verified on 11 October 2026. Profile `walter-gcp` uses PocketDeploy package
-`22b9a5c9235a52ac4a772554e26b21bef6f571f5` and Walter package
-`bbfa62973407c9d25a357d89edd3444b3306bc50`. Both portable launchers are pinned,
-published and tested from an unrelated directory; GitHub CI passed.
+Verified on 11 October 2026. Walter package
+`0e02cf318195af795e00460723d8aedd07f2bae4` uses PocketDeploy package
+`2231acf6f720003e14593a24aa304e14bf989fcb`. The portable launcher is pinned to
+that published Walter package and tested from an unrelated directory.
 
 ## Automated checks
 
-Walter: 68 tests passed, one privilege test skipped in the ordinary non-root run,
-and 23 subtests passed. The remote suite also passed all 13 tests under sudo,
-including the actual privilege boundary and both Atuin credential prompt orders.
-Source and wheel builds succeeded. Coverage includes configuration mapping,
-lifecycle protection, credential privacy, owned aliases, dotfiles, per-user
-privilege separation and Local SSD recovery.
+Walter: 98 tests passed, one privilege test skipped in the ordinary run, and
+23 subtests passed. The remote suite also passed all 13 tests and two subtests
+under sudo, including the actual privilege boundary. Package build and copied
+launcher checks passed. Tests cover SSD placement and boot ordering, partial Nix
+installation, true DAG user concurrency, failure joins, immutable package
+upgrades, explicit repository selection, runtime dependencies and ET service setup.
 
-PocketDeploy: 792 tests passed, plus package build, 36 copied-launcher checks and
-GitHub CI. Shared changes cover GCP machine/disk/NIC validation, resource naming,
-drift detection and Python provisioning over pinned SSH.
+PocketDeploy: 807 tests, package build and 36 copied-launcher checks passed.
+Configurable SSH companion TCP ports use the existing owned firewall lifecycle
+and SSH source restrictions across supported providers.
 
-## Live deployment
+## Fresh deployment
 
-Provisioned `walter-gcp-compute` in project `pocketcontext`, zone `europe-west4-b`,
-using the existing `default` network/subnet. The machine is ARM64 N4A with a
-100 GB persistent Hyperdisk Balanced boot volume and GVNIC. No old backend,
-machine, network or state was adopted. Bootstrap host keys were rotated before
-application credentials were sent.
+Deleted the previous `walter-gcp` VM, boot volume and owned firewall rules before
+creating the new deployment. No old remote files were migrated. The shared
+network and subnet were retained. The separate `walter-google` and
+`walter-google-big` machines retained their provider IDs and running state.
 
-Full convergence succeeded for `ubuntu`, `rose` and `jack`. Repeat convergence
-completed in 50 seconds, retained the same VM ID and left zero pending journal
-steps. The cloud plan retained all four managed resources with no drift.
+The fresh `walter-gcp-compute` in `europe-west4-b` uses
+`c4a-standard-4-lssd`: four ARM vCPUs, 16 GB RAM, one 375 GiB Local SSD and a
+100 GB Hyperdisk Balanced boot disk. The SSD is ext4 at `/scratch`, with bind
+mounts for `/home`, `/nix`, `/tmp`, `/var/tmp`, `/var/lib/docker` and
+`/var/lib/containerd`. Homes are private and temporary directories use mode 1777.
 
-The read-only live verifier passed before and after reboot:
+Shared setup runs before parallel user branches for `ubuntu`, `rose` and `jack`.
+The users share one resolved nixpkgs `nixos-26.05` revision and exact asdf versions:
+Node.js 26.11.1, uv 0.13.0 and Bun 1.4.3. Python is absent from asdf configuration.
+Node's `libatomic1` prerequisite is installed independently of Python tooling.
+Nix service overrides are written after the installer completes; incomplete
+installer receipts are resumed through the explicit saved plan.
 
-- Correct architecture, private home ownership/modes and authorized SSH keys.
-- Configured Nix packages, asdf runtimes, agent executables, GitHub identity,
-  dotfiles and Atuin session evidence for all three users. Convergence also
-  completed Atuin synchronization.
-- All three asynchronous Emacs setup jobs completed with exit code zero.
-- Seat users have no privileged groups; direct SSH tests confirmed their
-  identities and denied passwordless sudo.
+The full read-only verifier passed before and after reboot, including:
 
-All three installed SSH aliases worked. A scheduled system reboot changed the
-boot ID and reconnected with the pinned SSH host key. Docker, SSH and Nix daemon
-services were active afterward. Both existing `walter-google` and
-`walter-google-big` instances retained their original provider IDs and remained
-running.
+- SSD placement, private homes, configured Nix packages and matching runtimes.
+- GitHub identity, agent executables, dotfiles and Atuin authentication evidence.
+  Atuin synchronization succeeded on retry after an initial transient failure.
+- Explicit clones of `basecamp/once`, `pocketbase/pocketbase` and
+  `benbjohnson/litestream` under each user's `~/code/<owner>/<repo>`.
+- All three Emacs package-warming jobs completed with exit code zero.
+- SSH identity checks for all three users; seats were denied passwordless sudo.
+- Eternal Terminal 6.2.11 from Nix, its root-owned server profile, active service
+  and reachable TCP 2022. Actual ET sessions verified all three user identities.
 
-A final encrypted checkpoint saved six private files plus SQLite to the dedicated
-VaultContext vault. Its document is `zvl3wloyofzx87u`, version
-`3qqp05wor249r39`. This protects controller authority and state, not remote homes
-or boot-volume contents.
+Repeat convergence through a copied portable launcher from an unrelated directory
+completed in about 35 seconds. The three user branches overlapped and each took
+about six seconds. All managed resources were retained with no drift and zero
+pending journal steps. A scheduled reboot changed the boot ID and reconnected
+with the pinned SSH host key; the full verifier passed again afterward.
 
-## Limits
+## Synthetic performance sample
 
-Local SSD/C4A behavior was tested synthetically, not on a live C4A machine.
-Destructive deletion and Vault restoration were not exercised against this
-retained development machine. The live checks establish the observed state on
-the verification date; future upstream package changes require fresh validation.
+One run compared the boot filesystem with the SSD on the same VM after setup.
+Temporary benchmark files were removed. These are synthetic checks, not claims
+about application build speed.
+
+| Check | Boot disk | Local SSD |
+| --- | ---: | ---: |
+| 128 MiB write followed by fsync | 0.3920 s | 0.3928 s |
+| 500 small-file fsync operations | 0.7341 s | 0.0637 s |
+| Synthetic C compilation and execution | 0.6009 s | 0.5981 s |
+
+Small-file synchronization was about 11.5 times faster in this sample. Sequential
+writes and CPU-dominated compilation were effectively unchanged.
