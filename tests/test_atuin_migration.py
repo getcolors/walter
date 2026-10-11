@@ -25,8 +25,8 @@ class AtuinMigrationTest(unittest.TestCase):
                 return types.SimpleNamespace(stdout=output)
             with patch.object(remote, 'run', runner):
                 remote.install_atuin(home)
-            self.assertEqual(calls[0], ['curl', '--proto', '=https', '--tlsv1.2', '-LsSf', 'https://setup.atuin.sh'])
-            self.assertEqual(calls[1], ['sh', '-s', '--', '--non-interactive'])
+            self.assertEqual(calls[0], ['curl', '--proto', '=https', '--tlsv1.2', '-LsSf', 'https://github.com/atuinsh/atuin/releases/latest/download/atuin-installer.sh'])
+            self.assertEqual(calls[1], ['sh'])
             self.assertEqual(calls[2], [str(home / '.atuin/bin/atuin'), '--version'])
             self.assertEqual(calls[-1], ['nix', 'profile', 'remove', 'atuin-old'])
             calls.clear()

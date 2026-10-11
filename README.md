@@ -148,8 +148,9 @@ retain exclusive machine access. Failure stops new tasks and drains running work
 before returning. Progress is recorded per task; successful convergence includes
 relative start/finish timings under `provisioning.task_timings`.
 
-Nix uses one resolved nixpkgs `nixos-26.05` revision. Atuin uses its official
-`https://setup.atuin.sh` installer, run without interactive prompts as each user.
+Nix uses one resolved nixpkgs `nixos-26.05` revision. Atuin uses its official release binary installer,
+`https://github.com/atuinsh/atuin/releases/latest/download/atuin-installer.sh`,
+run as each user without the setup wrapper that registers coding-agent hooks.
 It installs the current upstream release in `~/.atuin/bin` when absent. Walter
 verifies it before removing any previous Nix Atuin entry and includes its directory
 in Bash, Fish and provisioning PATHs. Existing installations are retained on
@@ -160,12 +161,9 @@ profile, preserving existing user files; the checkout's old launcher is never
 executed. Emacs package warming runs asynchronously alongside Atuin synchronization; inspect
 `~/.local/state/walter/emacs-packages.log` for completion.
 
-Walter removes Atuin’s Claude Code, Codex and pi hooks during each full
-convergence, after user tooling setup and before Atuin login/sync. Unrelated
-agent settings and hooks, ordinary shell history and Atuin sync are preserved.
-Missing integration files are ignored; malformed JSON configuration fails
-convergence without replacement. Restart running Claude Code/Codex sessions or
-run `/reload` in pi after cleanup. OpenCode is not managed.
+Walter does not install or remove coding-agent hooks. Existing agent configuration
+is preserved. Shell history initialization is managed by dotfiles or user
+configuration; the configured Fish dotfiles already run `atuin init fish`.
 
 `vault-id` selects a dedicated vault; `vault-command` selects its installed CLI.
 The user must authenticate and unlock it. `vault-save` is an explicit checkpoint
