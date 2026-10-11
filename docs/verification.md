@@ -239,3 +239,32 @@ and 47 subtests passed. The separate root suite passed 19 tests and four subtest
 Package builds and copied-launcher checks passed. Controller Vault checkpoints
 were saved before and after migration; the final checkpoint succeeded on retry
 after its first attempt returned a command failure.
+
+## Direct Atuin binary installer: fresh walter-gcp validation
+
+On 2026-10-11, source `7a1b0c0` and launcher `4c00589` were tested on a fresh
+`walter-gcp` deployment. The installer now downloads the official release binary
+installer directly. Agent-hook cleanup and its tests were removed. Fish history
+initialization remains supplied by the configured dotfiles.
+
+A six-file controller checkpoint was saved before deletion. The owned deployment
+was deleted with a command-scoped destruction-protection override; shared network
+resources were retained. Fresh convergence through the published launcher created
+a new instance and completed provisioning in 181.9 seconds, with protection enabled.
+
+The full live verifier passed for ubuntu, rose and jack, including private seats,
+Go, runtimes, repositories, Atuin compatibility/history rebuild and successful
+Emacs completion. The new `scripts/verify-atuin-hooks.py` passed for every user:
+Claude Code and Codex hook configurations contained no Atuin hook commands, pi and
+OpenCode Atuin extensions were absent, and interactive Fish loaded Atuin integration
+and resolved the official binary. The verifier emits only allowlisted booleans.
+
+Repeat convergence from a copied published launcher outside the checkout completed
+in 33.722 seconds and retained the replacement instance. Both live verifiers passed
+afterward. Controller recovery checkpoints succeeded after fresh provisioning and
+again after repeat convergence.
+
+Local validation: 144 tests passed, one root-only test skipped, and 47 subtests
+passed. The separate sudo run of `tests/test_remote.py` passed 14 tests and two
+subtests, including the privilege boundary. Package builds, copied-launcher checks
+and Git whitespace validation passed.

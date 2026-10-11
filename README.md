@@ -229,3 +229,8 @@ uv run python scripts/test-launcher.py
 Synthetic tests cover configuration, controller behavior, secrets, privilege
 boundaries, local aliases and scratch recovery. Shared cloud/SSH tests live in
 PocketDeploy. Live verification is recorded separately in docs/verification.md.
+
+For an authorized deployed-machine check, run `uv run python scripts/verify-live.py`.
+After fresh provisioning, run `uv run python scripts/verify-atuin-hooks.py` to check
+agent-hook absence and interactive Fish integration for every configured user.
+Both commands report allowlisted verification results without configuration contents.
