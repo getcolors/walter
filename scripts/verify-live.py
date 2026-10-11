@@ -137,6 +137,26 @@ with tempfile.TemporaryDirectory(prefix='walter-go-verify-') as directory:
     return checks
 
 
+
+def atuin_checks(user, home, config):
+    checks = {'atuin_v2_compatible': True, 'atuin_history_rebuilt': True}
+    if not config.get('atuin-username'):
+        return checks
+    code, output = command(user, ['atuin', '--version'])
+    match = re.match(r'^atuin ([0-9]+)\.([0-9]+)\.([0-9]+)(?:\s|$)', output.strip())
+    checks['atuin_v2_compatible'] = code == 0 and match is not None and tuple(map(int, match.groups())) >= (18, 18, 0)
+    marker = home / '.local/state/walter/atuin-history-v2-rebuilt'
+    try:
+        info = marker.lstat()
+        checks['atuin_history_rebuilt'] = (stat.S_ISREG(info.st_mode)
+            and stat.S_IMODE(info.st_mode) == 0o600
+            and info.st_uid == home.stat().st_uid
+            and marker.read_text() == 'History rebuilt with v2-compatible Atuin after successful sync.\n')
+    except OSError:
+        checks['atuin_history_rebuilt'] = False
+    return checks
+
+
 def verify(payload):
     config, primary = payload['config'], payload['primary']
     result = {'architecture_matches': platform.machine() == payload['architecture'], 'ssd_layout': storage(config), 'eternal_terminal': eternal_terminal(config), 'shared_asdf_versions': True, 'users': {}}
@@ -195,6 +215,7 @@ def verify(payload):
             if config.get('atuin-username'):
                 directory = home / '.local/share/atuin'
                 checks['atuin_session_files'] = (home / '.local/state/walter' / ('atuin-' + config['atuin-username'])).is_file() and any((directory / p).is_file() and (directory / p).stat().st_size > 0 for p in ('session', 'meta.db'))
+            checks.update(atuin_checks(user, home, config))
             checks['emacs'] = emacs(home) if config.get('emacs-config-repo') else dict(running=False, exit_code=0, succeeded=True)
             result['users'][user] = checks
         except Exception:
@@ -209,7 +230,7 @@ except Exception:
 
 CHECKS = ('private_home', 'unprivileged_seat', 'authorized_key', 'nix_packages',
           'go_direct', 'go_bash', 'go_fish', 'go_shared_permissions', 'go_native_build',
-          'asdf_runtimes', 'explicit_repositories', 'agent_executables', 'github_account', 'dotfiles_stamp', 'atuin_session_files')
+          'asdf_runtimes', 'explicit_repositories', 'agent_executables', 'github_account', 'dotfiles_stamp', 'atuin_session_files', 'atuin_v2_compatible', 'atuin_history_rebuilt')
 
 
 def filter_result(raw, users, allow_emacs_pending=False):

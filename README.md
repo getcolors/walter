@@ -148,8 +148,10 @@ retain exclusive machine access. Failure stops new tasks and drains running work
 before returning. Progress is recorded per task; successful convergence includes
 relative start/finish timings under `provisioning.task_timings`.
 
-Nix uses one resolved nixpkgs `nixos-26.05` revision. Nix/asdf and standalone
-agent installers configure each home. Focused commands operate on the recorded
+Nix uses one resolved nixpkgs `nixos-26.05` revision for ordinary packages.
+Atuin alone uses an immutable newer revision with history-v2 support; the stable
+branch provides an incompatible client. Nix/asdf and standalone agent installers
+configure each home. Focused commands operate on the recorded
 owned machine. Dotfiles use a small Python renderer for the checkout's Ubuntu
 profile, preserving existing user files; the checkout's old launcher is never
 executed. Emacs package warming runs asynchronously alongside Atuin synchronization; inspect
@@ -200,6 +202,12 @@ and controller history continue to contain structured diagnostics only.
 Read the capture through authorized SSH access before retrying, since the next
 captured attempt replaces it. Remove it after the investigation. The option is
 off by default and can also be set with `atuin-sync-capture: true` in configuration.
+
+Walter requires Atuin 18.18.0 or newer on the effective user PATH. After the first
+successful compatible sync, it runs `atuin store rebuild history` once and writes
+a completion marker. This repairs history records downloaded by an older client
+before that client rejected the v2 format. A failed sync or rebuild never writes
+the marker; ordinary retries remain explicit.
 
 ## Development
 

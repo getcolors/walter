@@ -97,3 +97,35 @@ def test_go_verification_requires_each_shell_and_compiles_native_probe():
     with patch.object(namespace['platform'], 'machine', return_value='aarch64'):
         checks = namespace['go_checks']('seat', Path('/home/seat'), {'go-version': '1.27.2'})
     assert not checks['go_direct'] and not checks['go_bash'] and not checks['go_fish']
+
+
+def test_atuin_requires_effective_compatible_version_and_completed_rebuild(tmp_path):
+    namespace = {'__name__': 'verification_test'}
+    exec(VERIFY.REMOTE.split('try:\n    print(json.dumps(verify')[0], namespace)
+    marker = tmp_path / '.local/state/walter/atuin-history-v2-rebuilt'
+    marker.parent.mkdir(parents=True)
+    config = {'atuin-username': 'synthetic'}
+    namespace['command'] = lambda *args: (0, 'atuin 18.21.0 (revision extra)\n')
+    checks = namespace['atuin_checks']('seat', tmp_path, config)
+    assert checks['atuin_v2_compatible'] and not checks['atuin_history_rebuilt']
+    marker.write_text('History rebuilt with v2-compatible Atuin after successful sync.\n')
+    marker.chmod(0o600)
+    assert all(namespace['atuin_checks']('seat', tmp_path, config).values())
+    namespace['command'] = lambda *args: (0, 'atuin 18.15.2 (extras)\n')
+    assert not namespace['atuin_checks']('seat', tmp_path, config)['atuin_v2_compatible']
+    namespace['command'] = lambda *args: (1, 'atuin 18.21.0')
+    assert not namespace['atuin_checks']('seat', tmp_path, config)['atuin_v2_compatible']
+    marker.chmod(0o644)
+    assert not namespace['atuin_checks']('seat', tmp_path, config)['atuin_history_rebuilt']
+    marker.unlink()
+    marker.symlink_to(tmp_path / 'missing')
+    assert not namespace['atuin_checks']('seat', tmp_path, config)['atuin_history_rebuilt']
+    assert all(namespace['atuin_checks']('seat', tmp_path, {}).values())
+
+
+def test_atuin_checks_are_required_even_with_existing_session():
+    fixture = VerifyLiveTest().fixture()
+    for name in ('atuin_v2_compatible', 'atuin_history_rebuilt'):
+        raw = dict(fixture, users={'ubuntu': dict(fixture['users']['ubuntu'])})
+        raw['users']['ubuntu'][name] = False
+        assert not VERIFY.filter_result(raw, ['ubuntu'])['passed']

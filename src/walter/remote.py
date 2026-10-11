@@ -25,6 +25,9 @@ if 'build_diagnostic' not in globals():
     from pocketdeploy.diagnostics import build_diagnostic, validate_diagnostic
 
 NIXPKGS = 'github:NixOS/nixpkgs/nixos-26.05'
+# Atuin v2 history records require >=18.18; stable26.05 still ships18.15.2.
+ATUIN_NIXPKGS = 'github:NixOS/nixpkgs/8edc0c72e3a38faf5434e40d1f19431125fe4b30'
+ATUIN_REBUILD_STAMP = 'atuin-history-v2-rebuilt'
 CREDENTIALS = {'.claude/.credentials.json', '.codex/auth.json', '.pi/agent/auth.json'}
 AGENTS = {
     'pi': ('pi', 'https://pi.dev/install.sh', 'sh'),
@@ -77,7 +80,7 @@ def task_progress(directory):
 
 
 COMMAND_OPERATIONS = {
-    ('atuin', 'sync'): 'atuin-sync', ('nix', 'profile'): 'nix-profile',
+    ('atuin', 'sync'): 'atuin-sync', ('atuin', 'store'): 'atuin-store', ('nix', 'profile'): 'nix-profile',
     ('nix', 'build'): 'nix-build', ('nix', 'flake'): 'nix-metadata',
     ('asdf', 'plugin'): 'asdf-plugin', ('asdf', 'install'): 'asdf-install',
     ('asdf', 'latest'): 'asdf-resolve', ('asdf', 'set'): 'asdf-select',
@@ -220,6 +223,19 @@ def atuin_sync(home, *, capture=False, timeout=3600):
                                        output['stdout'], output['stderr'])
 
 
+def atuin_history(home, *, capture=False):
+    """Sync with a compatible client and repair history once after migration."""
+    version = run(['atuin', '--version']).stdout.strip()
+    match = re.fullmatch(r'atuin (\d+)\.(\d+)\.(\d+)(?:[-+][^\s]+)?(?:\s.*)?', version)
+    if not match or tuple(map(int, match.groups())) < (18, 18, 0):
+        raise ProvisionError('Atuin 18.18.0 or newer must be first on the user PATH.')
+    atuin_sync(home, capture=capture)
+    stamp = home / '.local/state/walter' / ATUIN_REBUILD_STAMP
+    if not stamp.exists():
+        run(['atuin', 'store', 'rebuild', 'history'])
+        write(stamp, 'History rebuilt with v2-compatible Atuin after successful sync.\n', 0o600)
+
+
 def failure_result(error):
     result = {'ok': False, 'stage': STAGE}
     diagnostic = validate_diagnostic(getattr(error, 'diagnostic', None), allowed_operations=OPERATIONS)
@@ -310,13 +326,21 @@ def profile_attributes(profile):
 def nix_packages(packages, upgrade=False, source=NIXPKGS):
     if not packages:
         return
-    current = profile_attributes(json.loads(run(['nix', 'profile', 'list', '--json']).stdout)) if (Path.home() / '.nix-profile').exists() else {}
-    if upgrade:
-        # `profile upgrade` deliberately skips immutable original URLs. Build
-        # replacements first, preserving a usable profile if realization fails.
-        installables = [source + '#' + p for p in packages]
+    profile = json.loads(run(['nix', 'profile', 'list', '--json']).stdout) if (Path.home() / '.nix-profile').exists() else {}
+    current = profile_attributes(profile)
+    sources = {p: ATUIN_NIXPKGS if p == 'atuin' else source for p in packages}
+    # Only Atuin has a mandatory version migration during normal convergence.
+    # Other packages retain the existing install-missing-only policy.
+    changed = [p for p in packages if p in current and p == 'atuin'
+               and profile['elements'][current[p]].get('originalUrl') != sources[p]]
+    selected = packages if upgrade else [p for p in packages if p not in current or p in changed]
+    if not selected:
+        return
+    installables = [sources[p] + '#' + p for p in selected]
+    if upgrade or changed:
+        # Build replacements before removing the old profile generation.
         run(['nix', 'build', '--impure', '--no-link', *installables])
-        names = [current[p] for p in packages if p in current]
+        names = [current[p] for p in selected if p in current]
         if names:
             run(['nix', 'profile', 'remove', *names])
         try:
@@ -325,10 +349,8 @@ def nix_packages(packages, upgrade=False, source=NIXPKGS):
             if names:
                 run(['nix', 'profile', 'rollback'])
             raise
-        return
-    missing = [p for p in packages if p not in current]
-    if missing:
-        run(['nix', 'profile', 'add', '--impure', *[source + '#' + p for p in missing]])
+    else:
+        run(['nix', 'profile', 'add', '--impure', *installables])
 
 
 def asdf_tools(config, resolved, home):
@@ -638,7 +660,7 @@ def user_tasks(payload, user, resolved):
                 raise ProvisionError('Atuin credentials are required')
             atuin_login(username, payload['atuin_password'], payload['atuin_key'])
             write(stamp, 'Authenticated by Walter\n', 0o600)
-        atuin_sync(home, capture=config.get('atuin-sync-capture', False))
+        atuin_history(home, capture=config.get('atuin-sync-capture', False))
     stage('complete')
     return {'resolved_versions': resolved, 'emacs_log': log}
 
