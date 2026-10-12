@@ -44,7 +44,7 @@ class ProvisionError(Exception):
 
 
 
-STAGES = frozenset(('validation', 'machine', 'users', 'prerequisites', 'go', 'docker', 'local-ssd', 'nix-install', 'nix-packages', 'asdf', 'shell-paths', 'agent-tools', 'credentials', 'github', 'dotfiles', 'atuin', 'emacs', 'complete'))
+STAGES = frozenset(('validation', 'machine', 'users', 'prerequisites', 'go', 'cloudflared', 'docker', 'local-ssd', 'nix-install', 'nix-packages', 'asdf', 'shell-paths', 'agent-tools', 'credentials', 'github', 'dotfiles', 'atuin', 'emacs', 'complete'))
 STAGE = 'validation'
 PROGRESS_PATH = None
 PROGRESS_USER = None
@@ -807,12 +807,20 @@ def install_go(payload):
     return namespace['install'](run, write, payload['config']['go-version'])
 
 
+def install_cloudflared(payload):
+    stage('cloudflared')
+    namespace = {'__name__': 'walter_cloudflared_install'}
+    exec(payload['cloudflared_install_source'], namespace)
+    return namespace['install'](run)
+
+
 def machine(payload, users):
     bootstrap(payload, users)
     install_docker(users[0])
     stage('nix-install')
     install_nix(payload['config'])
     install_go(payload)
+    install_cloudflared(payload)
 
 
 def install_nix(config, receipt=Path('/nix/receipt.json')):
@@ -873,7 +881,7 @@ def install_et(payload, nix_source):
 
 
 USER_ACTIONS = frozenset(('user-packages', 'user-runtime', 'user-github', 'user-finish', 'resolve-nix', 'resolve-asdf'))
-MACHINE_ACTIONS = frozenset(('bootstrap', 'install-go', 'install-docker', 'install-nix', 'install-et'))
+MACHINE_ACTIONS = frozenset(('bootstrap', 'install-go', 'install-cloudflared', 'install-docker', 'install-nix', 'install-et'))
 DAG_ACTIONS = USER_ACTIONS | MACHINE_ACTIONS | {'finalize'}
 
 
@@ -903,6 +911,8 @@ def main(payload):
             bootstrap(payload, users)
         elif action == 'install-go':
             install_go(payload)
+        elif action == 'install-cloudflared':
+            install_cloudflared(payload)
         elif action == 'install-docker':
             install_docker(users[0])
         elif action == 'install-nix':

@@ -8,6 +8,19 @@ from walter import controller
 
 
 class ControllerTest(unittest.TestCase):
+    def test_cloudflared_source_shipped_and_machine_action_dispatched(self):
+        from walter import remote
+        host = Mock()
+        host.run_python.return_value = {'ok': True}
+        controller.remote(host, {'user': 'ubuntu'}, {}, 'install-cloudflared')
+        payload = host.run_python.call_args.args[2]
+        self.assertEqual(controller.source('cloudflared_install'), payload['cloudflared_install_source'])
+        self.assertNotIn('nix_source', payload)
+        with patch.object(remote, 'install_cloudflared') as install, patch.object(remote, 'stage') as stage:
+            self.assertEqual({'ok': True}, remote.main(payload))
+        install.assert_called_once_with(payload)
+        stage.assert_called_once_with('complete')
+
     def test_remote_exception_text_is_not_reported(self):
         host = Mock()
         host.run_python.return_value = {'ok': False, 'stage': 'secret-token', 'error': 'PRIVATE'}

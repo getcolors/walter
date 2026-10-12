@@ -132,13 +132,48 @@ cloud or service accounts. The primary user remains privileged.
 
 The workflow is preflight → local keys → compute → verified host trust →
 bootstrap → dependency-driven software provisioning → finalization → local aliases.
-Bootstrap prepares prerequisites, scratch storage and private accounts. Go, Docker
-and Nix then install concurrently. Nix consumers start as soon as Nix and its
+Bootstrap prepares prerequisites, scratch storage and private accounts. Go, Docker,
+cloudflared and Nix then install concurrently. Nix consumers start as soon as Nix and its
 pinned revision are ready; Docker and Eternal Terminal do not block user setup.
 Each user's package transaction precedes independent Git and runtime branches.
 The primary user's asdf installation resolves `latest` versions once for all users.
 Shell configuration, agent installers, credentials, dotfiles, Emacs launching and
 Atuin follow the user's Git/runtime branches and shared Go verification.
+
+Cloudflared 2026.10.0 installs system-wide at `/usr/local/bin/cloudflared` from
+an official Linux ARM64 or AMD64 binary with a pinned SHA-256 checksum. The
+installer verifies the staged binary before atomic replacement and retains an
+existing verified matching installation. It does not use APT/dpkg, so it can run
+alongside Docker installation. No tunnel or service is configured. Finalization
+waits for cloudflared and all other provisioning tasks to succeed.
+
+```mermaid
+flowchart TD
+    preflight --> keys --> compute --> trust[verified host trust] --> bootstrap
+    bootstrap --> go[install-go]
+    bootstrap --> docker[install-docker]
+    bootstrap --> cloudflared[install-cloudflared]
+    bootstrap --> nix[install-nix] --> resolve[resolve-nix]
+    resolve --> et[install-et]
+    resolve --> packages[user-packages: each user]
+    packages --> asdf[resolve-asdf: primary packages only]
+    packages --> runtime[user-runtime: each user]
+    asdf --> runtime
+    packages --> github[user-github: each user]
+    runtime --> finish[user-finish: each user]
+    github --> finish
+    go --> finish
+    finish --> finalize
+    docker --> finalize
+    cloudflared --> finalize
+    et --> finalize
+    finalize --> aliases[local aliases]
+```
+
+Each user's runtime waits for their own packages and the shared asdf resolution.
+`user-finish` includes shell paths, configured agent CLI installers (including
+Codex and Claude Code), credential seeding, dotfiles, Emacs and Atuin. Agent CLI
+installers run sequentially within a user task; different users run concurrently.
 
 At most six remote tasks run at once, with two clone workers per active Git task.
 Compilation remains limited to one job per user. User tasks run in separate

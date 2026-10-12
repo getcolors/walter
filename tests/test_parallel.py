@@ -95,6 +95,77 @@ def test_user_branches_overlap_and_join_without_worker_journal_access(failed_use
     assert completed == {'ubuntu', 'jack', 'rose'}
 
 
+@pytest.mark.parametrize('cloudflared_fails', [False, True])
+def test_cloudflared_overlaps_installers_and_joins_or_drains(cloudflared_fails):
+    installers = {'install-go', 'install-docker', 'install-nix', 'install-cloudflared'}
+    barrier = threading.Barrier(len(installers), timeout=5)
+    release = threading.Event()
+    failed = threading.Event()
+    completed = set()
+    actions = []
+    config = {'profile': 'test', 'users': []}
+    deployment = {'_root': '.', '_desired_hash': 'hash'}
+    state, host, cloud, reporter = Mock(), Mock(), Mock(), Mock()
+    state.get_resource.return_value = None
+    state.db.execute.return_value.fetchall.return_value = []
+    host.pub.read_text.return_value = 'public'
+    cloud.converge.return_value = {'instance_id': '123'}
+    reporter.stage.side_effect = lambda name: nullcontext()
+
+    def fake_remote(_host, connection, conf, action, **private):
+        actions.append(action)
+        if action in installers:
+            assert 'bootstrap' in completed
+            # All four must start before any finishes, without Nix resolution.
+            assert 'nix_source' not in private
+            barrier.wait()
+            if action == 'install-cloudflared' and cloudflared_fails:
+                failed.set()
+                raise DeployError('synthetic cloudflared failure')
+            if cloudflared_fails or action == 'install-cloudflared':
+                assert release.wait(5)
+        if action == 'resolve-nix':
+            return {'nix_source': 'pinned'}
+        if action == 'resolve-asdf':
+            return {'resolved_versions': {}}
+        if action == 'user-finish':
+            # A slow cloudflared installer does not block user setup.
+            assert 'install-cloudflared' not in completed
+            release.set()
+            return {'users': {private['target_user']: {}}}
+        if action == 'finalize':
+            assert installers <= completed
+        completed.add(action)
+        return {'ok': True}
+
+    async def exercise():
+        task = asyncio.create_task(controller.converge(
+            config, deployment, state, cloud, host, 'operation', reporter))
+        if cloudflared_fails:
+            assert await asyncio.to_thread(failed.wait, 5)
+            # The failure cannot return while sibling SSH workers still run.
+            await asyncio.sleep(0.01)
+            assert not task.done()
+            release.set()
+            with pytest.raises(DeployError, match='synthetic cloudflared failure'):
+                await task
+            assert installers - {'install-cloudflared'} <= completed
+        else:
+            result = await task
+            assert 'install-cloudflared' in result['provisioning']['task_timings']
+
+    with patch.object(controller, 'remote', side_effect=fake_remote), patch.object(controller, 'initialize'), patch.object(controller, 'private_payload', return_value={'credentials': {}}), patch.object(controller, 'aliases') as aliases:
+        asyncio.run(exercise())
+        if cloudflared_fails:
+            assert set(actions) == {'bootstrap', *installers}
+            state.complete.assert_not_called()
+            aliases.assert_not_called()
+        else:
+            assert 'finalize' in completed
+            state.complete.assert_called_once()
+            aliases.assert_called_once()
+
+
 def test_user_action_rejects_unconfigured_identity():
     with pytest.raises(remote.ProvisionError, match='invalid target user'):
         remote.main({'action': 'user-packages', 'config': {'users': ['jack']}, 'target_user': 'root'})
@@ -189,6 +260,7 @@ def test_remote_tokens_resource_exclusion_and_finalization(tmp_path):
                 remote.dispatch({**request, 'action': 'install-go'}, lock_root, state_root)
             # An unrelated resource remains eligible under the shared lock.
             remote.dispatch({**request, 'action': 'install-nix'}, lock_root, state_root)
+            remote.dispatch({**request, 'action': 'install-cloudflared'}, lock_root, state_root)
         with (lock_root / 'walter-provision.lock').open('a') as machine:
             fcntl.flock(machine, fcntl.LOCK_SH | fcntl.LOCK_NB)
             for action in ('bootstrap', 'finalize', 'converge-nix'):
@@ -197,7 +269,7 @@ def test_remote_tokens_resource_exclusion_and_finalization(tmp_path):
         remote.dispatch({**request, 'action': 'finalize'}, lock_root, state_root)
         with pytest.raises(remote.ProvisionError, match='stale'):
             remote.dispatch({**request, 'action': 'install-go'}, lock_root, state_root)
-        assert main.call_count == 3
+        assert main.call_count == 4
 
 
 def test_new_bootstrap_supersedes_idle_run_and_asdf_owns_one_resource(tmp_path):

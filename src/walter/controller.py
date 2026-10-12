@@ -37,6 +37,8 @@ def remote(host, connection, config, action, **private):
         payload['eternal_terminal_source'] = source('eternal_terminal')
     if action in ('converge', 'install-go'):
         payload['go_install_source'] = source('go_install')
+    if action in ('converge', 'install-cloudflared'):
+        payload['cloudflared_install_source'] = source('cloudflared_install')
     program = 'exec(' + repr(Path(diagnostics.__file__).read_text()) + ')\n' + 'exec(compile(' + repr(source('remote')) + ', "<walter>", "exec"))'
     try:
         result = host.run_python(connection, program, payload, timeout=14400)
@@ -46,7 +48,7 @@ def remote(host, connection, config, action, **private):
     if not isinstance(result, dict) or result.get('ok') is not True:
         # Remote text is untrusted, including exceptions from configured tools.
         stage = result.get('stage') if isinstance(result, dict) else None
-        safe = stage if isinstance(stage, str) and stage in {'validation', 'local-ssd', 'machine', 'prerequisites', 'go', 'docker', 'nix-install', 'nix-packages', 'asdf', 'shell-paths', 'agent-tools', 'credentials', 'github', 'dotfiles', 'atuin', 'emacs'} else 'provisioning'
+        safe = stage if isinstance(stage, str) and stage in {'validation', 'local-ssd', 'machine', 'prerequisites', 'go', 'cloudflared', 'docker', 'nix-install', 'nix-packages', 'asdf', 'shell-paths', 'agent-tools', 'credentials', 'github', 'dotfiles', 'atuin', 'emacs'} else 'provisioning'
         diagnostic = diagnostics.validate_diagnostic(result.get('diagnostic'), allowed_operations=OPERATIONS) if isinstance(result, dict) else None
         diagnostic = diagnostic_context(diagnostic, action, private, config, connection)
         raise DeployError('Remote ' + safe + ' failed; private output suppressed.', stage=safe, diagnostic=diagnostic)
@@ -61,7 +63,7 @@ def diagnostic_context(value, action, private, config, connection):
     value.pop('task', None)
     value.pop('user', None)
     actions = {'converge', 'converge-nix', 'converge-asdf', 'bootstrap', 'install-go',
-               'install-docker', 'install-nix', 'install-et', 'resolve-nix', 'resolve-asdf',
+               'install-docker', 'install-cloudflared', 'install-nix', 'install-et', 'resolve-nix', 'resolve-asdf',
                'user-packages', 'user-runtime', 'user-github', 'user-finish', 'finalize', 'probe', 'status'}
     if action in actions:
         value['task'] = action
@@ -192,7 +194,8 @@ async def converge(config, deployment, state, cloud, host, operation, reporter):
         # for all siblings, so use a dependency sorter for remote readiness:
         # Docker must not hold back Nix consumers after Nix has completed.
         graph = {'bootstrap': set(), 'install-go': {'bootstrap'},
-                 'install-docker': {'bootstrap'}, 'install-nix': {'bootstrap'},
+                 'install-docker': {'bootstrap'}, 'install-cloudflared': {'bootstrap'},
+                 'install-nix': {'bootstrap'},
                  'resolve-nix': {'install-nix'}, 'install-et': {'resolve-nix'},
                  'resolve-asdf': {'user-packages-' + users[0]}}
         actions = {name: (name, None) for name in graph}
@@ -221,7 +224,7 @@ async def converge(config, deployment, state, cloud, host, operation, reporter):
             arguments = {'run_token': results['run_token']}
             if user:
                 arguments['target_user'] = user
-            if action not in ('bootstrap', 'install-go', 'install-docker', 'install-nix', 'resolve-nix'):
+            if action not in ('bootstrap', 'install-go', 'install-cloudflared', 'install-docker', 'install-nix', 'resolve-nix'):
                 arguments['nix_source'] = results['resolved']['nix_source']
             if action in ('user-runtime', 'user-finish'):
                 arguments['resolved_versions'] = results['resolved']['resolved_versions']
