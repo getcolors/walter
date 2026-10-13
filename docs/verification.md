@@ -1,5 +1,8 @@
 # Walter deployment verification
 
+Historical verification from before deployment extraction. Current deployment
+records belong to [walter-gcp](https://github.com/getcolors/walter-gcp/blob/main/docs/verification.md).
+
 Verified on 11 October 2026 for the shared Go and dependency-driven provisioning
 refactor. The portable launcher pins the published package identified in
 `skills/walter/walter`; shared SSH behavior comes from the immutable PocketDeploy

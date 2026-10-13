@@ -1,0 +1,19 @@
+# Synthetic starting point; set your own project, profile and trusted source CIDR.
+profile: example-dev
+provider-compute: google
+google-project: example-project
+google-region: europe-west4
+google-zone: europe-west4-b
+google-machine-type: e2-standard-2
+google-network: default
+google-subnet: default
+compute-prevent-destroy: true
+walter-ssh-sources:
+  - 192.0.2.1/32
+ssh-user: ubuntu
+users: []
+nix-packages:
+  - git
+  - ripgrep
+agent-tools: []
+seed-agent-credentials: []

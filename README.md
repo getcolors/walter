@@ -5,29 +5,38 @@ using Python and [PocketDeploy](https://github.com/pocketcontext/pocketdeploy).
 There is no Terraform/OpenTofu, Ansible or Clojure orchestration. Nix, asdf, Git,
 OpenSSH, Google Cloud CLI and downloaded tool installers remain external tools.
 
-The new profile is **walter-gcp**. Existing Walter deployments and their state
-are independent. There is no state migration, compatibility launcher, start or stop.
+This repository owns the reusable package, canonical skill, tests and generic
+configuration. The active deployment lives in
+[getcolors/walter-gcp](https://github.com/getcolors/walter-gcp), with its own
+configuration, pinned launcher and private controller state. Historical Walter
+deployments retain their independent pins and state.
 
 ## Setup
 
 Install uv, OpenSSH, gcloud and GitHub CLI. Authenticate Google Application Default
 Credentials for the configured project and authenticate `gh` as `github-account`.
-The portable `walter` launcher fetches an immutable package pin. Source development:
+From a deployment checkout, use its copied, immutable `walter` launcher:
 
 ```sh
-uv sync --locked --extra test
-uv run walter --help
-uv run walter init
-uv run walter plan
-uv run walter vault-save
-uv run walter converge --verbose
-uv run walter vault-save
-uv run walter status
-uv run walter ssh
-uv run walter ssh --user rose
-uv run walter converge-nix
-uv run walter converge-asdf
+./walter --help
+./walter plan
+./walter status
+./walter ssh
 ```
+
+For a new deployment, start with [examples/colors.yml](examples/colors.yml), select
+its own profile and provider scope, and copy the pinned launcher from
+`skills/walter/walter`. Initialize only a new deployment with `./walter init`.
+After reviewing the plan and obtaining authorization for provisioning:
+
+```sh
+./walter vault-save
+./walter converge --verbose
+./walter vault-save
+```
+
+Source development uses `uv sync --locked --extra test` and `uv run walter`.
+Running source commands does not update a deployment's immutable launcher pin.
 
 Run without arguments for help. Configuration defaults to `colors.yml` in the
 current directory; use `-f /absolute/path/colors.yml` to select another deployment.
@@ -207,7 +216,7 @@ back up the remote home directories or boot volume. Preserve remote work separat
 Save after successful mutations and after failures that changed resource state.
 
 ```sh
-walter vault-restore --document DOCUMENT --version VERSION \
+./walter vault-restore --document DOCUMENT --version VERSION \
   --destination /absolute/recovery/directory
 ```
 
@@ -263,9 +272,13 @@ uv run python scripts/test-launcher.py
 
 Synthetic tests cover configuration, controller behavior, secrets, privilege
 boundaries, local aliases and scratch recovery. Shared cloud/SSH tests live in
-PocketDeploy. Live verification is recorded separately in docs/verification.md.
+PocketDeploy. Historical package verification is recorded in
+[docs/verification.md](docs/verification.md). Current deployment records live in
+[walter-gcp](https://github.com/getcolors/walter-gcp/blob/main/docs/verification.md).
 
-For an authorized deployed-machine check, run `uv run python scripts/verify-live.py`.
-After fresh provisioning, run `uv run python scripts/verify-atuin-hooks.py` to check
+For an authorized deployed-machine check, run `uv run python scripts/verify-live.py
+-f /absolute/path/to/deployment/colors.yml`.
+After fresh provisioning, run `uv run python scripts/verify-atuin-hooks.py
+-f /absolute/path/to/deployment/colors.yml` to check
 agent-hook absence and interactive Fish integration for every configured user.
 Both commands report allowlisted verification results without configuration contents.

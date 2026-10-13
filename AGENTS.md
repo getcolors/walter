@@ -14,16 +14,18 @@ as a pinned Python dependency. Read README.md before changes.
   part of the rewrite; keep only maintained runtime and validation paths.
 - No backward compatibility is required. No Terraform/OpenTofu, Ansible or
   Clojure orchestration, migration shims, or start/stop commands.
-- Minimize changes to colors.yml. Keep useful Walter tooling and google-* names;
-  normalize infrastructure configuration internally into PocketDeploy.
+- Keep reusable synthetic configuration in examples/colors.yml. Live deployment
+  configuration and private controller state belong in getcolors/walter-gcp.
+  Preserve Walter tooling and google-* names; normalize infrastructure
+  configuration internally into PocketDeploy.
 - Every variable assigned in .envrc.private must start with COLORS_PAR_. Never
   print its values, source-file contents, tokens, keys or raw provider responses.
-- New profile: walter-gcp. Resource names follow the wiki convention
+- Profiles belong to each deployment. Resource names follow the convention
   <profile>-<component>-<purpose>, omitting redundant components. Provider IDs and
   ownership labels, not names, establish authority.
-- The user authorized commits, pushes and live deployment tests for this rewrite.
-  Keep existing deployments untouched. Use separate owned resources and existing
-  networks; never adopt another controller's resources by name.
+- Publication and live operations require authorization for the current task.
+  Keep existing deployments untouched unless explicitly authorized; never adopt
+  another controller's resources by name.
 - Work on the current branch and preserve user changes. Keep private state,
   credentials, keys, recovery output and generated packages ignored.
 
