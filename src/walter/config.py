@@ -63,7 +63,7 @@ def validate(c):
     _strings(c, 'clone-orgs', r'[A-Za-z0-9][A-Za-z0-9-]*')
     _strings(c, 'clone-repos', r'[A-Za-z0-9][A-Za-z0-9-]*/(?!\.{1,2}$)[A-Za-z0-9_.-]+')
     agents = _strings(c, 'agent-tools')
-    if set(agents) - {'pi', 'codex', 'claude', 'antigravity'}:
+    if set(agents) - {'pi', 'codex', 'claude', 'antigravity', 'grok'}:
         raise DeployError('Unsupported agent tool.')
     if set(_strings(c, 'seed-agent-credentials')) - {'pi', 'codex', 'claude'}:
         raise DeployError('Unsupported agent credential.')

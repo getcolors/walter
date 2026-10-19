@@ -32,6 +32,7 @@ AGENTS = {
     'codex': ('codex', 'https://chatgpt.com/codex/install.sh', 'sh'),
     'claude': ('claude', 'https://claude.ai/install.sh', 'bash'),
     'antigravity': ('agy', 'https://antigravity.google/cli/install.sh', 'bash'),
+    'grok': ('grok', 'https://x.ai/cli/install.sh', 'bash'),
 }
 
 
@@ -641,6 +642,8 @@ def user_tasks(payload, user, resolved):
         if not target.exists() and not target.is_symlink():
             target.symlink_to(source)
     stage('agent-tools')
+    # Installers such as Grok's link into ~/.local/bin only when it already exists.
+    (home / '.local/bin').mkdir(parents=True, exist_ok=True)
     for name in config.get('agent-tools', []):
         binary, url, interpreter = AGENTS[name]
         if not (home / '.local/bin' / binary).exists():
