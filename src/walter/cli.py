@@ -10,6 +10,7 @@ import time
 from pocketdeploy.common import DeployError, local_path
 from pocketdeploy.state import deployment_lock
 from pocketdeploy.gcp import GCP
+from pocketdeploy.oci import OCI
 from pocketdeploy.host import Host
 from pocketdeploy.runtime import initialize, session, recorded_operation, delete_compute
 from pocketdeploy.output import Reporter
@@ -27,7 +28,7 @@ class Parser(argparse.ArgumentParser):
 
 
 def parser():
-    p = Parser(prog='walter', description='Google Cloud development machines using PocketDeploy.', allow_abbrev=False)
+    p = Parser(prog='walter', description='Google Cloud and OCI development machines using PocketDeploy.', allow_abbrev=False)
     p.add_argument('command', choices=COMMANDS)
     p.add_argument('-f', '--file', default='colors.yml')
     p.add_argument('--dry-run', action='store_true', help='Plan converge/delete without mutations')
@@ -66,7 +67,8 @@ def execute(args, reporter):
         return {'profile': config['profile'], 'aliases_removed': controller.aliases(config, deployment, Host(deployment, None, root), remove=True)}
     read_only = args.command in ('plan', 'status') or args.dry_run
     with session(deployment, read_only=read_only,
-                 allow_create=args.command in ('init', 'plan', 'converge'), provider_factory=GCP) as context:
+                 allow_create=args.command in ('init', 'plan', 'converge'),
+                 provider_factory=GCP if config['provider-compute'] == 'google' else OCI) as context:
         state, cloud, host = context.state, context.cloud, context.host
         if args.command == 'init':
             return initialize(deployment, state, host, root)

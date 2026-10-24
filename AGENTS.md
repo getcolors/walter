@@ -1,6 +1,6 @@
 # Walter
 
-Walter is a Google-only Python development-machine controller using PocketDeploy
+Walter is a Google Cloud and OCI Python development-machine controller using PocketDeploy
 as a pinned Python dependency. Read README.md before changes.
 
 ## Rules

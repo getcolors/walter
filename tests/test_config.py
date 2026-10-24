@@ -112,3 +112,41 @@ def test_relative_google_image_normalizes_without_editing_yaml(tmp_path):
     config.write_text('profile: example\ngoogle-project: example\ngoogle-zone: europe-west4-b\ngoogle-image-id: projects/ubuntu-os-cloud/global/images/example\n')
     _, deployment = load(config, env={})
     assert deployment['gcp-image'] == 'https://compute.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/example'
+
+
+OCI_BASE = {'profile': 'test-oci', 'provider-compute': 'oci', 'oci-config-file-profile': 'DEFAULT',
+            'oci-compartment-id': 'ocid1.compartment.oc1..synthetic',
+            'oci-subnet-id': 'ocid1.subnet.oc1.synthetic', 'oci-availability-domain': 'AD-1',
+            'oci-ocpus': 2, 'oci-memory-in-gbs': 12, 'oci-boot-volume-size-in-gbs': 100,
+            'oci-boot-volume-vpus-per-gb': 30}
+
+
+def test_oci_fields_pass_through_without_google_defaults(tmp_path):
+    config = tmp_path / 'colors.yml'
+    config.write_text(json.dumps({**OCI_BASE, 'nix-packages': ['eternal-terminal']}))
+    c, d = load(config, env={})
+    assert d['provider-compute'] == 'oci'
+    assert (d['oci-ocpus'], d['oci-memory-in-gbs'], d['oci-boot-volume-vpus-per-gb']) == (2, 12, 30)
+    assert d['compute-ssh-ports'] == ['22', '2022']
+    assert not any(k.startswith(('google-', 'gcp-')) for k in [*c, *d])
+
+
+def test_oci_rejects_google_fields_and_scratch(tmp_path):
+    config = tmp_path / 'colors.yml'
+    for extra in ({'google-zone': 'europe-west4-b'}, {'local-ssd-scratch': True}):
+        config.write_text(json.dumps({**OCI_BASE, **extra}))
+        try:
+            load(config, env={})
+        except DeployError:
+            continue
+        raise AssertionError(extra)
+
+
+def test_google_rejects_oci_fields(tmp_path):
+    config = tmp_path / 'colors.yml'
+    config.write_text('profile: example\ngoogle-project: example\ngoogle-zone: europe-west4-b\noci-ocpus: 2\n')
+    try:
+        load(config, env={})
+    except DeployError:
+        return
+    raise AssertionError('oci field accepted')

@@ -14,6 +14,26 @@ logsize = 20971520
 telemetry = false
 logdirectory = /tmp
 '''
+# OCI Ubuntu images persist an INPUT chain that rejects everything except SSH.
+RULES = Path('/etc/iptables/rules.v4')
+RULE = ['INPUT', '-p', 'tcp', '--dport', '2022', '-m', 'comment', '--comment', 'walter-et', '-j', 'ACCEPT']
+
+
+def open_host_firewall(run, write, rules=None):
+    """Accept ET before a persisted reject rule; hosts without one are unchanged."""
+    rules = rules or RULES
+    try:
+        lines = rules.read_text().splitlines()
+    except FileNotFoundError:
+        return
+    reject = next((i for i, line in enumerate(lines) if line.startswith('-A INPUT -j REJECT')), None)
+    if reject is None:
+        return
+    if not any('walter-et' in line for line in lines):
+        lines.insert(reject, '-A ' + ' '.join(RULE))
+        write(str(rules), '\n'.join(lines) + '\n', rules.stat().st_mode & 0o777)
+    if run(['iptables', '-C', *RULE], check=False).returncode:
+        run(['iptables', '-I', *RULE])
 
 
 def install(run, write, nix_source, *, local_ssd=False):
@@ -42,3 +62,4 @@ def install(run, write, nix_source, *, local_ssd=False):
     if changed:
         run(['systemctl', 'restart', 'et.service'])
     run(['systemctl', 'is-active', '--quiet', 'et.service'])
+    open_host_firewall(run, write)

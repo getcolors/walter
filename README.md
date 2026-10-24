@@ -1,6 +1,6 @@
 # Walter
 
-Walter provisions one Google Cloud development machine and its user environments
+Walter provisions one Google Cloud or OCI development machine and its user environments
 using Python and [PocketDeploy](https://github.com/pocketcontext/pocketdeploy).
 There is no Terraform/OpenTofu, Ansible or Clojure orchestration. Nix, asdf, Git,
 OpenSSH, Google Cloud CLI and downloaded tool installers remain external tools.
@@ -48,7 +48,11 @@ it does not predict every package-manager change.
 
 The existing `google-*` and tooling keys remain the desired-state vocabulary.
 They normalize into PocketDeploy's `gcp-*` settings internally. `provider-compute`
-is `google`; only Google Cloud is supported. The durable `profile` supplies the
+is `google` (default) or `oci`. OCI uses PocketDeploy's `oci-*` keys unchanged
+(`oci-shape`, `oci-ocpus`, `oci-memory-in-gbs`, `oci-boot-volume-size-in-gbs`,
+`oci-boot-volume-vpus-per-gb`, placement and authentication); fields for the other
+provider are rejected. OCI owns its instance, boot volume and network security
+group inside an existing subnet. Local SSD scratch is Google-only. The durable `profile` supplies the
 resource-name prefix. New names use `<profile>-<component>-<purpose>`, omitting
 redundant components, with immutable provider IDs and ownership labels recorded
 separately. Environment overrides follow PocketDeploy; recorded state identity
@@ -94,7 +98,8 @@ The combined list is deduplicated and cloned with two workers per user into
 
 Include `eternal-terminal` in `nix-packages` to install the client for each user
 and configure the root-owned Nix server profile and `et.service`. TCP 2022 uses
-the same source CIDRs as SSH. With ET installed on your client, connect through
+the same source CIDRs as SSH. On OCI Ubuntu images, Walter also inserts a
+`walter-et` accept rule ahead of the persisted host-firewall reject rule. With ET installed on your client, connect through
 Walter's SSH aliases using `et walter-gcp`, `et walter-gcp-jack` or
 `et walter-gcp-rose`.
 

@@ -17,18 +17,24 @@ GOOGLE = {
     'boot-disk-size-gb': 'boot-disk-size-gb', 'nic-type': 'nic-type',
     'local-ssd-count': 'local-ssd-count', 'auth': 'auth', 'account': 'account',
 }
+# OCI fields keep PocketDeploy's names and pass through unchanged.
+OCI = {'oci-config-file-profile', 'oci-region', 'oci-compartment-id', 'oci-subnet-id',
+       'oci-availability-domain', 'oci-image-id', 'oci-auth', 'oci-shape', 'oci-ocpus',
+       'oci-memory-in-gbs', 'oci-boot-volume-size-in-gbs', 'oci-boot-volume-vpus-per-gb'}
 DEFAULTS = {'workdir': '.colors', 'provider-compute': 'google', 'users': [],
             'compute-prevent-destroy': True, 'walter-ssh-sources': ['0.0.0.0/0'],
-            'google-auth': 'application-default', 'google-network': 'default',
-            'google-subnet': 'default', 'google-nic-type': 'GVNIC',
-            'gws': False, 'atuin-sync-capture': False, 'google-local-ssd-count': 0, 'local-ssd-scratch': False, 'go-version': '1.27.2'}
+            'gws': False, 'atuin-sync-capture': False, 'local-ssd-scratch': False, 'go-version': '1.27.2'}
+GOOGLE_DEFAULTS = {'google-auth': 'application-default', 'google-network': 'default',
+                   'google-subnet': 'default', 'google-nic-type': 'GVNIC',
+                   'google-local-ssd-count': 0}
 TOOLS = {'github-account', 'git-email', 'emacs-config-repo', 'emacs-config-dest',
          'nix-packages', 'agent-tools', 'login-shell', 'asdf-tools', 'corepack-packages',
          'dotfiles-checkout', 'clone-orgs', 'clone-repos', 'atuin-username', 'seed-agent-credentials'}
 SHARED = {'state-file', 'ssh-user', 'ssh-private-key-file', 'ssh-public-key-file',
           'ssh-host-private-key-file', 'ssh-host-public-key-file', 'ssh-known-hosts-file',
           'vault-id', 'vault-state-document-id', 'vault-command', 'compute-require-existing-state'}
-KEYS = set(DEFAULTS) | TOOLS | SHARED | {'profile', 'google-region'} | {'google-' + k for k in GOOGLE}
+KEYS = (set(DEFAULTS) | TOOLS | SHARED | OCI | {'profile', 'google-region'} |
+        {'google-' + k for k in GOOGLE})
 USER = re.compile(r'[a-z_][a-z0-9_-]{0,31}')
 
 
@@ -45,8 +51,11 @@ def _strings(c, key, pattern=None):
 def validate(c):
     if not isinstance(c['go-version'], str) or c['go-version'] not in CHECKSUMS:
         raise DeployError('go-version requires a release with pinned checksums.')
-    if c['provider-compute'] != 'google':
-        raise DeployError('Walter supports Google Cloud only.')
+    if c['provider-compute'] not in ('google', 'oci'):
+        raise DeployError('Walter supports Google Cloud and OCI.')
+    foreign = 'oci-' if c['provider-compute'] == 'google' else 'google-'
+    if any(key.startswith(foreign) for key in c):
+        raise DeployError('Configuration contains fields for a different provider.')
     users = _strings(c, 'users', USER.pattern)
     primary = c.get('ssh-user', 'ubuntu')
     if primary in users or 'root' in users or primary == 'root':
@@ -54,7 +63,7 @@ def validate(c):
     for key in ('local-ssd-scratch', 'compute-prevent-destroy', 'atuin-sync-capture', 'gws'):
         if type(c[key]) is not bool:
             raise DeployError(key + ' must be boolean.')
-    if c['local-ssd-scratch'] and not c['google-local-ssd-count']:
+    if c['local-ssd-scratch'] and not c.get('google-local-ssd-count'):
         raise DeployError('Scratch requires Google Local SSD disks.')
     if c.get('google-region') and c['google-zone'].rsplit('-', 1)[0] != c['google-region']:
         raise DeployError('Google zone must belong to google-region.')
@@ -139,11 +148,13 @@ def load(path, env=None):
             raise ValueError()
     except Exception:
         raise DeployError('Invalid Walter configuration; unknown or retired fields are not supported.') from None
-    c = read_pars({**DEFAULTS, **raw}, env)
+    provider = read_pars({**DEFAULTS, **raw}, env)['provider-compute']
+    c = read_pars({**DEFAULTS, **(GOOGLE_DEFAULTS if provider == 'google' else {}), **raw}, env)
     # Credential environment variables must never enter desired state or hashing.
     c = {k: v for k, v in c.items() if k in KEYS}
     d = {**{k: c[k] for k in SHARED if k in c},
-         'profile': c.get('profile'), 'provider-compute': 'gcp', 'workdir': c['workdir'],
+         'profile': c.get('profile'), 'provider-compute': 'gcp' if provider == 'google' else 'oci',
+         'workdir': c['workdir'],
          'compute-prevent-destroy': c['compute-prevent-destroy'],
          'compute-ssh-sources': c['walter-ssh-sources'], 'compute-http-sources': [],
          'compute-ssh-ports': ['22', '2022'] if 'eternal-terminal' in c.get('nix-packages', []) else ['22'],
@@ -151,6 +162,7 @@ def load(path, env=None):
     for old, new in GOOGLE.items():
         if 'google-' + old in c:
             d['gcp-' + new] = c['google-' + old]
+    d.update({k: c[k] for k in OCI if k in c})
     if isinstance(d.get('gcp-image'), str) and d['gcp-image'].startswith('projects/'):
         d['gcp-image'] = 'https://compute.googleapis.com/compute/v1/' + d['gcp-image']
     d = deployment.normalize(d, path=path, env={}, desired=c)

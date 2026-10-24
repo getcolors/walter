@@ -70,6 +70,16 @@ class CLITest(unittest.TestCase):
             self.execute('ssh-uninstall')
             gcp.assert_not_called()
 
+    def test_oci_configuration_selects_oci_provider(self):
+        self.path.write_text('profile: test-oci\nprovider-compute: oci\noci-config-file-profile: DEFAULT\n'
+                             'oci-compartment-id: ocid1.compartment.oc1..synthetic\n'
+                             'oci-subnet-id: ocid1.subnet.oc1.synthetic\noci-availability-domain: AD-1\n')
+        with patch.object(cli, 'GCP') as gcp, patch.object(cli, 'OCI') as oci, patch.object(cli, 'Host'):
+            oci.return_value.plan.return_value = []
+            self.execute('plan')
+            oci.return_value.plan.assert_called_once()
+            gcp.assert_not_called()
+
     def test_unsupported_power_and_invalid_option_combinations(self):
         for command in ('start', 'stop'):
             with self.assertRaises(DeployError):
