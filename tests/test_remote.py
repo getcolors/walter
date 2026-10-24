@@ -58,6 +58,23 @@ class RemoteTests(unittest.TestCase):
         self.assertEqual(sum(args[:2] == ['asdf', 'latest'] for args in calls), 1)
         self.assertEqual(resolved, {'nodejs': '24.1.0'})
 
+    def test_gws_install_reconciliation_and_shims(self):
+        for installed in (None, '0.22.4', '0.22.5'):
+            with self.subTest(installed=installed), tempfile.TemporaryDirectory() as directory:
+                calls = []
+                def runner(args, **kwargs):
+                    calls.append(args)
+                    return types.SimpleNamespace(returncode=0, stdout=json.dumps({
+                        'dependencies': {'@googleworkspace/cli': {'version': installed}}}))
+                with patch.object(remote, 'run', runner):
+                    remote.asdf_tools({'gws': True}, {}, Path(directory))
+                install = ['asdf', 'exec', 'npm', 'install', '--global', '@googleworkspace/cli@0.22.5']
+                self.assertEqual(install in calls, installed != '0.22.5')
+                self.assertEqual(calls[-2:], [['asdf', 'reshim', 'nodejs'], ['asdf', 'exec', 'gws', '--version']])
+        with patch.object(remote, 'run') as runner:
+            remote.asdf_tools({}, {}, Path('/synthetic'))
+            runner.assert_not_called()
+
     def test_nix_upgrade_only_declared_original_flake(self):
         profile = {'elements': {
             'owned': {'attrPath': 'legacyPackages.aarch64-linux.fish', 'originalUrl': remote.NIXPKGS},

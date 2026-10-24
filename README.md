@@ -98,6 +98,25 @@ the same source CIDRs as SSH. With ET installed on your client, connect through
 Walter's SSH aliases using `et walter-gcp`, `et walter-gcp-jack` or
 `et walter-gcp-rose`.
 
+## Google Workspace CLI
+
+Set `gws: true` with a configured `nodejs` entry in `asdf-tools` to install
+`@googleworkspace/cli@0.22.5` globally through each user's asdf npm runtime.
+Walter refreshes the Node.js shims and verifies `gws --version`. Matching package
+versions are retained on repeat convergence; a different version is replaced by
+the pinned version. The option defaults to false.
+
+```yaml
+gws: true
+asdf-tools:
+  - name: nodejs
+    version: latest
+    plugin: https://github.com/asdf-vm/asdf-nodejs.git
+```
+
+Authenticate separately as the intended user with `gws auth login --services drive`.
+Walter does not seed Google Workspace credentials or run OAuth login.
+
 ## Shared Go
 
 `go-version: 1.27.2` installs the official checksum-pinned Go distribution once

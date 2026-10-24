@@ -393,6 +393,18 @@ def asdf_tools(config, resolved, home):
         run(['asdf', 'reshim', 'nodejs'])
         run(['corepack', 'enable', *managers])
         run(['asdf', 'reshim', 'nodejs'])
+    if config.get('gws'):
+        package = '@googleworkspace/cli'
+        version = '0.22.5'
+        installed = run(['asdf', 'exec', 'npm', 'list', '--global', '--json', '--depth=0', package], check=False)
+        try:
+            current = json.loads(installed.stdout).get('dependencies', {}).get(package, {}).get('version')
+        except (ValueError, AttributeError):
+            current = None
+        if installed.returncode or current != version:
+            run(['asdf', 'exec', 'npm', 'install', '--global', package + '@' + version])
+        run(['asdf', 'reshim', 'nodejs'])
+        run(['asdf', 'exec', 'gws', '--version'])
     return resolved
 
 

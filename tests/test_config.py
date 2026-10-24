@@ -41,6 +41,16 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaises(DeployError):
             self.load({'nix-packages': ['atuin']})
 
+    def test_gws_requires_boolean_and_node_runtime(self):
+        c, _ = self.load()
+        self.assertIs(c['gws'], False)
+        for value in (True, 'yes', 1, None):
+            with self.subTest(value=value), self.assertRaises(DeployError):
+                self.load({'gws': value})
+        c, _ = self.load({'gws': True, 'asdf-tools': [
+            {'name': 'nodejs', 'version': 'latest', 'plugin': 'https://github.com/asdf-vm/asdf-nodejs.git'}]})
+        self.assertIs(c['gws'], True)
+
     def test_go_version_requires_pinned_release(self):
         c, _ = self.load()
         self.assertEqual('1.27.2', c['go-version'])
