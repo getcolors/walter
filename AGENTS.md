@@ -15,7 +15,7 @@ as a pinned Python dependency. Read README.md before changes.
 - No backward compatibility is required. No Terraform/OpenTofu, Ansible or
   Clojure orchestration, migration shims, or start/stop commands.
 - Keep reusable synthetic configuration in examples/colors.yml. Live deployment
-  configuration and private controller state belong in getcolors/walter-gcp.
+  configuration and private controller state belong in getcolors/walter-ampere.
   Preserve Walter tooling and google-* names; normalize infrastructure
   configuration internally into PocketDeploy.
 - Every variable assigned in .envrc.private must start with COLORS_PAR_. Never

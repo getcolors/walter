@@ -7,7 +7,7 @@ OpenSSH, Google Cloud CLI and downloaded tool installers remain external tools.
 
 This repository owns the reusable package, canonical skill, tests and generic
 configuration. The active deployment lives in
-[getcolors/walter-gcp](https://github.com/getcolors/walter-gcp), with its own
+[getcolors/walter-ampere](https://github.com/getcolors/walter-ampere), with its own
 configuration, pinned launcher and private controller state. Historical Walter
 deployments retain their independent pins and state.
 
@@ -100,8 +100,8 @@ Include `eternal-terminal` in `nix-packages` to install the client for each user
 and configure the root-owned Nix server profile and `et.service`. TCP 2022 uses
 the same source CIDRs as SSH. On OCI Ubuntu images, Walter also inserts a
 `walter-et` accept rule ahead of the persisted host-firewall reject rule. With ET installed on your client, connect through
-Walter's SSH aliases using `et walter-gcp`, `et walter-gcp-jack` or
-`et walter-gcp-rose`.
+Walter's SSH aliases using `et walter-ampere`, `et walter-ampere-jack` or
+`et walter-ampere-rose`.
 
 ## Google Workspace CLI
 
@@ -297,8 +297,9 @@ uv run python scripts/test-launcher.py
 Synthetic tests cover configuration, controller behavior, secrets, privilege
 boundaries, local aliases and scratch recovery. Shared cloud/SSH tests live in
 PocketDeploy. Historical package verification is recorded in
-[docs/verification.md](docs/verification.md). Current deployment records live in
-[walter-gcp](https://github.com/getcolors/walter-gcp/blob/main/docs/verification.md).
+[docs/verification.md](docs/verification.md). Deployment records live in each
+deployment repository, such as
+[walter-ampere](https://github.com/getcolors/walter-ampere).
 
 For an authorized deployed-machine check, run `uv run python scripts/verify-live.py
 -f /absolute/path/to/deployment/colors.yml`.

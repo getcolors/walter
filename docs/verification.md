@@ -1,7 +1,9 @@
 # Walter deployment verification
 
-Historical verification from before deployment extraction. Current deployment
-records belong to [walter-gcp](https://github.com/getcolors/walter-gcp/blob/main/docs/verification.md).
+Historical verification from before deployment extraction. Later `walter-gcp`
+records, through its retirement on 2026-10-29, are in the archived
+[walter-gcp](https://github.com/getcolors/walter-gcp/blob/main/docs/verification.md)
+repository. Current deployment records belong to each deployment repository.
 
 Verified on 11 October 2026 for the shared Go and dependency-driven provisioning
 refactor. The portable launcher pins the published package identified in
