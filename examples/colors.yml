@@ -15,6 +15,8 @@ users: []
 nix-packages:
   - git
   - ripgrep
+  - gcc
+  - gnumake
 gws: false # Enable with an asdf-tools nodejs runtime (see README).
 agent-tools: []
 seed-agent-credentials: []

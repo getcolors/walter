@@ -96,6 +96,9 @@ clone-repos:
 The combined list is deduplicated and cloned with two workers per user into
 `~/code/<owner>/<repo>`. Existing checkouts are preserved without automatic pulls.
 
+Include `gcc` and `gnumake` in `nix-packages` for C and CGO builds driven by
+`make`, such as Go projects; Walter adds `build-essential` only for asdf Python.
+
 Include `eternal-terminal` in `nix-packages` to install the client for each user
 and configure the root-owned Nix server profile and `et.service`. TCP 2022 uses
 the same source CIDRs as SSH. On OCI Ubuntu images, Walter also inserts a
