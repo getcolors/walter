@@ -291,3 +291,10 @@ existing `nobody` identity cannot read a temporary root-private file or regain
 root. `uv build` produced the wheel and source distribution. These are local
 package checks; no deployed machine, configuration or installed launcher was
 changed by this validation.
+
+The portable skill launcher now pins published Walter source
+`8da3a3a12c7fa37c05d534c9e860e01283fe9be4`. Its copied-launcher check passed
+outside the checkout: help/no-argument invocation, rejection of the removed
+`start` command, and a missing-configuration plan that fails before provider
+access. The root `walter` symlink shares the skill payload. Existing deployment
+copies remain independent and were not refreshed.
