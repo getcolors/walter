@@ -275,3 +275,19 @@ Local validation: 144 tests passed, one root-only test skipped, and 47 subtests
 passed. The separate sudo run of `tests/test_remote.py` passed 14 tests and two
 subtests, including the privilege boundary. Package builds, copied-launcher checks
 and Git whitespace validation passed.
+
+## 2026-10-31: workflow-core dependency pins
+
+Pinned PocketDeploy to `3df198119b8a873e88ad6c45b7988e9c3981d39e` and dotfiles
+to `2adb9df03e707c4b5f3f68eb665a4318c9c9ac11`; both resolve Blue
+`0c5ee6a279a61cf247c9af2a0621d715c848efd4`. Blue retains DAGs, subworkflows,
+advice and configuration helpers while application CLI and policy helpers have
+been removed. Walter's application code required no changes.
+
+`uv sync --locked --extra test` succeeded. The synthetic suite passed 175 tests
+and 67 subtests, with the root-only privilege test skipped in the ordinary run.
+A separate sudo run of that fixture passed, verifying that a worker using the
+existing `nobody` identity cannot read a temporary root-private file or regain
+root. `uv build` produced the wheel and source distribution. These are local
+package checks; no deployed machine, configuration or installed launcher was
+changed by this validation.

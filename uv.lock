@@ -5,7 +5,7 @@ requires-python = ">=3.11"
 [[package]]
 name = "blue"
 version = "0.1.0"
-source = { git = "https://github.com/getcolors/blue.git?rev=9a8ef82373205a7a3c4f543e7f76fa2ca748172d#9a8ef82373205a7a3c4f543e7f76fa2ca748172d" }
+source = { git = "https://github.com/getcolors/blue.git?rev=0c5ee6a279a61cf247c9af2a0621d715c848efd4#0c5ee6a279a61cf247c9af2a0621d715c848efd4" }
 dependencies = [
     { name = "pyyaml" },
 ]
@@ -22,7 +22,7 @@ wheels = [
 [[package]]
 name = "dotfiles"
 version = "0.1.0"
-source = { git = "https://github.com/getcolors/dotfiles.git?rev=bb93c23a0077b7e924bdc3558e5840ba7a0d3e6b#bb93c23a0077b7e924bdc3558e5840ba7a0d3e6b" }
+source = { git = "https://github.com/getcolors/dotfiles.git?rev=2adb9df03e707c4b5f3f68eb665a4318c9c9ac11#2adb9df03e707c4b5f3f68eb665a4318c9c9ac11" }
 dependencies = [
     { name = "blue" },
 ]
@@ -57,7 +57,7 @@ wheels = [
 [[package]]
 name = "pocketdeploy"
 version = "0.1.0"
-source = { git = "https://github.com/pocketcontext/pocketdeploy.git?rev=3160c89b42d98d169579294bf92be2746712e536#3160c89b42d98d169579294bf92be2746712e536" }
+source = { git = "https://github.com/pocketcontext/pocketdeploy.git?rev=3df198119b8a873e88ad6c45b7988e9c3981d39e#3df198119b8a873e88ad6c45b7988e9c3981d39e" }
 dependencies = [
     { name = "blue" },
 ]
@@ -158,8 +158,8 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dotfiles", git = "https://github.com/getcolors/dotfiles.git?rev=bb93c23a0077b7e924bdc3558e5840ba7a0d3e6b" },
-    { name = "pocketdeploy", git = "https://github.com/pocketcontext/pocketdeploy.git?rev=3160c89b42d98d169579294bf92be2746712e536" },
+    { name = "dotfiles", git = "https://github.com/getcolors/dotfiles.git?rev=2adb9df03e707c4b5f3f68eb665a4318c9c9ac11" },
+    { name = "pocketdeploy", git = "https://github.com/pocketcontext/pocketdeploy.git?rev=3df198119b8a873e88ad6c45b7988e9c3981d39e" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8,<10" },
 ]
 provides-extras = ["test"]

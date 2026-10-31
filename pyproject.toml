@@ -3,8 +3,10 @@ name = "walter"
 version = "3.0.0"
 description = "Google Cloud and OCI development machines, using PocketDeploy"
 requires-python = ">=3.11"
-dependencies = ["pocketdeploy @ git+https://github.com/pocketcontext/pocketdeploy.git@3160c89b42d98d169579294bf92be2746712e536",
-                "dotfiles @ git+https://github.com/getcolors/dotfiles.git@bb93c23a0077b7e924bdc3558e5840ba7a0d3e6b"]
+dependencies = [
+    "pocketdeploy @ git+https://github.com/pocketcontext/pocketdeploy.git@3df198119b8a873e88ad6c45b7988e9c3981d39e",
+    "dotfiles @ git+https://github.com/getcolors/dotfiles.git@2adb9df03e707c4b5f3f68eb665a4318c9c9ac11",
+]
 
 [project.scripts]
 walter = "walter.cli:main"
