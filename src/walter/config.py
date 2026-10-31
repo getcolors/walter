@@ -23,13 +23,13 @@ OCI = {'oci-config-file-profile', 'oci-region', 'oci-compartment-id', 'oci-subne
        'oci-memory-in-gbs', 'oci-boot-volume-size-in-gbs', 'oci-boot-volume-vpus-per-gb'}
 DEFAULTS = {'workdir': '.colors', 'provider-compute': 'google', 'users': [],
             'compute-prevent-destroy': True, 'walter-ssh-sources': ['0.0.0.0/0'],
-            'gws': False, 'atuin-sync-capture': False, 'local-ssd-scratch': False, 'go-version': '1.27.2'}
+            'gws': False, 'dotfiles': False, 'atuin-sync-capture': False, 'local-ssd-scratch': False, 'go-version': '1.27.2'}
 GOOGLE_DEFAULTS = {'google-auth': 'application-default', 'google-network': 'default',
                    'google-subnet': 'default', 'google-nic-type': 'GVNIC',
                    'google-local-ssd-count': 0}
 TOOLS = {'github-account', 'git-email', 'emacs-config-repo', 'emacs-config-dest',
          'nix-packages', 'agent-tools', 'login-shell', 'asdf-tools', 'corepack-packages',
-         'dotfiles-checkout', 'clone-orgs', 'clone-repos', 'atuin-username', 'seed-agent-credentials'}
+         'clone-orgs', 'clone-repos', 'atuin-username', 'seed-agent-credentials'}
 SHARED = {'state-file', 'ssh-user', 'ssh-private-key-file', 'ssh-public-key-file',
           'ssh-host-private-key-file', 'ssh-host-public-key-file', 'ssh-known-hosts-file',
           'vault-id', 'vault-state-document-id', 'vault-command', 'compute-require-existing-state'}
@@ -60,7 +60,7 @@ def validate(c):
     primary = c.get('ssh-user', 'ubuntu')
     if primary in users or 'root' in users or primary == 'root':
         raise DeployError('Seats must differ from the non-root primary user.')
-    for key in ('local-ssd-scratch', 'compute-prevent-destroy', 'atuin-sync-capture', 'gws'):
+    for key in ('local-ssd-scratch', 'compute-prevent-destroy', 'atuin-sync-capture', 'gws', 'dotfiles'):
         if type(c[key]) is not bool:
             raise DeployError(key + ' must be boolean.')
     if c['local-ssd-scratch'] and not c.get('google-local-ssd-count'):
@@ -82,7 +82,7 @@ def validate(c):
     if c.get('github-account'):
         if not isinstance(c['github-account'], str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*', c['github-account']) or not c.get('git-email'):
             raise DeployError('GitHub account requires a valid account and git-email.')
-    elif any(c.get(k) for k in ('emacs-config-repo', 'clone-orgs', 'clone-repos', 'dotfiles-checkout')):
+    elif any(c.get(k) for k in ('emacs-config-repo', 'clone-orgs', 'clone-repos')):
         raise DeployError('Repository setup requires github-account and git-email.')
     for key in ('git-email', 'atuin-username'):
         if key in c and (not isinstance(c[key], str) or not c[key] or any(ord(x) < 32 for x in c[key])):
@@ -93,10 +93,10 @@ def validate(c):
         url = urlsplit(c['emacs-config-repo'])
         if url.scheme != 'https' or not url.hostname or url.username or url.password:
             raise DeployError('Emacs repository must use credential-free HTTPS.')
-    for key in ('emacs-config-dest', 'dotfiles-checkout'):
-        if key in c and (not isinstance(c[key], str) or not c[key].startswith('~/')
-                         or '..' in Path(c[key]).parts or any(ord(x) < 32 for x in c[key])):
-            raise DeployError(key + ' must be a safe path under ~/.')
+    dest = c.get('emacs-config-dest')
+    if 'emacs-config-dest' in c and (not isinstance(dest, str) or not dest.startswith('~/')
+                                     or '..' in Path(dest).parts or any(ord(x) < 32 for x in dest)):
+        raise DeployError('emacs-config-dest must be a safe path under ~/.')
     tools = c.get('asdf-tools', [])
     if not isinstance(tools, list):
         raise DeployError('asdf-tools must be a list.')
@@ -144,10 +144,14 @@ def load(path, env=None):
         if path.is_symlink() or path.stat().st_size > 1024 * 1024:
             raise ValueError()
         raw = load_yaml(path.read_text())
-        if not isinstance(raw, dict) or set(raw) - KEYS:
+        if not isinstance(raw, dict):
             raise ValueError()
     except Exception:
         raise DeployError('Invalid Walter configuration; unknown or retired fields are not supported.') from None
+    if 'dotfiles-checkout' in raw:
+        raise DeployError('dotfiles-checkout is retired; use dotfiles: true to seed the packaged Ubuntu dotfiles.')
+    if set(raw) - KEYS:
+        raise DeployError('Invalid Walter configuration; unknown or retired fields are not supported.')
     provider = read_pars({**DEFAULTS, **raw}, env)['provider-compute']
     c = read_pars({**DEFAULTS, **(GOOGLE_DEFAULTS if provider == 'google' else {}), **raw}, env)
     # Credential environment variables must never enter desired state or hashing.

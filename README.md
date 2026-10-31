@@ -75,8 +75,11 @@ filesystems and unsafe ownership. Local SSD data is disposable.
 
 Walter uses PocketDeploy's configuration normalization, deployment sessions,
 operation journal, compute deletion, `.colors.sqlite`, `.ssh/` authority and local lock.
-Pinned SSH transport is prepared before parallel user work; shared alias updates
-preserve Walter's existing ownership markers and use PocketDeploy's common lock.
+Pinned SSH transport is prepared before parallel user work. Aliases live in the
+owned snippet `~/.ssh/config.d/00-walter-<profile>.conf`, written under PocketDeploy's
+common lock; `~/.ssh/config` is never rewritten and must load `Include config.d/*`
+at top level or under `Host *`, before options that apply to the aliases. An owned block left in
+`~/.ssh/config` by an older Walter is refused until moved into that snippet.
 One controller at a time is supported. There is no backend bucket. Missing state
 or authority requires recovery, not adoption by name. Host bootstrap keys rotate
 before application credentials are transmitted. `ssh-install` refreshes owned
@@ -227,9 +230,13 @@ verifies it before removing any previous Nix Atuin entry and includes its direct
 in Bash, Fish and provisioning PATHs. Existing installations are retained on
 repeat convergence; history and credentials are preserved. Nix/asdf and standalone agent installers
 configure each home. Focused commands operate on the recorded
-owned machine. Dotfiles use a small Python renderer for the checkout's Ubuntu
-profile, preserving existing user files; the checkout's old launcher is never
-executed. Emacs package warming runs asynchronously alongside Atuin synchronization; inspect
+owned machine. With `dotfiles: true` (default false), the controller renders the
+Ubuntu profile of the pinned [getcolors/dotfiles](https://github.com/getcolors/dotfiles)
+package and sends the files to each user. Only missing files are seeded, once per
+home: the `~/.local/state/walter/dotfiles` stamp leaves homes seeded earlier, and
+later edits, unchanged. Symlinked or conflicting destinations are refused before
+any write. No dotfiles checkout or GitHub access is required; the retired
+`dotfiles-checkout` key is rejected. Emacs package warming runs asynchronously alongside Atuin synchronization; inspect
 `~/.local/state/walter/emacs-packages.log` for completion.
 
 Walter does not install or remove coding-agent hooks. Existing agent configuration

@@ -82,9 +82,22 @@ class ConfigTest(unittest.TestCase):
 
     def test_requires_github_and_safe_home_paths(self):
         with self.assertRaises(DeployError):
-            self.load({'dotfiles-checkout': '~/code/dotfiles'})
+            self.load({'clone-repos': ['example/repo']})
         with self.assertRaises(DeployError):
-            self.load({'github-account': 'example', 'git-email': 'a@example.com', 'dotfiles-checkout': '~/../outside'})
+            self.load({'emacs-config-repo': 'https://example.com/emacs.git', 'emacs-config-dest': '~/../outside',
+                       'github-account': 'example', 'git-email': 'a@example.com'})
+
+    def test_dotfiles_boolean_without_github(self):
+        self.assertFalse(self.load()[0]['dotfiles'])
+        self.assertTrue(self.load({'dotfiles': True})[0]['dotfiles'])
+        for value in ['yes', 1, '~/code/dotfiles']:
+            with self.subTest(value=value), self.assertRaisesRegex(DeployError, 'dotfiles must be boolean'):
+                self.load({'dotfiles': value})
+
+    def test_retired_dotfiles_checkout_names_replacement(self):
+        with self.assertRaisesRegex(DeployError, 'dotfiles-checkout is retired; use dotfiles: true'):
+            self.load({'dotfiles-checkout': '~/code/getcolors/dotfiles', 'github-account': 'example',
+                       'git-email': 'a@example.com'})
 
     def test_private_assignment_names_without_evaluation_or_secret_errors(self):
         private = self.path.parent / '.envrc.private'

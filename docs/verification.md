@@ -238,6 +238,8 @@ setup script detects that existing initialization. Interactive Fish resolved the
 official binary, loaded its search function and emitted no stderr; Bash login
 shells also resolved the official binary. The dotfiles repository needed no edits.
 The macOS profile was inspected but not live-tested.
+Since this record, Walter renders the packaged dotfiles profile on the controller
+(`dotfiles: true` replaces `dotfiles-checkout`); seeding semantics are unchanged.
 
 Validation: 141 tests passed, one privilege test skipped in the ordinary suite,
 and 47 subtests passed. The separate root suite passed 19 tests and four subtests.

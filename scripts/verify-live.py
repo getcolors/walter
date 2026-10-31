@@ -214,7 +214,7 @@ def verify(payload):
             if config.get('github-account'):
                 code, text = command(user, ['gh', 'api', 'user', '--jq', '.login'])
                 checks['github_account'] = code == 0 and text.strip().casefold() == config['github-account'].casefold()
-            checks['dotfiles_stamp'] = not config.get('dotfiles-checkout') or (home / '.local/state/walter/dotfiles').is_file()
+            checks['dotfiles_stamp'] = not config.get('dotfiles') or (home / '.local/state/walter/dotfiles').is_file()
             checks['atuin_session_files'] = True
             if config.get('atuin-username'):
                 directory = home / '.local/share/atuin'

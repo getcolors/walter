@@ -18,5 +18,6 @@ nix-packages:
   - gcc
   - gnumake
 gws: false # Enable with an asdf-tools nodejs runtime (see README).
+dotfiles: false # true seeds missing packaged Ubuntu dotfiles once per user.
 agent-tools: []
 seed-agent-credentials: []

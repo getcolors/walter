@@ -667,10 +667,10 @@ def user_tasks(payload, user, resolved):
         stage('github')
         github(config, payload, home)
     stage('dotfiles')
-    if config.get('dotfiles-checkout'):
+    if config.get('dotfiles'):
         namespace = {'__name__': 'walter_dotfiles'}
-        exec(payload['dotfiles_source'], namespace)
-        namespace['install'](user_path(home, config['dotfiles-checkout']), home)
+        exec(payload['dotfiles_install_source'], namespace)
+        namespace['install'](payload['dotfiles'], home)
     if config.get('atuin-username'):
         stage('atuin')
         install_atuin(home)

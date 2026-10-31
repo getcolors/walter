@@ -12,6 +12,7 @@ import uuid
 from graphlib import TopologicalSorter
 
 from blue.workflow import workflow, run as run_workflow
+from dotfiles.render import render_profile
 from pocketdeploy.common import DeployError, run
 from pocketdeploy import diagnostics
 from .remote import OPERATIONS
@@ -29,10 +30,13 @@ def source(name):
 def remote(host, connection, config, action, **private):
     payload = {'config': config, 'primary_user': connection.get('user', 'ubuntu'),
                'action': action, **private}
-    if action in ('converge', 'bootstrap', 'user-finish'):
-        payload['dotfiles_source'] = source('dotfiles')
-        if config.get('local-ssd-scratch'):
-            payload['local_ssd_source'] = source('local_ssd')
+    if action in ('converge', 'user-finish') and config.get('dotfiles'):
+        # Render on the controller; the remote program receives only file contents.
+        payload['dotfiles_install_source'] = source('dotfiles_install')
+        payload['dotfiles'] = {path: base64.b64encode(content).decode()
+                               for path, content in render_profile('ubuntu').items()}
+    if action in ('converge', 'bootstrap', 'user-finish') and config.get('local-ssd-scratch'):
+        payload['local_ssd_source'] = source('local_ssd')
     if action in ('install-et', 'converge-nix') and 'eternal-terminal' in config.get('nix-packages', []):
         payload['eternal_terminal_source'] = source('eternal_terminal')
     if action in ('converge', 'install-go'):
