@@ -109,6 +109,17 @@ the same source CIDRs as SSH. On OCI Ubuntu images, Walter also inserts a
 Walter's SSH aliases using `et walter-ampere`, `et walter-ampere-jack` or
 `et walter-ampere-rose`.
 
+## uv
+
+Set `uv: true` to install the latest standalone uv for each user with Astral's
+official installer into `~/.local/bin`, without editing shell profiles. Walter
+installs it only when `~/.local/bin/uv` is missing and verifies `uv --version`;
+upgrade with `uv self update`. The standalone binary works with a changed `HOME`,
+unlike an asdf shim. The option defaults to false and cannot be combined with an
+asdf `uv` entry. Walter does not remove asdf tools dropped from configuration: on
+an existing machine, run `asdf plugin remove uv` and delete the `uv` line from
+`~/.tool-versions` so the asdf shim no longer shadows `~/.local/bin/uv`.
+
 ## Google Workspace CLI
 
 Set `gws: true` with a configured `nodejs` entry in `asdf-tools` to install

@@ -34,6 +34,7 @@ AGENTS = {
     'antigravity': ('agy', 'https://antigravity.google/cli/install.sh', 'bash'),
     'grok': ('grok', 'https://x.ai/cli/install.sh', 'bash'),
 }
+UV_INSTALLER = 'https://astral.sh/uv/install.sh'
 
 
 class ProvisionError(Exception):
@@ -127,12 +128,13 @@ def atuin_failure(stderr):
     return 'nonzero_exit', None
 
 
-def run(args, *, data=None, check=True, timeout=3600):
+def run(args, *, data=None, check=True, timeout=3600, env=None):
     started = time.monotonic()
     operation = operation_for(args)
     try:
         result = subprocess.run(args, input=data, text=True, capture_output=True,
-                                timeout=timeout, check=False)
+                                timeout=timeout, check=False,
+                                env=None if env is None else {**os.environ, **env})
     except subprocess.TimeoutExpired:
         raise ProvisionError('Command timed out.', build_diagnostic(
             operation, 'timeout', elapsed_seconds=time.monotonic() - started)) from None
@@ -304,9 +306,17 @@ def user_path(home, value):
     return result
 
 
-def install_script(url, interpreter='sh', arguments=()):
+def install_script(url, interpreter='sh', arguments=(), env=None):
     script = run(['curl', '-fsSL', '--retry', '3', url]).stdout
-    run([interpreter, '-s', '--', *arguments], data=script)
+    run([interpreter, '-s', '--', *arguments], data=script, env=env)
+
+
+def install_uv(home):
+    # The official standalone binary keeps working when HOME changes, unlike an asdf shim.
+    binary = home / '.local/bin/uv'
+    if not binary.exists():
+        install_script(UV_INSTALLER, env={'UV_INSTALL_DIR': str(home / '.local/bin'), 'UV_NO_MODIFY_PATH': '1'})
+    run([str(binary), '--version'])
 
 
 def seed_credentials(home, credentials):
@@ -661,6 +671,8 @@ def user_tasks(payload, user, resolved):
         if not (home / '.local/bin' / binary).exists():
             install_script(url, interpreter)
         run([str(home / '.local/bin' / binary), '--version'])
+    if config.get('uv'):
+        install_uv(home)
     stage('credentials')
     seed_credentials(home, payload.get('credentials', {}))
     if action == 'converge':

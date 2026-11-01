@@ -51,6 +51,17 @@ class ConfigTest(unittest.TestCase):
             {'name': 'nodejs', 'version': 'latest', 'plugin': 'https://github.com/asdf-vm/asdf-nodejs.git'}]})
         self.assertIs(c['gws'], True)
 
+    def test_uv_requires_boolean_and_excludes_asdf_uv(self):
+        c, _ = self.load()
+        self.assertIs(c['uv'], False)
+        for value in ('yes', 1, None):
+            with self.subTest(value=value), self.assertRaises(DeployError):
+                self.load({'uv': value})
+        self.assertIs(self.load({'uv': True})[0]['uv'], True)
+        with self.assertRaisesRegex(DeployError, 'not both'):
+            self.load({'uv': True, 'asdf-tools': [
+                {'name': 'uv', 'version': 'latest', 'plugin': 'https://github.com/asdf-community/asdf-uv.git'}]})
+
     def test_go_version_requires_pinned_release(self):
         c, _ = self.load()
         self.assertEqual('1.27.2', c['go-version'])

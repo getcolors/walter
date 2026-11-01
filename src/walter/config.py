@@ -23,7 +23,7 @@ OCI = {'oci-config-file-profile', 'oci-region', 'oci-compartment-id', 'oci-subne
        'oci-memory-in-gbs', 'oci-boot-volume-size-in-gbs', 'oci-boot-volume-vpus-per-gb'}
 DEFAULTS = {'workdir': '.colors', 'provider-compute': 'google', 'users': [],
             'compute-prevent-destroy': True, 'walter-ssh-sources': ['0.0.0.0/0'],
-            'gws': False, 'dotfiles': False, 'atuin-sync-capture': False, 'local-ssd-scratch': False, 'go-version': '1.27.2'}
+            'gws': False, 'uv': False, 'dotfiles': False, 'atuin-sync-capture': False, 'local-ssd-scratch': False, 'go-version': '1.27.2'}
 GOOGLE_DEFAULTS = {'google-auth': 'application-default', 'google-network': 'default',
                    'google-subnet': 'default', 'google-nic-type': 'GVNIC',
                    'google-local-ssd-count': 0}
@@ -60,7 +60,7 @@ def validate(c):
     primary = c.get('ssh-user', 'ubuntu')
     if primary in users or 'root' in users or primary == 'root':
         raise DeployError('Seats must differ from the non-root primary user.')
-    for key in ('local-ssd-scratch', 'compute-prevent-destroy', 'atuin-sync-capture', 'gws', 'dotfiles'):
+    for key in ('local-ssd-scratch', 'compute-prevent-destroy', 'atuin-sync-capture', 'gws', 'uv', 'dotfiles'):
         if type(c[key]) is not bool:
             raise DeployError(key + ' must be boolean.')
     if c['local-ssd-scratch'] and not c.get('google-local-ssd-count'):
@@ -115,6 +115,8 @@ def validate(c):
         names.append(tool['name'])
     if len(names) != len(set(names)):
         raise DeployError('Duplicate asdf tools.')
+    if c['uv'] and 'uv' in names:
+        raise DeployError('Choose uv: true or an asdf uv entry, not both.')
     if ('pi' in agents or c.get('corepack-packages') or c['gws']) and 'nodejs' not in names:
         raise DeployError('Pi, Corepack and gws require an asdf nodejs runtime.')
 

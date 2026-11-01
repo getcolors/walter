@@ -75,6 +75,33 @@ class RemoteTests(unittest.TestCase):
             remote.asdf_tools({}, {}, Path('/synthetic'))
             runner.assert_not_called()
 
+    def test_uv_uses_official_installer_once_without_profile_edits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            calls = []
+            def runner(args, **kwargs):
+                calls.append((args, kwargs))
+                return types.SimpleNamespace(returncode=0, stdout='#!/bin/sh\n', stderr='')
+            with patch.object(remote, 'run', runner):
+                remote.install_uv(home)
+            binary = str(home / '.local/bin/uv')
+            self.assertEqual(calls[0][0], ['curl', '-fsSL', '--retry', '3', 'https://astral.sh/uv/install.sh'])
+            self.assertEqual(calls[1][0], ['sh', '-s', '--'])
+            self.assertEqual(calls[1][1]['env'], {'UV_INSTALL_DIR': str(home / '.local/bin'), 'UV_NO_MODIFY_PATH': '1'})
+            self.assertEqual(calls[2][0], [binary, '--version'])
+            (home / '.local/bin').mkdir(parents=True)
+            (home / '.local/bin/uv').write_text('')
+            calls.clear()
+            with patch.object(remote, 'run', runner):
+                remote.install_uv(home)
+            self.assertEqual([args for args, _ in calls], [[binary, '--version']])
+
+    def test_run_environment_extends_inherited_environment(self):
+        with patch.dict(os.environ, {'WALTER_SYNTHETIC_KEEP': 'kept'}):
+            result = remote.run([sys.executable, '-c', 'import os; print(os.environ["WALTER_SYNTHETIC_KEEP"], os.environ["WALTER_SYNTHETIC_ADD"])'],
+                                env={'WALTER_SYNTHETIC_ADD': 'added'})
+        self.assertEqual(result.stdout.split(), ['kept', 'added'])
+
     def test_nix_upgrade_only_declared_original_flake(self):
         profile = {'elements': {
             'owned': {'attrPath': 'legacyPackages.aarch64-linux.fish', 'originalUrl': remote.NIXPKGS},
