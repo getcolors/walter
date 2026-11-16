@@ -11,7 +11,8 @@ class VerifyLiveTest(unittest.TestCase):
     def fixture(self):
         checks = {key: True for key in VERIFY.CHECKS}
         checks['emacs'] = {'running': False, 'exit_code': 0, 'succeeded': True}
-        return {'architecture_matches': True, 'ssd_layout': True, 'eternal_terminal': True, 'shared_asdf_versions': True, 'users': {'ubuntu': checks}}
+        return {'architecture_matches': True, 'ssd_layout': True, 'eternal_terminal': True, 'shared_asdf_versions': True,
+                'memory': {key: True for key in VERIFY.MEMORY_CHECKS}, 'users': {'ubuntu': checks}}
 
     def test_filters_unknown_content_and_requires_true_booleans(self):
         raw = self.fixture()
@@ -132,3 +133,84 @@ def test_atuin_checks_are_required_even_with_existing_session():
         raw = dict(fixture, users={'ubuntu': dict(fixture['users']['ubuntu'])})
         raw['users']['ubuntu'][name] = False
         assert not VERIFY.filter_result(raw, ['ubuntu'])['passed']
+
+
+def test_architecture_follows_each_provider_instance_type():
+    cases = [('google', 'gcp-machine-type', 'c4a-standard-8', 'aarch64'),
+             ('google', 'gcp-machine-type', 'n4a-highmem-4', 'aarch64'),
+             ('google', 'gcp-machine-type', 'n2-standard-8', 'x86_64'),
+             ('oci', 'oci-shape', 'VM.Standard.A1.Flex', 'aarch64'),
+             ('oci', 'oci-shape', 'VM.Standard.A2.Flex', 'aarch64'),
+             ('oci', 'oci-shape', 'VM.Standard.E5.Flex', 'x86_64'),
+             ('hcloud', 'hcloud-server-type', 'cax31', 'aarch64'),
+             ('hcloud', 'hcloud-server-type', 'cpx31', 'x86_64')]
+    for provider, key, value, expected in cases:
+        assert VERIFY.architecture({'provider-compute': provider}, {key: value}) == expected
+    assert VERIFY.architecture({'provider-compute': 'oci'}, {'gcp-machine-type': 'c4a-standard-8'}) == 'x86_64'
+
+
+def test_memory_results_are_filtered_and_required():
+    fixture = VerifyLiveTest().fixture()
+    for name in VERIFY.MEMORY_CHECKS:
+        raw = dict(fixture, memory=dict(fixture['memory'], PRIVATE='TOKEN'))
+        assert VERIFY.filter_result(raw, ['ubuntu'])['passed']
+        raw['memory'][name] = 'true'
+        result = VERIFY.filter_result(raw, ['ubuntu'])
+        assert not result['passed'] and result['memory'][name] is False
+        assert 'TOKEN' not in str(result)
+    assert not VERIFY.filter_result(dict(fixture, memory=None), ['ubuntu'])['passed']
+
+
+def memory_host(tmp_path, swaps, fstab, swappiness='10\n', pressure='50\n'):
+    namespace = {'__name__': 'verification_test'}
+    exec(VERIFY.REMOTE.split('try:\n    print(json.dumps(verify')[0], namespace)
+    for name, text in (('SWAPS', swaps), ('FSTAB', fstab), ('SWAPPINESS', swappiness), ('CACHE_PRESSURE', pressure)):
+        path = tmp_path / name
+        if text is not None:
+            path.write_text(text)
+        namespace[name] = str(path)
+    return namespace
+
+
+SWAPS_HEADER = 'Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n'
+FSTAB = 'LABEL=cloudimg-rootfs / ext4 defaults 0 1\n  /swapfile none swap sw 0 0  \n'
+
+
+def test_memory_checks_require_sized_swap_fstab_sysctl_and_earlyoom(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    swaps = SWAPS_HEADER + '/swapfile                               file\t\t8388604\t\t0\t\t-2\n'
+    namespace = memory_host(tmp_path, swaps, FSTAB)
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout='PRIVATE')
+    with patch.object(namespace['subprocess'], 'run', side_effect=run):
+        checks = namespace['memory']({})
+        assert checks == {'swap': True, 'fstab': True, 'sysctl': True, 'earlyoom': True}
+        assert {tuple(c[:2]) for c in calls} == {('systemctl', 'is-enabled'), ('systemctl', 'is-active')}
+        assert not namespace['memory']({'swap-gb': 4})['swap']
+        assert namespace['memory']({'swap-gb': 0}) == {'swap': False, 'fstab': False, 'sysctl': True, 'earlyoom': True}
+    with patch.object(namespace['subprocess'], 'run', side_effect=lambda argv, **kw: SimpleNamespace(returncode=int(argv[1] == 'is-active'))):
+        assert not namespace['memory']({})['earlyoom']
+    with patch.object(namespace['subprocess'], 'run', side_effect=OSError):
+        assert not namespace['memory']({})['earlyoom']
+
+
+def test_memory_checks_reject_duplicate_fstab_bad_sysctl_and_missing_files(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    swaps = SWAPS_HEADER + '/swapfile file 8388604 0 -2\n'
+    ok = lambda *a, **kw: SimpleNamespace(returncode=0)
+    with patch('subprocess.run', side_effect=ok):
+        namespace = memory_host(tmp_path, swaps, FSTAB + '/swapfile none swap sw 0 0\n', '60\n')
+        checks = namespace['memory']({'swap-gb': 8})
+        assert not checks['fstab'] and not checks['sysctl'] and checks['swap']
+        namespace = memory_host(tmp_path, swaps, FSTAB, '10\n', '100\n')
+        assert not namespace['memory']({})['sysctl']
+        missing = tmp_path / 'missing'
+        missing.mkdir()
+        namespace = memory_host(missing, None, None, None, None)
+        assert namespace['memory']({}) == {'swap': False, 'fstab': False, 'sysctl': False, 'earlyoom': True}
+        namespace = memory_host(tmp_path, SWAPS_HEADER, 'LABEL=root / ext4 defaults 0 1\n')
+        assert namespace['memory']({'swap-gb': 0}) == {'swap': True, 'fstab': True, 'sysctl': True, 'earlyoom': True}

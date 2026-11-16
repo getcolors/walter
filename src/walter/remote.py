@@ -46,7 +46,7 @@ class ProvisionError(Exception):
 
 
 
-STAGES = frozenset(('validation', 'machine', 'users', 'prerequisites', 'go', 'cloudflared', 'docker', 'local-ssd', 'nix-install', 'nix-packages', 'asdf', 'shell-paths', 'agent-tools', 'credentials', 'github', 'dotfiles', 'atuin', 'emacs', 'complete'))
+STAGES = frozenset(('validation', 'machine', 'users', 'prerequisites', 'go', 'cloudflared', 'docker', 'local-ssd', 'memory', 'nix-install', 'nix-packages', 'asdf', 'shell-paths', 'agent-tools', 'credentials', 'github', 'dotfiles', 'atuin', 'emacs', 'complete'))
 STAGE = 'validation'
 PROGRESS_PATH = None
 PROGRESS_USER = None
@@ -760,6 +760,13 @@ def setup_storage(payload):
     run(['systemctl', 'enable', '--now', 'walter-local-ssd'])
 
 
+def memory_protection(payload):
+    stage('memory')
+    namespace = {'__name__': 'walter_memory'}
+    exec(payload['memory_source'], namespace)
+    namespace['install'](run, write, payload['config'].get('swap-gb', 8))
+
+
 def as_user(payload, user, resolved):
     return finish_user(start_user(payload, user, resolved))
 
@@ -771,6 +778,8 @@ def bootstrap(payload, users):
     if config.get('local-ssd-scratch'):
         stage('local-ssd')
         setup_storage(payload)
+    memory_protection(payload)
+    stage('prerequisites')
     primary = users[0]
     primary_home = Path(pwd.getpwnam(primary).pw_dir)
     keys = (primary_home / '.ssh/authorized_keys').read_text()
@@ -875,7 +884,7 @@ def install_nix(config, receipt=Path('/nix/receipt.json')):
 
 
 def prerequisites(config):
-    packages = ['curl', 'git', 'unzip', 'xz-utils', 'ca-certificates', 'gnupg', 'tar', 'gzip', 'util-linux']
+    packages = ['curl', 'git', 'unzip', 'xz-utils', 'ca-certificates', 'gnupg', 'tar', 'gzip', 'util-linux', 'earlyoom']
     if any(tool['name'] == 'nodejs' for tool in config.get('asdf-tools', [])):
         packages += ['libatomic1']
     if any(tool['name'] == 'python' for tool in config.get('asdf-tools', [])):
@@ -884,7 +893,8 @@ def prerequisites(config):
         packages += ['e2fsprogs', 'mdadm']
     os.environ['DEBIAN_FRONTEND'] = 'noninteractive'
     run(['apt-get', 'update'])
-    run(['apt-get', 'install', '-y', '--no-install-recommends', *packages])
+    # Keep Walter-managed configuration files, such as /etc/default/earlyoom, on upgrades.
+    run(['apt-get', 'install', '-y', '--no-install-recommends', '-o', 'Dpkg::Options::=--force-confold', *packages])
 
 
 def finalize_shells(config, users):

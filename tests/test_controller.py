@@ -21,6 +21,23 @@ class ControllerTest(unittest.TestCase):
         install.assert_called_once_with(payload)
         stage.assert_called_once_with('complete')
 
+    def test_memory_source_shipped_for_bootstrap_and_run_after_prerequisites(self):
+        from walter import remote
+        host = Mock()
+        host.run_python.return_value = {'ok': True}
+        controller.remote(host, {'user': 'ubuntu'}, {'swap-gb': 4}, 'bootstrap')
+        payload = host.run_python.call_args.args[2]
+        self.assertEqual(controller.source('memory'), payload['memory_source'])
+        order = []
+        with patch.object(remote, 'prerequisites', lambda config: order.append('prerequisites')), \
+                patch.object(remote, 'memory_protection', lambda payload: order.append(('memory', payload['config']['swap-gb']))), \
+                patch.object(remote, 'stage', lambda value: order.append(value)), \
+                patch.object(remote.pwd, 'getpwnam', side_effect=RuntimeError('stop')):
+            with self.assertRaises(RuntimeError):
+                remote.bootstrap(payload, ['ubuntu'])
+        # Later seat and SSH failures are not attributed to the memory stage.
+        self.assertEqual(['prerequisites', 'prerequisites', ('memory', 4), 'prerequisites'], order)
+
     def test_remote_exception_text_is_not_reported(self):
         host = Mock()
         host.run_python.return_value = {'ok': False, 'stage': 'secret-token', 'error': 'PRIVATE'}

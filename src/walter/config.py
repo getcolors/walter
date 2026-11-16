@@ -24,7 +24,8 @@ OCI = {'oci-config-file-profile', 'oci-region', 'oci-compartment-id', 'oci-subne
 HCLOUD = {'hcloud-server-type', 'hcloud-location', 'hcloud-image', 'compute-network-mode'}
 DEFAULTS = {'workdir': '.colors', 'provider-compute': 'google', 'users': [],
             'compute-prevent-destroy': True, 'walter-ssh-sources': ['0.0.0.0/0'],
-            'gws': False, 'uv': False, 'dotfiles': False, 'atuin-sync-capture': False, 'local-ssd-scratch': False, 'go-version': '1.27.2'}
+            'gws': False, 'uv': False, 'dotfiles': False, 'atuin-sync-capture': False, 'local-ssd-scratch': False, 'go-version': '1.27.2',
+            'swap-gb': 8}
 GOOGLE_DEFAULTS = {'google-auth': 'application-default', 'google-network': 'default',
                    'google-subnet': 'default', 'google-nic-type': 'GVNIC',
                    'google-local-ssd-count': 0}
@@ -65,6 +66,8 @@ def validate(c):
     for key in ('local-ssd-scratch', 'compute-prevent-destroy', 'atuin-sync-capture', 'gws', 'uv', 'dotfiles'):
         if type(c[key]) is not bool:
             raise DeployError(key + ' must be boolean.')
+    if type(c['swap-gb']) is not int or not 0 <= c['swap-gb'] <= 64:
+        raise DeployError('swap-gb must be an integer from 0 to 64.')
     if c['local-ssd-scratch'] and not c.get('google-local-ssd-count'):
         raise DeployError('Scratch requires Google Local SSD disks.')
     if c.get('google-region') and c['google-zone'].rsplit('-', 1)[0] != c['google-region']:

@@ -43,6 +43,8 @@ class RemoteTests(unittest.TestCase):
         with patch.object(remote, 'run') as run:
             remote.prerequisites({'asdf-tools': [{'name': 'nodejs'}]})
         packages = run.call_args.args[0]
+        self.assertIn('earlyoom', packages)
+        self.assertIn('Dpkg::Options::=--force-confold', packages)
         self.assertIn('libatomic1', packages)
         self.assertNotIn('build-essential', packages)
 

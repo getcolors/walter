@@ -19,6 +19,7 @@ nix-packages:
   - gnumake
 gws: false # Enable with an asdf-tools nodejs runtime (see README).
 uv: false # true installs the latest standalone uv into ~/.local/bin.
+swap-gb: 8 # Swap file size; 0 disables swap. earlyoom always runs.
 dotfiles: false # true seeds missing packaged Ubuntu dotfiles once per user.
 agent-tools: []
 seed-agent-credentials: []

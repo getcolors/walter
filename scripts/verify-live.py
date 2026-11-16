@@ -11,6 +11,10 @@ REMOTE = r'''
 import fcntl, grp, json, os, platform, pwd, re, socket, stat, subprocess, sys
 from pathlib import Path
 
+SWAPS, FSTAB = '/proc/swaps', '/etc/fstab'
+SWAPPINESS, CACHE_PRESSURE = '/proc/sys/vm/swappiness', '/proc/sys/vm/vfs_cache_pressure'
+FSTAB_LINE = '/swapfile none swap sw 0 0'
+
 
 def command(user, argv):
     record = pwd.getpwnam(user)
@@ -161,9 +165,37 @@ def atuin_checks(user, home, config):
     return checks
 
 
+def memory(config):
+    gb = config.get('swap-gb', 8)
+    checks = {}
+    try:
+        sizes = [int(f[2]) for f in (line.split() for line in Path(SWAPS).read_text().splitlines()[1:])
+                 if len(f) >= 3 and f[0] == '/swapfile']
+        checks['swap'] = (len(sizes) == 1 and abs(sizes[0] * 1024 - gb * 2**30) <= os.sysconf('SC_PAGE_SIZE')) if gb > 0 else not sizes
+    except Exception:
+        checks['swap'] = False
+    try:
+        count = sum(line.strip() == FSTAB_LINE for line in Path(FSTAB).read_text().splitlines())
+        checks['fstab'] = count == (1 if gb > 0 else 0)
+    except Exception:
+        checks['fstab'] = False
+    try:
+        # Walter writes these settings whether or not swap is enabled.
+        checks['sysctl'] = (Path(SWAPPINESS).read_text().strip() == '10'
+                            and Path(CACHE_PRESSURE).read_text().strip() == '50')
+    except Exception:
+        checks['sysctl'] = False
+    try:
+        checks['earlyoom'] = all(subprocess.run(['systemctl', action, '--quiet', 'earlyoom'], capture_output=True, timeout=10).returncode == 0
+                                 for action in ('is-enabled', 'is-active'))
+    except Exception:
+        checks['earlyoom'] = False
+    return checks
+
+
 def verify(payload):
     config, primary = payload['config'], payload['primary']
-    result = {'architecture_matches': platform.machine() == payload['architecture'], 'ssd_layout': storage(config), 'eternal_terminal': eternal_terminal(config), 'shared_asdf_versions': True, 'users': {}}
+    result = {'architecture_matches': platform.machine() == payload['architecture'], 'ssd_layout': storage(config), 'eternal_terminal': eternal_terminal(config), 'shared_asdf_versions': True, 'memory': memory(config), 'users': {}}
     resolved_versions = {}
     for user in [primary, *config.get('users', [])]:
         try:
@@ -229,19 +261,31 @@ def verify(payload):
 try:
     print(json.dumps(verify(json.load(sys.stdin))))
 except Exception:
-    print(json.dumps({'architecture_matches': False, 'users': {}}))
+    print(json.dumps({'architecture_matches': False, 'memory': {}, 'users': {}}))
 '''
 
 CHECKS = ('private_home', 'unprivileged_seat', 'authorized_key', 'nix_packages',
           'go_direct', 'go_bash', 'go_fish', 'go_shared_permissions', 'go_native_build',
           'asdf_runtimes', 'explicit_repositories', 'agent_executables', 'github_account', 'dotfiles_stamp', 'atuin_session_files', 'atuin_v2_compatible', 'atuin_history_rebuilt', 'atuin_official_install')
+MEMORY_CHECKS = ('swap', 'fstab', 'sysctl', 'earlyoom')
+ARM = {'google': ('gcp-machine-type', lambda v: v.startswith(('n4a-', 'c4a-', 't2a-'))),
+       'oci': ('oci-shape', lambda v: '.A1.' in v or '.A2.' in v),
+       'hcloud': ('hcloud-server-type', lambda v: v.startswith('cax'))}
+
+
+def architecture(config, deployment):
+    """Return the platform.machine() value expected for the configured instance type."""
+    key, arm = ARM[config['provider-compute']]
+    return 'aarch64' if arm(str(deployment.get(key) or '')) else 'x86_64'
 
 
 def filter_result(raw, users, allow_emacs_pending=False):
     """Treat the host response as untrusted: copy only expected bools and exit code."""
     raw = raw if isinstance(raw, dict) else {}
     result = {name: raw.get(name) is True for name in ('architecture_matches', 'ssd_layout', 'shared_asdf_versions', 'eternal_terminal')}
-    passed = all(result.values())
+    memory = raw.get('memory') if isinstance(raw.get('memory'), dict) else {}
+    result['memory'] = {name: memory.get(name) is True for name in MEMORY_CHECKS}
+    passed = all(result[name] for name in ('architecture_matches', 'ssd_layout', 'shared_asdf_versions', 'eternal_terminal')) and all(result['memory'].values())
     result['users'] = {}
     remote_users = raw.get('users') if isinstance(raw.get('users'), dict) else {}
     for user in users:
@@ -264,7 +308,9 @@ def main(argv=None):
     from pocketdeploy.common import local_path
     from pocketdeploy.config import scope
     from pocketdeploy.gcp import GCP
+    from pocketdeploy.hcloud import HCloud
     from pocketdeploy.host import Host
+    from pocketdeploy.oci import OCI
     from pocketdeploy.state import State
     from walter.config import load
     parser = argparse.ArgumentParser(description=__doc__)
@@ -275,11 +321,10 @@ def main(argv=None):
         config, deployment = load(args.file)
         root = Path(deployment['_root'])
         primary = deployment.get('ssh-user', 'ubuntu')
-        machine = deployment.get('gcp-machine-type', '')
-        architecture = 'aarch64' if machine.startswith(('n4a-', 'c4a-', 't2a-')) else 'x86_64'
+        provider = {'google': GCP, 'oci': OCI, 'hcloud': HCloud}[config['provider-compute']]
         with State(local_path(root, deployment['state-file']), config['profile'], scope(deployment), read_only=True) as state:
-            cloud, host = GCP(deployment, state), Host(deployment, state, root)
-            payload = {'config': config, 'primary': primary, 'architecture': architecture,
+            cloud, host = provider(deployment, state), Host(deployment, state, root)
+            payload = {'config': config, 'primary': primary, 'architecture': architecture(config, deployment),
                        'public_key': host.pub.read_text().strip()}
             # PocketDeploy refreshes its connection-specific known-hosts file.
             # Keep that ephemeral so verification never rewrites deployment files.

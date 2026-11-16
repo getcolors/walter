@@ -45,6 +45,14 @@ class ConfigTest(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(DeployError):
                 self.load(invalid)
 
+    def test_swap_defaults_to_eight_gib_and_validates_range(self):
+        c, _ = self.load()
+        self.assertEqual(8, c['swap-gb'])
+        self.assertEqual(0, self.load({'swap-gb': 0})[0]['swap-gb'])
+        for invalid in (-1, 65, 2.5, '8', True):
+            with self.subTest(invalid=invalid), self.assertRaises(DeployError):
+                self.load({'swap-gb': invalid})
+
     def test_atuin_capture_requires_explicit_boolean_opt_in(self):
         c, _ = self.load()
         self.assertIs(False, c['atuin-sync-capture'])

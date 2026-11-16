@@ -39,6 +39,8 @@ def remote(host, connection, config, action, **private):
         payload['local_ssd_source'] = source('local_ssd')
     if action in ('install-et', 'converge-nix') and 'eternal-terminal' in config.get('nix-packages', []):
         payload['eternal_terminal_source'] = source('eternal_terminal')
+    if action in ('converge', 'bootstrap'):
+        payload['memory_source'] = source('memory')
     if action in ('converge', 'install-go'):
         payload['go_install_source'] = source('go_install')
     if action in ('converge', 'install-cloudflared'):
@@ -52,7 +54,7 @@ def remote(host, connection, config, action, **private):
     if not isinstance(result, dict) or result.get('ok') is not True:
         # Remote text is untrusted, including exceptions from configured tools.
         stage = result.get('stage') if isinstance(result, dict) else None
-        safe = stage if isinstance(stage, str) and stage in {'validation', 'local-ssd', 'machine', 'prerequisites', 'go', 'cloudflared', 'docker', 'nix-install', 'nix-packages', 'asdf', 'shell-paths', 'agent-tools', 'credentials', 'github', 'dotfiles', 'atuin', 'emacs'} else 'provisioning'
+        safe = stage if isinstance(stage, str) and stage in {'validation', 'local-ssd', 'memory', 'machine', 'prerequisites', 'go', 'cloudflared', 'docker', 'nix-install', 'nix-packages', 'asdf', 'shell-paths', 'agent-tools', 'credentials', 'github', 'dotfiles', 'atuin', 'emacs'} else 'provisioning'
         diagnostic = diagnostics.validate_diagnostic(result.get('diagnostic'), allowed_operations=OPERATIONS) if isinstance(result, dict) else None
         diagnostic = diagnostic_context(diagnostic, action, private, config, connection)
         raise DeployError('Remote ' + safe + ' failed; private output suppressed.', stage=safe, diagnostic=diagnostic)

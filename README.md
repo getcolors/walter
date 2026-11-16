@@ -156,6 +156,27 @@ receive Go paths, with `go` and `gofmt` also linked into `/usr/local/bin`.
 Each user retains their own `~/go/bin`, module cache and build cache.
 Only releases with checksums pinned in Walter are accepted.
 
+## Memory protection
+
+Every machine runs [earlyoom](https://github.com/rfjakob/earlyoom) so memory
+pressure kills a process instead of hanging the host. `swap-gb` (default 8,
+0 to 64) sizes a swap file at `/swapfile` with one `/etc/fstab` entry;
+`/etc/sysctl.d/90-walter-memory.conf` sets `vm.swappiness = 10` and
+`vm.vfs_cache_pressure = 50`. earlyoom sends SIGTERM when available memory and
+free swap are both below 10% (SIGKILL below 5%), avoids SSH, systemd, Docker,
+Eternal Terminal, tmux, Zellij and Nix daemons, and prefers Node, Bun, Java, Go
+and compilers. Python is not preferred: it matches Walter's provisioner and
+system daemons such as unattended-upgrade. Avoid and prefer only bias victim selection. systemd
+drops backslashes from `/etc/default/earlyoom`, so its patterns contain none.
+
+Walter records its swap file in `/var/lib/walter/swap.json`. It adopts an
+existing root-owned `/swapfile` only when it already has a swap signature and
+exactly the configured size, and refuses any other file or `/swapfile` fstab
+entry. A new swap file requires an ext4 or xfs root filesystem and must leave
+10% of it free. Changing `swap-gb` turns the recorded file off and recreates it;
+`swap-gb: 0` removes it. Turning swap off fails, rather than forcing pages back,
+when memory cannot hold them. Swap Walter did not record is never changed.
+
 ## Private settings
 
 Every variable assigned in `.envrc.private` must start with **`COLORS_PAR_`**.
