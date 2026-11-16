@@ -140,7 +140,8 @@ def swap(run, write, swap_gb, statvfs=os.statvfs):
         present = False
     if not present:
         create(run, write, size, statvfs)
-    os.chmod(SWAPFILE, 0o600)
+    if SWAPFILE.lstat().st_mode & 0o7777 != 0o600:
+        os.chmod(SWAPFILE, 0o600)  # Unconditional chmod would change ctime every run.
     if not swap_active():
         if not has_signature():
             run(['mkswap', str(SWAPFILE)])

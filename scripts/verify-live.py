@@ -111,12 +111,12 @@ def go_checks(user, home, config):
     version = config.get('go-version', '1.27.2')
     arch = {'aarch64': 'arm64', 'arm64': 'arm64', 'x86_64': 'amd64', 'amd64': 'amd64'}.get(platform.machine())
     expected = 'go version go' + version + ' linux/' + str(arch)
-    checks = {}
-    for name, argv in (
-        ('go_direct', ['go', 'version']),
-        ('go_bash', ['/bin/bash', '-lc', 'go version']),
-        ('go_fish', [str(home / '.nix-profile/bin/fish'), '-lc', 'go version']),
-    ):
+    # Fish is checked only when the deployment installs it.
+    checks = {'go_fish': True}
+    shells = [('go_direct', ['go', 'version']), ('go_bash', ['/bin/bash', '-lc', 'go version'])]
+    if 'fish' in config.get('nix-packages', []):
+        shells.append(('go_fish', [str(home / '.nix-profile/bin/fish'), '-lc', 'go version']))
+    for name, argv in shells:
         code, text = command(user, argv)
         checks[name] = code == 0 and text.strip() == expected
     try:

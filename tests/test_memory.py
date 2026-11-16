@@ -239,3 +239,17 @@ def test_removal_without_fstab_entry_does_not_rewrite_fstab(host):
     host.commands.clear()
     host.install(0)
     assert 'findmnt' not in host.names() and not memory.SWAPFILE.exists()
+
+
+def test_second_run_keeps_swapfile_ctime(host):
+    host.install()
+    before = memory.SWAPFILE.stat().st_ctime_ns
+    host.install()
+    assert memory.SWAPFILE.stat().st_ctime_ns == before
+
+
+def test_wrong_swapfile_mode_is_corrected(host):
+    host.install()
+    os.chmod(memory.SWAPFILE, 0o644)
+    host.install()
+    assert memory.SWAPFILE.stat().st_mode & 0o777 == 0o600
