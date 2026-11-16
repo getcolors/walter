@@ -1,6 +1,6 @@
 ---
 name: walter
-description: Provision and converge a Google Cloud development machine, user seats and tools using Python and PocketDeploy; inspect, access, checkpoint or delete its owned resources.
+description: Provision and converge a Google Cloud, OCI or Hetzner development machine, user seats and tools using Python and PocketDeploy; inspect, access, checkpoint or delete its owned resources.
 ---
 
 # Walter

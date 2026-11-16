@@ -1,6 +1,6 @@
 # Walter
 
-Walter provisions one Google Cloud or OCI development machine and its user environments
+Walter provisions one Google Cloud, OCI or Hetzner development machine and its user environments
 using Python and [PocketDeploy](https://github.com/pocketcontext/pocketdeploy).
 There is no Terraform/OpenTofu, Ansible or Clojure orchestration. Nix, asdf, Git,
 OpenSSH, Google Cloud CLI and downloaded tool installers remain external tools.
@@ -57,6 +57,12 @@ resource-name prefix. New names use `<profile>-<component>-<purpose>`, omitting
 redundant components, with immutable provider IDs and ownership labels recorded
 separately. Environment overrides follow PocketDeploy; recorded state identity
 must still match the resulting profile and provider scope.
+
+Hetzner uses `provider-compute: hcloud`, `hcloud-server-type: cx23`,
+`hcloud-location: nbg1` (Nuremberg), and `hcloud-image: ubuntu-24.04`.
+Install the `hcloud` CLI and privately set `COLORS_PAR_HCLOUD_TOKEN`.
+PocketDeploy owns the server, firewall and bootstrap SSH registration;
+`compute-network-mode` must be `none`. Local SSD scratch is unavailable.
 
 Existing `google-network` and `google-subnet` are required infrastructure
 references (both default to `default`). Region/zone must agree. Walter owns only

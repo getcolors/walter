@@ -28,6 +28,23 @@ class ConfigTest(unittest.TestCase):
         _, ordinary = self.load({'users': ['seat']})
         self.assertEqual(ordinary['_desired_hash'], d['_desired_hash'])
 
+    def test_hetzner_mapping_and_secret_exclusion(self):
+        self.base = {'profile': 'test-hetzner', 'provider-compute': 'hcloud',
+                     'hcloud-server-type': 'cx23', 'hcloud-location': 'nbg1',
+                     'hcloud-image': 'ubuntu-24.04'}
+        c, d = self.load({'nix-packages': ['eternal-terminal']},
+                         {'COLORS_PAR_HCLOUD_TOKEN': 'PRIVATE'})
+        self.assertEqual('hcloud', d['provider-compute'])
+        self.assertEqual('cx23', d['hcloud-server-type'])
+        self.assertEqual('nbg1', d['hcloud-location'])
+        self.assertEqual(['22', '2022'], d['compute-ssh-ports'])
+        self.assertEqual([], d['compute-http-sources'])
+        self.assertNotIn('PRIVATE', json.dumps([c, d]))
+        for invalid in ({'google-project': 'foreign'}, {'oci-region': 'foreign'},
+                        {'local-ssd-scratch': True}):
+            with self.subTest(invalid=invalid), self.assertRaises(DeployError):
+                self.load(invalid)
+
     def test_atuin_capture_requires_explicit_boolean_opt_in(self):
         c, _ = self.load()
         self.assertIs(False, c['atuin-sync-capture'])
