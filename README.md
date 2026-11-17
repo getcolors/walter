@@ -100,6 +100,8 @@ clone-repos:
   - basecamp/once
   - pocketbase/pocketbase
   - benbjohnson/litestream
+  - ilbertt/nibrun
+  - ilbertt/nibrunner
 ```
 
 The combined list is deduplicated and cloned with two workers per user into
