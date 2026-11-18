@@ -12,6 +12,7 @@ from pocketdeploy.state import deployment_lock
 from pocketdeploy.gcp import GCP
 from pocketdeploy.oci import OCI
 from pocketdeploy.hcloud import HCloud
+from pocketdeploy.aws import AWS
 from pocketdeploy.host import Host
 from pocketdeploy.runtime import initialize, session, recorded_operation, delete_compute
 from pocketdeploy.output import Reporter
@@ -29,7 +30,7 @@ class Parser(argparse.ArgumentParser):
 
 
 def parser():
-    p = Parser(prog='walter', description='Google Cloud, OCI and Hetzner development machines using PocketDeploy.', allow_abbrev=False)
+    p = Parser(prog='walter', description='Google Cloud, OCI, Hetzner and AWS development machines using PocketDeploy.', allow_abbrev=False)
     p.add_argument('command', choices=COMMANDS)
     p.add_argument('-f', '--file', default='colors.yml')
     p.add_argument('--dry-run', action='store_true', help='Plan converge/delete without mutations')
@@ -69,7 +70,7 @@ def execute(args, reporter):
     read_only = args.command in ('plan', 'status') or args.dry_run
     with session(deployment, read_only=read_only,
                  allow_create=args.command in ('init', 'plan', 'converge'),
-                 provider_factory={'google': GCP, 'oci': OCI, 'hcloud': HCloud}[config['provider-compute']]) as context:
+                 provider_factory={'google': GCP, 'oci': OCI, 'hcloud': HCloud, 'aws': AWS}[config['provider-compute']]) as context:
         state, cloud, host = context.state, context.cloud, context.host
         if args.command == 'init':
             return initialize(deployment, state, host, root)

@@ -21,6 +21,10 @@ GOOGLE = {
 OCI = {'oci-config-file-profile', 'oci-region', 'oci-compartment-id', 'oci-subnet-id',
        'oci-availability-domain', 'oci-image-id', 'oci-auth', 'oci-shape', 'oci-ocpus',
        'oci-memory-in-gbs', 'oci-boot-volume-size-in-gbs', 'oci-boot-volume-vpus-per-gb'}
+# AWS fields keep PocketDeploy's names and pass through unchanged.
+AWS = {'aws-profile', 'aws-region', 'aws-subnet-id', 'aws-instance-type', 'aws-image-id',
+       'aws-root-volume-size-gb', 'aws-root-volume-type', 'aws-nested-virtualization',
+       'aws-threads-per-core'}
 HCLOUD = {'hcloud-server-type', 'hcloud-location', 'hcloud-image', 'compute-network-mode'}
 DEFAULTS = {'workdir': '.colors', 'provider-compute': 'google', 'users': [],
             'compute-prevent-destroy': True, 'walter-ssh-sources': ['0.0.0.0/0'],
@@ -35,8 +39,9 @@ TOOLS = {'github-account', 'git-email', 'emacs-config-repo', 'emacs-config-dest'
 SHARED = {'state-file', 'ssh-user', 'ssh-private-key-file', 'ssh-public-key-file',
           'ssh-host-private-key-file', 'ssh-host-public-key-file', 'ssh-known-hosts-file',
           'vault-id', 'vault-state-document-id', 'vault-command', 'compute-require-existing-state'}
-KEYS = (set(DEFAULTS) | TOOLS | SHARED | OCI | HCLOUD | {'profile', 'google-region'} |
+KEYS = (set(DEFAULTS) | TOOLS | SHARED | OCI | AWS | HCLOUD | {'profile', 'google-region'} |
         {'google-' + k for k in GOOGLE})
+PROVIDERS = ('google', 'oci', 'hcloud', 'aws')
 USER = re.compile(r'[a-z_][a-z0-9_-]{0,31}')
 
 
@@ -53,9 +58,9 @@ def _strings(c, key, pattern=None):
 def validate(c):
     if not isinstance(c['go-version'], str) or c['go-version'] not in CHECKSUMS:
         raise DeployError('go-version requires a release with pinned checksums.')
-    if c['provider-compute'] not in ('google', 'oci', 'hcloud'):
-        raise DeployError('Walter supports Google Cloud, OCI and Hetzner.')
-    foreign = tuple(prefix + '-' for prefix in ('google', 'oci', 'hcloud')
+    if c['provider-compute'] not in PROVIDERS:
+        raise DeployError('Walter supports Google Cloud, OCI, Hetzner and AWS.')
+    foreign = tuple(prefix + '-' for prefix in PROVIDERS
                     if prefix != c['provider-compute'])
     if any(key.startswith(foreign) for key in c):
         raise DeployError('Configuration contains fields for a different provider.')
@@ -173,7 +178,7 @@ def load(path, env=None):
     for old, new in GOOGLE.items():
         if 'google-' + old in c:
             d['gcp-' + new] = c['google-' + old]
-    d.update({k: c[k] for k in OCI | HCLOUD if k in c})
+    d.update({k: c[k] for k in OCI | AWS | HCLOUD if k in c})
     if isinstance(d.get('gcp-image'), str) and d['gcp-image'].startswith('projects/'):
         d['gcp-image'] = 'https://compute.googleapis.com/compute/v1/' + d['gcp-image']
     d = deployment.normalize(d, path=path, env={}, desired=c)

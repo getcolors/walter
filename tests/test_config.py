@@ -199,3 +199,48 @@ def test_google_rejects_oci_fields(tmp_path):
     except DeployError:
         return
     raise AssertionError('oci field accepted')
+
+
+AWS_BASE = {'profile': 'test-aws', 'provider-compute': 'aws', 'aws-profile': 'synthetic',
+            'aws-region': 'eu-central-1', 'aws-subnet-id': 'subnet-0123456789abcdef0',
+            'aws-instance-type': 'm8i.xlarge', 'aws-root-volume-size-gb': 100,
+            'aws-nested-virtualization': True, 'aws-threads-per-core': 1}
+
+
+def test_aws_fields_pass_through_without_google_defaults(tmp_path):
+    config = tmp_path / 'colors.yml'
+    config.write_text(json.dumps({**AWS_BASE, 'nix-packages': ['eternal-terminal'],
+                                  'walter-ssh-sources': ['192.0.2.1/32']}))
+    c, d = load(config, env={'COLORS_PAR_AWS_SECRET_ACCESS_KEY': 'PRIVATE'})
+    assert d['provider-compute'] == 'aws'
+    assert {k: d[k] for k in AWS_BASE if k.startswith('aws-')} == {k: v for k, v in AWS_BASE.items() if k.startswith('aws-')}
+    assert d['aws-root-volume-type'] == 'gp3'
+    assert d['compute-ssh-ports'] == ['22', '2022']
+    assert d['compute-ssh-sources'] == ['192.0.2.1/32']
+    assert d['compute-http-sources'] == []
+    assert not any(k.startswith(('google-', 'gcp-', 'oci-', 'hcloud-')) for k in [*c, *d])
+    assert 'PRIVATE' not in json.dumps([c, d])
+
+
+def test_aws_rejects_foreign_fields_scratch_and_invalid_values(tmp_path):
+    config = tmp_path / 'colors.yml'
+    for extra in ({'google-zone': 'europe-west4-b'}, {'oci-ocpus': 2}, {'hcloud-location': 'nbg1'},
+                  {'local-ssd-scratch': True}, {'aws-threads-per-core': 3},
+                  {'aws-nested-virtualization': 'yes'}, {'aws-subnet-id': 'synthetic'},
+                  {'aws-unknown': 1}):
+        config.write_text(json.dumps({**AWS_BASE, **extra}))
+        try:
+            load(config, env={})
+        except DeployError:
+            continue
+        raise AssertionError(extra)
+
+
+def test_google_rejects_aws_fields(tmp_path):
+    config = tmp_path / 'colors.yml'
+    config.write_text('profile: example\ngoogle-project: example\ngoogle-zone: europe-west4-b\naws-region: eu-central-1\n')
+    try:
+        load(config, env={})
+    except DeployError:
+        return
+    raise AssertionError('aws field accepted')

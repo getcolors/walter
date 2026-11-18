@@ -150,7 +150,14 @@ def test_architecture_follows_each_provider_instance_type():
              ('oci', 'oci-shape', 'VM.Standard.A2.Flex', 'aarch64'),
              ('oci', 'oci-shape', 'VM.Standard.E5.Flex', 'x86_64'),
              ('hcloud', 'hcloud-server-type', 'cax31', 'aarch64'),
-             ('hcloud', 'hcloud-server-type', 'cpx31', 'x86_64')]
+             ('hcloud', 'hcloud-server-type', 'cpx31', 'x86_64'),
+             ('aws', 'aws-instance-type', 'm8i.xlarge', 'x86_64'),
+             ('aws', 'aws-instance-type', 't3.small', 'x86_64'),
+             ('aws', 'aws-instance-type', 'g5.xlarge', 'x86_64'),
+             ('aws', 'aws-instance-type', 'm7g.xlarge', 'aarch64'),
+             ('aws', 'aws-instance-type', 'c8gd.2xlarge', 'aarch64'),
+             ('aws', 'aws-instance-type', 'g5g.xlarge', 'aarch64'),
+             ('aws', 'aws-instance-type', 'a1.large', 'aarch64')]
     for provider, key, value, expected in cases:
         assert VERIFY.architecture({'provider-compute': provider}, {key: value}) == expected
     assert VERIFY.architecture({'provider-compute': 'oci'}, {'gcp-machine-type': 'c4a-standard-8'}) == 'x86_64'

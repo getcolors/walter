@@ -3,6 +3,7 @@
 import argparse
 import importlib.metadata
 import json
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -270,7 +271,9 @@ CHECKS = ('private_home', 'unprivileged_seat', 'authorized_key', 'nix_packages',
 MEMORY_CHECKS = ('swap', 'fstab', 'sysctl', 'earlyoom')
 ARM = {'google': ('gcp-machine-type', lambda v: v.startswith(('n4a-', 'c4a-', 't2a-'))),
        'oci': ('oci-shape', lambda v: '.A1.' in v or '.A2.' in v),
-       'hcloud': ('hcloud-server-type', lambda v: v.startswith('cax'))}
+       'hcloud': ('hcloud-server-type', lambda v: v.startswith('cax')),
+       # Graviton families carry a g after the generation (m7g, c8gd, im4gn) or are a1.
+       'aws': ('aws-instance-type', lambda v: bool(re.match(r'(?:a1|[a-z]+[0-9]+g[a-z]*)\.', v)))}
 
 
 def architecture(config, deployment):
@@ -308,6 +311,7 @@ def main(argv=None):
     from pocketdeploy.common import local_path
     from pocketdeploy.config import scope
     from pocketdeploy.gcp import GCP
+    from pocketdeploy.aws import AWS
     from pocketdeploy.hcloud import HCloud
     from pocketdeploy.host import Host
     from pocketdeploy.oci import OCI
@@ -321,7 +325,7 @@ def main(argv=None):
         config, deployment = load(args.file)
         root = Path(deployment['_root'])
         primary = deployment.get('ssh-user', 'ubuntu')
-        provider = {'google': GCP, 'oci': OCI, 'hcloud': HCloud}[config['provider-compute']]
+        provider = {'google': GCP, 'oci': OCI, 'hcloud': HCloud, 'aws': AWS}[config['provider-compute']]
         with State(local_path(root, deployment['state-file']), config['profile'], scope(deployment), read_only=True) as state:
             cloud, host = provider(deployment, state), Host(deployment, state, root)
             payload = {'config': config, 'primary': primary, 'architecture': architecture(config, deployment),

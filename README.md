@@ -1,6 +1,6 @@
 # Walter
 
-Walter provisions one Google Cloud, OCI or Hetzner development machine and its user environments
+Walter provisions one Google Cloud, OCI, Hetzner or AWS development machine and its user environments
 using Python and [PocketDeploy](https://github.com/pocketcontext/pocketdeploy).
 There is no Terraform/OpenTofu, Ansible or Clojure orchestration. Nix, asdf, Git,
 OpenSSH, Google Cloud CLI and downloaded tool installers remain external tools.
@@ -48,7 +48,7 @@ it does not predict every package-manager change.
 
 The existing `google-*` and tooling keys remain the desired-state vocabulary.
 They normalize into PocketDeploy's `gcp-*` settings internally. `provider-compute`
-is `google` (default) or `oci`. OCI uses PocketDeploy's `oci-*` keys unchanged
+is `google` (default), `oci`, `hcloud` or `aws`. OCI uses PocketDeploy's `oci-*` keys unchanged
 (`oci-shape`, `oci-ocpus`, `oci-memory-in-gbs`, `oci-boot-volume-size-in-gbs`,
 `oci-boot-volume-vpus-per-gb`, placement and authentication); fields for the other
 provider are rejected. OCI owns its instance, boot volume and network security
@@ -63,6 +63,39 @@ Hetzner uses `provider-compute: hcloud`, `hcloud-server-type: cx23`,
 Install the `hcloud` CLI and privately set `COLORS_PAR_HCLOUD_TOKEN`.
 PocketDeploy owns the server, firewall and bootstrap SSH registration;
 `compute-network-mode` must be `none`. Local SSD scratch is unavailable.
+
+AWS uses `provider-compute: aws` with PocketDeploy's `aws-*` keys unchanged:
+`aws-profile` (a named AWS CLI profile; credentials stay in `~/.aws`, never in
+`colors.yml` or `.envrc.private`), `aws-region`, `aws-subnet-id` (an existing
+subnet routed to an internet gateway; the instance gets a public IPv4 address),
+`aws-instance-type` (default `t3.small`), optional `aws-image-id` (default: Canonical's current Ubuntu 24.04
+AMI for the instance architecture, resolved once through SSM and then pinned in
+state), `aws-root-volume-size-gb` (default 50), `aws-root-volume-type` (default
+`gp3`), `aws-nested-virtualization` (default false) and optional
+`aws-threads-per-core` (1 or 2). Install the AWS CLI v2. PocketDeploy owns the
+instance, its encrypted root volume and a security group in the subnet's VPC; it
+does not own the VPC or subnet. The security group admits `walter-ssh-sources` on
+TCP 22, and on TCP 2022 when Eternal Terminal is installed; no HTTP rules are added.
+Local SSD scratch is unavailable. The default `ubuntu` SSH user and cloud-init
+bootstrap match Hetzner. For example, an x86_64 machine that can run Firecracker
+microVMs (nested KVM is offered on the c8i, m8i and r8i families):
+
+```yaml
+provider-compute: aws
+aws-profile: example
+aws-region: eu-central-1
+aws-subnet-id: subnet-0123456789abcdef0
+aws-instance-type: m8i.xlarge
+aws-root-volume-size-gb: 100
+aws-nested-virtualization: true
+aws-threads-per-core: 1
+```
+
+`aws-threads-per-core: 1` disables SMT, so `m8i.xlarge` presents two vCPUs.
+Changing the instance type, image, subnet, root volume, nested virtualization or
+threads per core after creation blocks `converge`; PocketDeploy neither resizes nor
+replaces the instance. Walter never enables kernel same-page merging (KSM); Ubuntu
+leaves `/sys/kernel/mm/ksm/run` at 0, as Firecracker recommends.
 
 Existing `google-network` and `google-subnet` are required infrastructure
 references (both default to `default`). Region/zone must agree. Walter owns only

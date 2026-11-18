@@ -92,6 +92,23 @@ class CLITest(unittest.TestCase):
             hcloud.return_value.converge.assert_not_called()
         self.assertEqual(['colors.yml'], [p.name for p in self.root.iterdir()])
 
+    def test_aws_plan_uses_aws_without_local_mutations(self):
+        self.path.write_text('profile: test-aws\nprovider-compute: aws\naws-profile: synthetic\n'
+                             'aws-region: eu-central-1\naws-subnet-id: subnet-0123456789abcdef0\n'
+                             'aws-instance-type: m8i.xlarge\naws-nested-virtualization: true\n'
+                             'aws-threads-per-core: 1\n')
+        with patch.object(cli, 'GCP') as gcp, patch.object(cli, 'OCI') as oci, \
+                patch.object(cli, 'HCloud') as hcloud, patch.object(cli, 'AWS') as aws:
+            aws.return_value.plan.return_value = []
+            self.execute('plan')
+            aws.return_value.plan.assert_called_once()
+            deployment = aws.call_args.args[0]
+            self.assertEqual((True, 1), (deployment['aws-nested-virtualization'], deployment['aws-threads-per-core']))
+            for other in (gcp, oci, hcloud):
+                other.assert_not_called()
+            aws.return_value.converge.assert_not_called()
+        self.assertEqual(['colors.yml'], [p.name for p in self.root.iterdir()])
+
     def test_unsupported_power_and_invalid_option_combinations(self):
         for command in ('start', 'stop'):
             with self.assertRaises(DeployError):
