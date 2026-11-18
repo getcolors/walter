@@ -4,7 +4,7 @@ version = "3.0.0"
 description = "Google Cloud, OCI, Hetzner and AWS development machines, using PocketDeploy"
 requires-python = ">=3.11"
 dependencies = [
-    "pocketdeploy @ git+https://github.com/pocketcontext/pocketdeploy.git@c2cb706fad15f8fe1590eb2315900506b3a82e8e",
+    "pocketdeploy @ git+https://github.com/pocketcontext/pocketdeploy.git@5aae087638245ee4f2236c50df7f85741a34769d",
     "dotfiles @ git+https://github.com/getcolors/dotfiles.git@2adb9df03e707c4b5f3f68eb665a4318c9c9ac11",
 ]
 
