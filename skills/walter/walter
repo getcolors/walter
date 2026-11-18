@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "walter @ git+https://github.com/getcolors/walter.git@2437e633fdee87bcdfeb0986a3defd183b31e547",
+#     "walter @ git+https://github.com/getcolors/walter.git@8071d904bfb380512d1ad0324f3edbfb2a5b2bda",
 # ]
 # ///
 """Portable Walter; configuration follows the caller, never the launcher."""
