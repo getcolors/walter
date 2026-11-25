@@ -163,7 +163,7 @@ def complete_remote(state, operation, config, host, connection, action, **privat
     return result
 
 
-async def converge(config, deployment, state, cloud, host, operation, reporter):
+async def converge(config, deployment, state, cloud, host, operation, reporter, *, install_aliases=True):
     results, private = {}, {}
     failure = None
 
@@ -305,7 +305,9 @@ async def converge(config, deployment, state, cloud, host, operation, reporter):
     steps = {'preflight': [preflight, 'keys'], 'keys': [keys, 'compute'],
              'compute': [compute, 'trust'], 'trust': [trust, 'provision'],
              'provision': [provision, 'finalize'],
-             'finalize': [finalize, 'aliases'], 'aliases': [local]}
+             'finalize': [finalize], 'aliases': [local]}
+    if install_aliases:
+        steps['finalize'].append('aliases')
 
     def wire(name, _opts):
         fn, *next_steps = steps[name]
